@@ -31,8 +31,12 @@ export function formatTime(iso: string, timeZone: string): string {
   return new Intl.DateTimeFormat(undefined, { timeZone, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 }
 
+/** An end that falls on a later day (a booking past midnight) gets its own date. */
 export function formatRange(startIso: string, endIso: string, timeZone: string): string {
-  return `${formatDate(startIso, timeZone)} · ${formatTime(startIso, timeZone)} – ${formatTime(endIso, timeZone)}`;
+  const end = sameDay(startIso, endIso, timeZone)
+    ? formatTime(endIso, timeZone)
+    : `${formatDate(endIso, timeZone)} · ${formatTime(endIso, timeZone)}`;
+  return `${formatDate(startIso, timeZone)} · ${formatTime(startIso, timeZone)} – ${end}`;
 }
 
 export function formatMoney(value: string | null | undefined): string {
@@ -71,6 +75,10 @@ export function zonedParts(iso: string | Date, timeZone: string): ZonedParts {
   }
   const parts = Object.fromEntries(fmt.formatToParts(typeof iso === "string" ? new Date(iso) : iso).map((p) => [p.type, p.value]));
   return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour), minute: Number(parts.minute) };
+}
+
+export function sameDay(aIso: string, bIso: string, timeZone: string): boolean {
+  return zonedParts(aIso, timeZone).date === zonedParts(bIso, timeZone).date;
 }
 
 /** Today's calendar date in a zone, as YYYY-MM-DD. */

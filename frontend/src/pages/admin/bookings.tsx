@@ -9,7 +9,7 @@ import { BookingSummary, DateNav, SlotPicker, type PickedSlot } from "../../comp
 import { useConfig } from "../../components/Layout";
 import { Alert, Button, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td, Textarea } from "../../components/ui";
 import { CancelModal, RescheduleModal } from "../account";
-import { formatDateTime, formatMoney, formatTime, titleCase, todayIn } from "../../lib/format";
+import { formatDateTime, formatMoney, formatTime, sameDay, titleCase, todayIn } from "../../lib/format";
 
 export function useCatalog() {
   const resources = useQuery({ queryKey: ["admin", "resources"], queryFn: () => api.get<Resource[]>("/api/admin/resources") });
@@ -351,7 +351,9 @@ export function AdminBookingsPage() {
               <tr key={b.id} className={focus === b.id ? "bg-brand-50" : "hover:bg-slate-50"}>
                 <Td>
                   <div className="font-medium">{formatDateTime(b.start_datetime, b.timezone)}</div>
-                  <div className="text-xs text-slate-500">until {formatTime(b.end_datetime, b.timezone)}</div>
+                  <div className="text-xs text-slate-500">
+                    until {sameDay(b.start_datetime, b.end_datetime, b.timezone) ? formatTime(b.end_datetime, b.timezone) : formatDateTime(b.end_datetime, b.timezone)}
+                  </div>
                 </Td>
                 <Td>
                   <div>{b.user.name}</div>

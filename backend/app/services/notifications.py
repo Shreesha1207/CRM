@@ -39,6 +39,8 @@ def _when(db: Session, booking: Booking) -> str:
     tz = resource_timezone(booking.primary_resource, rules)
     start = booking.start_datetime.astimezone(tz)
     end = booking.end_datetime.astimezone(tz)
+    if end.date() != start.date():  # past midnight: the end gets its own date
+        return f"{start:%a %d %b %Y, %H:%M} – {end:%a %d %b %Y, %H:%M} ({tz.key})"
     return f"{start:%a %d %b %Y, %H:%M}–{end:%H:%M} ({tz.key})"
 
 
