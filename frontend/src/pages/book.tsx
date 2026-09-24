@@ -77,6 +77,7 @@ export function BookPage() {
   const freeResources = useFreeResources(serviceId, date, mode === "time" ? picked?.start ?? null : null, quantity);
   const offering = service.data?.resources.find((r) => r.resource_id === (effectiveResource || freeResources[0]?.resource_id));
   const slotFull = picked?.slot?.status === "CAPACITY_REACHED";
+  const waitlistClosed = slotFull && !config.data?.allow_waitlist;
 
   const bookingBody = () => ({
     service_id: serviceId,
@@ -327,13 +328,11 @@ export function BookPage() {
                       </Button>
                     )
                   ) : (
-                    <Button
-                      onClick={() => create.mutate()}
-                      loading={create.isPending}
-                      disabled={slotFull && !config.data?.allow_waitlist}
-                    >
-                      {slotFull ? "Join waitlist" : "Confirm booking"}
-                    </Button>
+                    !waitlistClosed && (
+                      <Button onClick={() => create.mutate()} loading={create.isPending}>
+                        {slotFull ? "Join waitlist" : "Confirm booking"}
+                      </Button>
+                    )
                   )}
                 </div>
               </div>
