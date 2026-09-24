@@ -65,6 +65,7 @@ export function SlotPicker({
   selected,
   onSelect,
   showUnavailable = true,
+  moving,
 }: {
   serviceId: string;
   resourceId: string | null;
@@ -73,11 +74,19 @@ export function SlotPicker({
   selected: PickedSlot | null;
   onSelect: (slot: PickedSlot) => void;
   showUnavailable?: boolean;
+  /** The booking being rescheduled: its own time is not a clash, and its current slot is marked. */
+  moving?: Booking;
 }) {
   const availability = useQuery({
-    queryKey: ["availability", serviceId, resourceId, date, quantity],
+    queryKey: ["availability", serviceId, resourceId, date, quantity, moving?.id],
     queryFn: () =>
-      api.get<Availability>("/api/availability", { service_id: serviceId, resource_id: resourceId, date, quantity }),
+      api.get<Availability>("/api/availability", {
+        service_id: serviceId,
+        resource_id: resourceId,
+        date,
+        quantity,
+        exclude_booking_id: moving?.id,
+      }),
   });
 
   if (availability.isLoading) return <Loading label="Checking availability…" />;
@@ -91,17 +100,21 @@ export function SlotPicker({
     return (
       <div>
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-6">
-          {slots.map((s) => (
-            <SlotButton
-              key={s.start}
-              label={s.start_time}
-              sub={s.capacity != null ? (s.available ? `${s.remaining} left` : titleCase(s.status)) : s.available ? undefined : titleCase(s.status)}
-              available={s.available || s.status === "CAPACITY_REACHED"}
-              title={s.message}
-              selected={selected?.start === s.start && selected.resourceId === resource.resource_id}
-              onClick={() => onSelect({ start: s.start, end: s.end, resourceId: resource.resource_id, timezone: resource.timezone, slot: s })}
-            />
-          ))}
+          {slots.map((s) => {
+            const current =
+              moving?.resource.id === resource.resource_id && Date.parse(s.start) === Date.parse(moving.start_datetime);
+            return (
+              <SlotButton
+                key={s.start}
+                label={s.start_time}
+                sub={current ? "Current" : s.capacity != null ? (s.available ? `${s.remaining} left` : titleCase(s.status)) : s.available ? undefined : titleCase(s.status)}
+                available={!current && (s.available || s.status === "CAPACITY_REACHED")}
+                title={current ? "The booking's current time" : s.message}
+                selected={selected?.start === s.start && selected.resourceId === resource.resource_id}
+                onClick={() => onSelect({ start: s.start, end: s.end, resourceId: resource.resource_id, timezone: resource.timezone, slot: s })}
+              />
+            );
+          })}
         </div>
         <p className="mt-3 text-xs text-slate-500">Times shown in {resource.timezone}.</p>
       </div>

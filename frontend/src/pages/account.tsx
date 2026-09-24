@@ -171,7 +171,15 @@ export function RescheduleModal({
       <div className="mb-4">
         <DateNav date={date} onChange={(d) => { setDate(d); setPicked(null); }} min={todayIn(config.data?.default_timezone ?? "UTC")} />
       </div>
-      <SlotPicker serviceId={booking.service.id} resourceId={booking.resource.id} date={date} quantity={booking.quantity} selected={picked} onSelect={setPicked} />
+      <SlotPicker
+        serviceId={booking.service.id}
+        resourceId={booking.resource.id}
+        date={date}
+        quantity={booking.quantity}
+        selected={picked}
+        onSelect={setPicked}
+        moving={booking}
+      />
       {admin && (
         <label className="mt-4 flex items-center gap-2 text-sm text-slate-600">
           <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} /> Override booking rules (audited)

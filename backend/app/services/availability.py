@@ -447,11 +447,14 @@ def generate_slots(
     now: datetime,
     *,
     quantity: int = 1,
+    exclude_booking_ids: Iterable[uuid.UUID] = (),
 ) -> tuple[ZoneInfo, list[SlotCheck]]:
     resource = offering.resource
     tz = resource_timezone(resource, rules)
     day_start, day_end = day_bounds(day, tz)
-    snapshot = build_snapshot(db, resource, day_start, day_end + offering.duration, rules)
+    snapshot = build_snapshot(
+        db, resource, day_start, day_end + offering.duration, rules, exclude_booking_ids=exclude_booking_ids
+    )
     step = timedelta(minutes=rules.slot_interval) if rules.slot_interval else offering.duration
 
     if resource.status != RecordStatus.ACTIVE or offering.service.status != RecordStatus.ACTIVE:

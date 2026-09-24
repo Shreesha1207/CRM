@@ -2,7 +2,7 @@ from datetime import time, timedelta
 
 from app.core.timeutils import freeze_time
 from app.models.enums import BookingType
-from tests.conftest import MONDAY, NOW, at
+from tests.conftest import MONDAY, NOW, at, auth_headers
 
 
 def slots(client, service, resource, day=MONDAY, **params):
@@ -275,6 +275,31 @@ def test_reschedule_can_overlap_its_own_old_time(client, basic, user_headers) ->
     original = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
     r = client.post(f"/api/bookings/{original['id']}/reschedule", headers=user_headers, json={"start": at(MONDAY, 10, 30)})
     assert r.status_code == 200, r.text
+
+
+def test_availability_can_leave_out_the_booking_being_moved(client, make, basic, user_headers, admin_headers) -> None:
+    service, resource = basic
+    make.settings(slot_interval=30)
+    original = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
+
+    def status_at_1030(headers=None, **params):
+        r = client.get(
+            "/api/availability",
+            headers=headers,
+            params={"service_id": str(service.id), "resource_id": str(resource.id), "date": MONDAY.isoformat(), **params},
+        )
+        if r.status_code != 200:
+            return r.status_code
+        return next(s["status"] for s in r.json()["resources"][0]["slots"] if s["start_time"] == "10:30")
+
+    assert status_at_1030(user_headers) == "CONFLICT"
+    # The reschedule dialog shows what the move itself would accept.
+    assert status_at_1030(user_headers, exclude_booking_id=original["id"]) == "AVAILABLE"
+    assert status_at_1030(admin_headers, exclude_booking_id=original["id"]) == "AVAILABLE"
+    # Only someone who can see the booking may leave it out.
+    assert status_at_1030(exclude_booking_id=original["id"]) == 401
+    make.user("other@test.io")
+    assert status_at_1030(auth_headers(client, "other@test.io"), exclude_booking_id=original["id"]) == 404
 
 
 def test_failed_reschedule_leaves_original_intact(client, basic, user_headers) -> None:
