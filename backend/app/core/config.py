@@ -1,6 +1,9 @@
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_JWT_SECRET = "change-me-in-production-please-use-a-long-random-value"
 
 
 class Settings(BaseSettings):
@@ -17,7 +20,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://booking:booking@localhost:5432/booking"
 
-    jwt_secret: str = "change-me-in-production-please-use-a-long-random-value"
+    jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 60 * 12
     password_reset_ttl_minutes: int = 30
@@ -43,6 +46,15 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @model_validator(mode="after")
+    def _safe_for_production(self) -> "Settings":
+        if self.is_production:
+            if self.jwt_secret == DEFAULT_JWT_SECRET or len(self.jwt_secret) < 32:
+                raise ValueError("Set JWT_SECRET to a random value of at least 32 characters in production")
+            if not self.cookie_secure:
+                raise ValueError("COOKIE_SECURE must be true in production (serve the app over HTTPS)")
+        return self
 
 
 @lru_cache

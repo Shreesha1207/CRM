@@ -217,7 +217,7 @@ def get_conflict(booking_id: uuid.UUID, db: DB, actor: User = ManageConflicts) -
         "booking": booking_out(db, booking, actor, engine.rules, engine.now),
         "alternatives": [
             AlternativeOut(
-                resource_id=r.id, resource_name=r.name,
+                resource_id=r.id, resource_name=r.name, timezone=resource_timezone(r, engine.rules).key,
                 start=slot.start.astimezone(resource_timezone(r, engine.rules)),
                 end=slot.end.astimezone(resource_timezone(r, engine.rules)),
                 same_resource=r.id == booking.primary_resource_id, remaining=slot.remaining,

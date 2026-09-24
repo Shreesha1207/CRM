@@ -4,7 +4,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select, update
 
-from app.api.deps import ACCESS_COOKIE, CSRF_COOKIE, DB, CurrentUser, rate_limit
+from app.api.deps import ACCESS_COOKIE, CSRF_COOKIE, DB, CurrentUser, OptionalUser, rate_limit
 from app.core.config import get_settings
 from app.core.permissions import permissions_for
 from app.core.security import (
@@ -192,6 +192,12 @@ def reset_password(body: ResetPasswordIn, db: DB) -> dict:
 @router.get("/me", response_model=MeOut)
 def me(user: CurrentUser) -> MeOut:
     return me_out(user)
+
+
+@router.get("/session")
+def session(user: OptionalUser) -> dict:
+    """Like /me, but answers 200 with ``user: null`` for anonymous visitors."""
+    return {"user": me_out(user) if user else None}
 
 
 @router.put("/me", response_model=MeOut)

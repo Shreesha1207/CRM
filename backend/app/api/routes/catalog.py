@@ -237,6 +237,7 @@ def alternatives(
         AlternativeOut(
             resource_id=r.id,
             resource_name=r.name,
+            timezone=resource_timezone(r, rules).key,
             start=slot.start.astimezone(resource_timezone(r, rules)),
             end=slot.end.astimezone(resource_timezone(r, rules)),
             same_resource=r.id == resource_id,

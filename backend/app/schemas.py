@@ -345,6 +345,7 @@ class AvailabilityOut(BaseModel):
 class AlternativeOut(BaseModel):
     resource_id: uuid.UUID
     resource_name: str
+    timezone: str
     start: datetime
     end: datetime
     same_resource: bool

@@ -134,3 +134,9 @@ def test_reminders_are_never_queued_twice(client, db, basic, user_headers) -> No
     # Queued e-mails are delivered once and marked sent.
     assert notifications.dispatch_pending(db) >= 1
     assert notifications.dispatch_pending(db) == 0
+
+
+def test_session_endpoint_is_anonymous_friendly(client, user) -> None:
+    assert client.get("/api/auth/session").json() == {"user": None}
+    headers = auth_headers(client, user.email)
+    assert client.get("/api/auth/session", headers=headers).json()["user"]["email"] == user.email

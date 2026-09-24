@@ -1,0 +1,40 @@
+# Local, production-like stack: PostgreSQL + API + static frontend behind nginx.
+#   docker compose up --build
+#   docker compose exec backend python -m app.seed   # optional demo data
+# Then open http://localhost:8080
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: booking
+      POSTGRES_PASSWORD: booking
+      POSTGRES_DB: booking
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booking"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://booking:booking@db:5432/booking
+      JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-me-0123456789}
+      CORS_ORIGINS: '["http://localhost:8080"]'
+      FRONTEND_URL: http://localhost:8080
+      EMAIL_BACKEND: console
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  db-data:
