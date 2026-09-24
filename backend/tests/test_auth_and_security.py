@@ -1,5 +1,9 @@
 import re
 
+from sqlalchemy import text
+
+from app.db.session import engine
+from app.jobs import runner
 from app.services import notifications
 from tests.conftest import MONDAY, PASSWORD, at, auth_headers
 
@@ -134,6 +138,27 @@ def test_reminders_are_never_queued_twice(client, db, basic, user_headers) -> No
     # Queued e-mails are delivered once and marked sent.
     assert notifications.dispatch_pending(db) >= 1
     assert notifications.dispatch_pending(db) == 0
+
+
+def test_background_job_releases_its_lock() -> None:
+    # A long-running API has several idle connections in its pool, so each
+    # commit inside the job can leave the Session on a different connection.
+    connections = [engine.connect() for _ in range(3)]
+    for connection in connections:
+        connection.close()
+
+    runner.run_once()
+
+    with engine.connect() as connection:
+        holders = connection.scalar(
+            text(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = 0 AND objid = :id"
+                " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+            ),
+            {"id": runner.JOB_LOCK_ID},
+        )
+    # A leaked lock would stop every later run from doing any work.
+    assert holders == 0
 
 
 def test_session_endpoint_is_anonymous_friendly(client, user) -> None:
