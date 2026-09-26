@@ -22,6 +22,11 @@ import {
 
 type Mode = "resource" | "time";
 
+const MODES: { value: Mode; label: string; hint: string }[] = [
+  { value: "resource", label: "Pick who or what first", hint: "Choose the person, room or item you want, then see when it's free." },
+  { value: "time", label: "Pick a time first", hint: "See all free times, then pick from what's available at that time." },
+];
+
 function Step({ n, title, children, done }: { n: number; title: string; children: React.ReactNode; done?: boolean }) {
   return (
     <section className="rounded-lg border border-line bg-surface">
@@ -124,7 +129,8 @@ export function BookPage() {
   const today = todayIn(config.data?.default_timezone ?? "UTC");
 
   const serviceId = params.get("service") ?? "";
-  const [mode, setModeState] = useState<Mode>("resource");
+  // No way of booking is assumed, unless the link already names a resource.
+  const [mode, setModeState] = useState<Mode | null>(params.get("resource") ? "resource" : null);
   const [resourceId, setResourceIdState] = useState<string>(params.get("resource") ?? "");
   const [date, setDateState] = useState<string>(params.get("date") ?? today);
   const [picked, setPicked] = useState<PickedSlot | null>(null);
@@ -177,6 +183,7 @@ export function BookPage() {
     setResourceId("");
     setDurationState(null);
     setQuantityState(1);
+    setModeState(null);
   };
 
   const isGroup = service.data?.booking_type === "CAPACITY";
@@ -308,21 +315,36 @@ export function BookPage() {
           </Step>
 
           {serviceId && service.data && (
-            <Step n={2} title="Choose how to book" done={mode === "time" || !!resourceId}>
-              <div className="mb-4 inline-flex rounded-md border border-line-strong p-0.5 text-sm">
-                {(["resource", "time"] as Mode[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setMode(m)}
-                    aria-pressed={mode === m}
-                    className={cx("rounded px-3 py-1.5 font-medium", mode === m ? "bg-accent text-accent-fg" : "text-muted hover:text-fg")}
-                  >
-                    {m === "resource" ? "Pick who / what first" : "Pick a time first"}
-                  </button>
-                ))}
-              </div>
-              {mode === "resource" ? (
+            <Step n={2} title="Choose how to book" done={mode === "time" || (mode === "resource" && !!resourceId)}>
+              <fieldset>
+                <legend className="sr-only">How would you like to book?</legend>
                 <div className="grid gap-2 sm:grid-cols-2">
+                  {MODES.map((m) => (
+                    <label
+                      key={m.value}
+                      className={cx(
+                        "flex cursor-pointer gap-3 rounded-md border px-3 py-3 transition-colors",
+                        mode === m.value ? "border-accent bg-accent-soft" : "border-line-strong bg-surface hover:border-accent",
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name="how-to-book"
+                        value={m.value}
+                        checked={mode === m.value}
+                        onChange={() => setMode(m.value)}
+                        className="mt-0.5 h-4 w-4 shrink-0"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-fg">{m.label}</span>
+                        <span className="mt-0.5 block text-xs text-muted">{m.hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              {mode === "resource" && (
+                <div className="mt-4 grid gap-2 border-t border-line pt-4 sm:grid-cols-2">
                   {service.data.resources.map((r) => (
                     <Choice key={r.resource_id} selected={r.resource_id === resourceId} onClick={() => setResourceId(r.resource_id)}>
                       <span className="block font-medium text-fg">{r.resource_name}</span>
@@ -334,13 +356,11 @@ export function BookPage() {
                     </Choice>
                   ))}
                 </div>
-              ) : (
-                <p className="text-sm text-muted">You'll see every free time across {service.data.resources.length} resources, then choose.</p>
               )}
             </Step>
           )}
 
-          {serviceId && (mode === "time" || resourceId) && (
+          {serviceId && (mode === "time" || (mode === "resource" && resourceId)) && (
             <Step n={3} title="Pick a date and time" done={!!picked}>
               {lengths.length > 1 && (
                 <div className="mb-5 border-b border-line pb-5">
