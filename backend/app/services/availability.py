@@ -14,9 +14,9 @@ so what the UI shows and what the booking engine accepts can never disagree.
 
 import uuid
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, or_, select
@@ -83,16 +83,58 @@ def resource_timezone(resource: Resource, rules: BookingRules) -> ZoneInfo:
 class Offering:
     service: Service
     resource: Resource
-    duration: timedelta
+    duration: timedelta  # length of the booking being considered
     buffer_before: timedelta
     buffer_after: timedelta
-    price: Decimal | None
+    price: Decimal | None  # hourly rate
     booking_type: BookingType
     capacity: int | None  # seats per session (CAPACITY) / max quantity (INDIVIDUAL)
+    # Default length and the unit a flexible booking grows in; the slot grid
+    # steps by it too, so a two-hour booking can still start on any hour.
+    step: timedelta = timedelta(0)
+    max_duration: timedelta = timedelta(0)
 
     @property
     def exclusive(self) -> bool:
         return self.booking_type == BookingType.INDIVIDUAL
+
+    @property
+    def flexible(self) -> bool:
+        return self.max_duration > self.step
+
+    @property
+    def allowed_durations(self) -> list[timedelta]:
+        """Every length a customer may choose: the step, twice the step, ... up to the maximum."""
+        count = max(1, int(self.max_duration / self.step))
+        return [self.step * k for k in range(1, count + 1)]
+
+    def with_duration(self, minutes: int) -> "Offering":
+        """This offering for a customer-chosen length (rejected unless it is allowed)."""
+        length = timedelta(minutes=minutes)
+        if length not in self.allowed_durations:
+            allowed = ", ".join(str(int(d.total_seconds() // 60)) for d in self.allowed_durations)
+            raise BookingRejected(
+                "INVALID_DURATION",
+                f"{self.service.name} with {self.resource.name} can be booked for {allowed} minutes",
+                status_code=422,
+            )
+        return replace(self, duration=length)
+
+    def for_existing(self, length: timedelta) -> "Offering":
+        """This offering for an existing booking's own length (a flexible
+        booking keeps its length when it is moved; fixed-length services use
+        the current service length)."""
+        if self.flexible and length > timedelta(0) and length % self.step == timedelta(0):
+            return replace(self, duration=length)
+        return self
+
+    def total_price(self, quantity: int = 1) -> Decimal | None:
+        """Hourly rate x booked hours (x places for group sessions), to the cent."""
+        if self.price is None:
+            return None
+        minutes = int(self.duration.total_seconds() // 60)
+        places = 1 if self.exclusive else quantity
+        return (self.price * minutes * places / Decimal(60)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     def session_key(self, start: datetime) -> str:
         """Allocation key shared by all seats of one capacity session."""
@@ -104,8 +146,10 @@ class Offering:
 
 
 def resolve_offering(
-    db: Session, service: Service, resource: Resource, rules: BookingRules
+    db: Session, service: Service, resource: Resource, rules: BookingRules, *, duration_minutes: int | None = None
 ) -> Offering:
+    """The effective terms of `service` on `resource`; with `duration_minutes`,
+    for that customer-chosen length (validated)."""
     link = db.get(ResourceService, (resource.id, service.id))
     if link is None or link.status != RecordStatus.ACTIVE:
         raise BookingRejected(
@@ -127,7 +171,9 @@ def resolve_offering(
     else:
         capacity = resource.capacity
 
-    return Offering(
+    # Group sessions always run for their set length.
+    longest = service.max_duration_minutes if service.booking_type == BookingType.INDIVIDUAL else None
+    offering = Offering(
         service=service,
         resource=resource,
         duration=timedelta(minutes=duration),
@@ -136,7 +182,12 @@ def resolve_offering(
         price=link.custom_price if link.custom_price is not None else service.price,
         booking_type=service.booking_type,
         capacity=capacity,
+        step=timedelta(minutes=duration),
+        max_duration=timedelta(minutes=max(duration, longest or 0)),
     )
+    if duration_minutes is not None and duration_minutes != duration:
+        return offering.with_duration(duration_minutes)
+    return offering
 
 
 # --------------------------------------------------------------------------
@@ -455,7 +506,7 @@ def generate_slots(
     snapshot = build_snapshot(
         db, resource, day_start, day_end + offering.duration, rules, exclude_booking_ids=exclude_booking_ids
     )
-    step = timedelta(minutes=rules.slot_interval) if rules.slot_interval else offering.duration
+    step = timedelta(minutes=rules.slot_interval) if rules.slot_interval else offering.step
 
     if resource.status != RecordStatus.ACTIVE or offering.service.status != RecordStatus.ACTIVE:
         return tz, []

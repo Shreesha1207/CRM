@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useId, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, api, errorMessage } from "../api/client";
 import type { Booking, RecurringPreview, Service, ServiceDetail } from "../api/types";
@@ -7,7 +7,18 @@ import { Alternatives, DateNav, SlotPicker, useFreeResources, type PickedSlot } 
 import { useConfig } from "../components/Layout";
 import { Check } from "../components/icons";
 import { Alert, Badge, Button, Checkbox, Field, Input, Loading, PageHeader, Select, Textarea, cx } from "../components/ui";
-import { formatDateTime, formatDuration, formatMoney, formatRange, titleCase, todayIn } from "../lib/format";
+import {
+  bookingPrice,
+  formatDateTime,
+  formatDuration,
+  formatLengthRange,
+  formatMoney,
+  formatRange,
+  formatRate,
+  lengthOptions,
+  titleCase,
+  todayIn,
+} from "../lib/format";
 
 type Mode = "resource" | "time";
 
@@ -47,7 +58,45 @@ function Choice({ selected, onClick, children }: { selected: boolean; onClick: (
   );
 }
 
-function SummaryList({ rows, total }: { rows: [string, React.ReactNode][]; total: string | null }) {
+/** How long to book, in steps of the service's own length. */
+function LengthSlider({ options, value, onChange }: { options: number[]; value: number; onChange: (minutes: number) => void }) {
+  const id = useId();
+  const shortest = options[0];
+  const longest = options[options.length - 1];
+  return (
+    <div className="w-full sm:max-w-sm">
+      <div className="mb-1 flex items-baseline justify-between gap-3">
+        <label htmlFor={id} className="text-sm font-medium text-fg">
+          Length
+        </label>
+        <span className="tabular text-sm font-semibold text-fg">{formatDuration(value)}</span>
+      </div>
+      <input
+        id={id}
+        type="range"
+        min={shortest}
+        max={longest}
+        step={shortest}
+        value={value}
+        list={`${id}-marks`}
+        aria-valuetext={formatDuration(value)}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="h-6 w-full"
+      />
+      <datalist id={`${id}-marks`}>
+        {options.map((m) => (
+          <option key={m} value={m} />
+        ))}
+      </datalist>
+      <div className="tabular flex justify-between text-xs text-muted">
+        <span>{formatDuration(shortest)}</span>
+        <span>{formatDuration(longest)}</span>
+      </div>
+    </div>
+  );
+}
+
+function SummaryList({ rows, total, breakdown }: { rows: [string, React.ReactNode][]; total: string | null; breakdown?: string }) {
   return (
     <dl className="space-y-2 text-sm">
       {rows.map(([label, value]) => (
@@ -58,7 +107,10 @@ function SummaryList({ rows, total }: { rows: [string, React.ReactNode][]; total
       ))}
       <div className="flex justify-between gap-4 border-t border-line pt-2">
         <dt className="text-muted">Price</dt>
-        <dd className="tabular font-semibold text-fg">{total ?? "—"}</dd>
+        <dd className="text-right">
+          <span className="tabular font-semibold text-fg">{total ?? "—"}</span>
+          {total && breakdown && <span className="tabular block text-xs text-muted">{breakdown}</span>}
+        </dd>
       </div>
     </dl>
   );
@@ -78,6 +130,7 @@ export function BookPage() {
   const [picked, setPicked] = useState<PickedSlot | null>(null);
   const [chosenResource, setChosenResource] = useState<string>(""); // time-first flow: "" = any
   const [quantity, setQuantityState] = useState(1);
+  const [duration, setDurationState] = useState<number | null>(null); // null = the default length
   const [notes, setNotes] = useState("");
   const [repeat, setRepeat] = useState(false);
   const [frequency, setFrequency] = useState("WEEKLY");
@@ -113,15 +166,29 @@ export function BookPage() {
     setQuantityState(q);
     resetSlot();
   };
+  const setDuration = (minutes: number) => {
+    setDurationState(minutes);
+    resetSlot();
+  };
 
   const selectService = (id: string) => {
     setParams(id ? { service: id } : {});
     setResourceId("");
+    setDurationState(null);
   };
 
   const isGroup = service.data?.booking_type === "CAPACITY";
+  // Bookable lengths: the chosen resource's terms, or the service's when the
+  // time comes first (resources that can't do a length are then left out).
+  const chosenOffering = mode === "resource" ? service.data?.resources.find((r) => r.resource_id === resourceId) : undefined;
+  const baseLength = chosenOffering?.duration_minutes ?? service.data?.duration_minutes ?? 0;
+  const lengths = baseLength ? lengthOptions(baseLength, chosenOffering?.max_duration_minutes ?? service.data?.max_duration_minutes) : [];
+  const length = duration && lengths.includes(duration) ? duration : baseLength;
+  // Only a length the customer picked is sent; otherwise each resource uses its own.
+  const customLength = length !== baseLength ? length : undefined;
+
   const effectiveResource = mode === "resource" ? resourceId : picked?.resourceId ?? chosenResource;
-  const freeResources = useFreeResources(serviceId, date, mode === "time" ? picked?.start ?? null : null, quantity);
+  const freeResources = useFreeResources(serviceId, date, mode === "time" ? picked?.start ?? null : null, quantity, customLength);
   const offering = service.data?.resources.find((r) => r.resource_id === (effectiveResource || freeResources[0]?.resource_id));
   const slotFull = picked?.slot?.status === "CAPACITY_REACHED";
   const waitlistClosed = slotFull && !config.data?.allow_waitlist;
@@ -131,6 +198,7 @@ export function BookPage() {
     resource_id: effectiveResource || null,
     start: picked!.start,
     quantity,
+    duration_minutes: customLength,
     notes: notes || null,
     join_waitlist: slotFull,
   });
@@ -163,18 +231,21 @@ export function BookPage() {
   });
 
   const conflictError = create.error instanceof ApiError && create.error.status === 409 ? create.error : null;
-  const total = useMemo(() => {
-    if (!offering?.price) return null;
-    return isGroup ? Number(offering.price) * quantity : Number(offering.price);
-  }, [offering, quantity, isGroup]);
+  const bookedMinutes = customLength ?? offering?.duration_minutes ?? length;
+  const places = isGroup ? quantity : 1;
+  const total = offering ? bookingPrice(offering.price, bookedMinutes, places) : null;
 
   const summary: [string, React.ReactNode][] = [
     ["Service", service.data?.name ?? "—"],
     ["With", offering && effectiveResource ? offering.resource_name : picked ? "Any available" : "—"],
     ["When", picked ? formatRange(picked.start, picked.end, picked.timezone) : "—"],
+    ...(service.data ? [["Length", formatDuration(bookedMinutes)] as [string, React.ReactNode]] : []),
     ...(isGroup ? [["Places", quantity] as [string, React.ReactNode]] : []),
   ];
-  const summaryTotal = total != null ? formatMoney(String(total)) : null;
+  const summaryTotal = total != null ? formatMoney(total) : null;
+  const breakdown = offering?.price
+    ? `${formatRate(offering.price)} × ${formatDuration(bookedMinutes)}${places > 1 ? ` × ${places} places` : ""}`
+    : undefined;
   const confirmationNote = config.data?.require_admin_confirmation && (
     <p className="mt-4 text-xs text-muted">Bookings are confirmed by our team; you'll be notified.</p>
   );
@@ -196,7 +267,8 @@ export function BookPage() {
                       {s.booking_type === "CAPACITY" && <Badge>Group</Badge>}
                     </span>
                     <span className="tabular mt-0.5 block text-xs text-muted">
-                      {formatDuration(s.duration_minutes)} · {formatMoney(s.price)}
+                      {formatLengthRange(s.duration_minutes, s.max_duration_minutes)}
+                      {s.price && ` · ${formatRate(s.price)}`}
                     </span>
                   </Choice>
                 ))}
@@ -225,7 +297,8 @@ export function BookPage() {
                       <span className="block font-medium text-fg">{r.resource_name}</span>
                       <span className="block text-xs text-muted">
                         {titleCase(r.resource_type)}
-                        {r.location_name && ` · ${r.location_name}`} · {formatMoney(r.price)}
+                        {r.location_name && ` · ${r.location_name}`}
+                        {r.price && ` · ${formatRate(r.price)}`}
                       </span>
                     </Choice>
                   ))}
@@ -238,6 +311,11 @@ export function BookPage() {
 
           {serviceId && (mode === "time" || resourceId) && (
             <Step n={3} title="Pick a date and time" done={!!picked}>
+              {lengths.length > 1 && (
+                <div className="mb-5 border-b border-line pb-5">
+                  <LengthSlider options={lengths} value={length} onChange={setDuration} />
+                </div>
+              )}
               <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
                 <DateNav date={date} onChange={setDate} min={today} />
                 {isGroup && (
@@ -258,6 +336,7 @@ export function BookPage() {
                 resourceId={mode === "resource" ? resourceId : null}
                 date={date}
                 quantity={quantity}
+                duration={customLength}
                 selected={picked}
                 onSelect={(s) => {
                   setPicked(s);
@@ -298,7 +377,7 @@ export function BookPage() {
                   </Alert>
                 )}
                 <div className="rounded-md bg-subtle p-4 lg:hidden">
-                  <SummaryList rows={summary} total={summaryTotal} />
+                  <SummaryList rows={summary} total={summaryTotal} breakdown={breakdown} />
                 </div>
                 <Field label="Notes (optional)">
                   <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={2000} />
@@ -366,6 +445,7 @@ export function BookPage() {
                         resourceId={effectiveResource}
                         start={picked.start}
                         quantity={quantity}
+                        duration={customLength}
                         onPick={(a) => {
                           setModeState("resource");
                           setResourceIdState(a.resource_id);
@@ -425,7 +505,7 @@ export function BookPage() {
         <aside className="hidden lg:sticky lg:top-24 lg:block lg:self-start">
           <div className="rounded-lg border border-line bg-surface p-5">
             <h2 className="mb-3 text-sm font-semibold text-fg">Summary</h2>
-            <SummaryList rows={summary} total={summaryTotal} />
+            <SummaryList rows={summary} total={summaryTotal} breakdown={breakdown} />
             {confirmationNote}
           </div>
         </aside>

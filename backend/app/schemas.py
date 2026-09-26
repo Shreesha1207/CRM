@@ -185,12 +185,23 @@ class ServiceIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = None
     duration_minutes: int = Field(gt=0, le=24 * 60)
-    price: Decimal | None = Field(default=None, ge=0)
+    # Longest booking a customer may choose, in multiples of duration_minutes.
+    max_duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
+    price: Decimal | None = Field(default=None, ge=0)  # hourly rate
     capacity: int | None = Field(default=None, gt=0)
     booking_type: BookingType = BookingType.INDIVIDUAL
     buffer_before: int | None = Field(default=None, ge=0, le=24 * 60)
     buffer_after: int | None = Field(default=None, ge=0, le=24 * 60)
     status: RecordStatus = RecordStatus.ACTIVE
+
+    @model_validator(mode="after")
+    def check_length(self) -> "ServiceIn":
+        if self.max_duration_minutes is not None:
+            if self.booking_type != BookingType.INDIVIDUAL:
+                raise ValueError("A flexible length is only possible for individual services")
+            if self.max_duration_minutes < self.duration_minutes:
+                raise ValueError("The longest booking cannot be shorter than the duration")
+        return self
 
 
 class ServiceOut(ORM):
@@ -198,6 +209,7 @@ class ServiceOut(ORM):
     name: str
     description: str | None
     duration_minutes: int
+    max_duration_minutes: int | None
     price: Decimal | None
     capacity: int | None
     booking_type: BookingType
@@ -227,7 +239,9 @@ class OfferingOut(BaseModel):
     service_name: str
     booking_type: BookingType
     duration_minutes: int
-    price: Decimal | None
+    # Longest bookable length on this resource (= duration_minutes when fixed).
+    max_duration_minutes: int
+    price: Decimal | None  # hourly rate
     custom_duration: int | None
     custom_price: Decimal | None
     custom_buffer_before: int | None
@@ -364,6 +378,8 @@ class BookingCreateIn(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
     additional_resource_ids: list[uuid.UUID] = Field(default_factory=list, max_length=10)
     join_waitlist: bool = False
+    # For services with a flexible length; omit for the service's own length.
+    duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
 
 
 class AdminBookingCreateIn(BookingCreateIn):

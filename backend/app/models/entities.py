@@ -116,7 +116,11 @@ class Service(UUIDPk, Timestamps, Base):
 
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
+    # The default and shortest length. With max_duration_minutes set, a
+    # customer may book any multiple of it up to that maximum.
     duration_minutes: Mapped[int] = mapped_column(Integer)
+    max_duration_minutes: Mapped[int | None] = mapped_column(Integer)
+    # Hourly rate: a booking costs rate x booked hours (x places for groups).
     price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     capacity: Mapped[int | None] = mapped_column(Integer)
     booking_type: Mapped[BookingType] = mapped_column(_enum(BookingType), default=BookingType.INDIVIDUAL)
@@ -130,6 +134,9 @@ class Service(UUIDPk, Timestamps, Base):
 
     __table_args__ = (
         CheckConstraint("duration_minutes > 0", name="duration_positive"),
+        CheckConstraint(
+            "max_duration_minutes IS NULL OR max_duration_minutes >= duration_minutes", name="max_duration_valid"
+        ),
         CheckConstraint("capacity IS NULL OR capacity > 0", name="capacity_positive"),
         CheckConstraint("buffer_before IS NULL OR buffer_before >= 0", name="buffer_before_nonneg"),
         CheckConstraint("buffer_after IS NULL OR buffer_after >= 0", name="buffer_after_nonneg"),
@@ -148,7 +155,7 @@ class ResourceService(Base):
         ForeignKey("services.id", ondelete="CASCADE"), primary_key=True
     )
     custom_duration: Mapped[int | None] = mapped_column(Integer)
-    custom_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    custom_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))  # hourly rate
     custom_buffer_before: Mapped[int | None] = mapped_column(Integer)
     custom_buffer_after: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[RecordStatus] = mapped_column(_enum(RecordStatus), default=RecordStatus.ACTIVE)

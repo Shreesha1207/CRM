@@ -212,6 +212,7 @@ def get_conflict(booking_id: uuid.UUID, db: DB, actor: User = ManageConflicts) -
     options = suggest_alternatives(
         db, service_id=booking.service_id, resource_id=booking.primary_resource_id,
         start=booking.start_datetime, quantity=booking.quantity,
+        keep_length=booking.end_datetime - booking.start_datetime,
     )
     return {
         "booking": booking_out(db, booking, actor, engine.rules, engine.now),

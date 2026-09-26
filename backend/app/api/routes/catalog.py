@@ -10,9 +10,9 @@ from sqlalchemy import or_, select
 
 from app.api.deps import DB, get_current_user
 from app.api.serializers import offering_out, resource_out
-from app.core.errors import NotFound
+from app.core.errors import BookingRejected, NotFound
 from app.core.timeutils import utcnow
-from app.models import Location, Resource, ResourceService, Service
+from app.models import Booking, Location, Resource, ResourceService, Service
 from app.models.enums import RecordStatus, ResourceType
 from app.schemas import (
     AggregatedSlotOut,
@@ -146,15 +146,15 @@ def _slot_out(slot, tz) -> SlotOut:
     )
 
 
-def _booking_being_moved(request: Request, db: DB, exclude_booking_id: uuid.UUID | None = None) -> list[uuid.UUID]:
+def _booking_being_moved(request: Request, db: DB, exclude_booking_id: uuid.UUID | None = None) -> Booking | None:
     """Only someone who can see a booking may leave it out of availability."""
     if exclude_booking_id is None:
-        return []
+        return None
     actor = get_current_user(request, db)
-    return [BookingEngine(db, actor).get_visible_booking(exclude_booking_id).id]
+    return BookingEngine(db, actor).get_visible_booking(exclude_booking_id)
 
 
-BookingBeingMoved = Annotated[list[uuid.UUID], Depends(_booking_being_moved)]
+BookingBeingMoved = Annotated[Booking | None, Depends(_booking_being_moved)]
 
 
 @router.get("/availability", response_model=AvailabilityOut)
@@ -162,18 +162,22 @@ def availability(
     db: DB,
     service_id: uuid.UUID,
     date: date,
-    exclude: BookingBeingMoved,
+    moving: BookingBeingMoved,
     resource_id: uuid.UUID | None = None,
     location_id: uuid.UUID | None = None,
     quantity: int = Query(default=1, ge=1, le=1000),
+    duration_minutes: int | None = Query(default=None, gt=0, le=24 * 60),
 ) -> AvailabilityOut:
     """Slots for one service on one date.
 
     With ``resource_id``: that resource's slots (Service -> Resource -> Date).
     Without it: every suitable resource, plus an aggregated view of which
     resources are free at each time (Service -> Date -> Resources).
+    With ``duration_minutes``: slots for that customer-chosen length; resources
+    that don't offer it are left out (or, with ``resource_id``, rejected).
     With ``exclude_booking_id``: the booking a reschedule is moving does not
-    count as a clash, just as when the move itself is validated.
+    count as a clash, and a flexible booking keeps its own length, just as
+    when the move itself is validated.
     """
     rules = settings_service.get_rules(db)
     service = db.get(Service, service_id)
@@ -194,8 +198,16 @@ def availability(
     now = utcnow()
     per_resource: list[ResourceSlotsOut] = []
     aggregate: dict[datetime, AggregatedSlotOut] = {}
+    exclude = [moving.id] if moving is not None else []
     for resource in resources:
-        offering = resolve_offering(db, service, resource, rules)
+        try:
+            offering = resolve_offering(db, service, resource, rules, duration_minutes=duration_minutes)
+        except BookingRejected:
+            if resource_id:
+                raise
+            continue
+        if moving is not None and duration_minutes is None:
+            offering = offering.for_existing(moving.end_datetime - moving.start_datetime)
         tz, slots = generate_slots(db, offering, date, rules, now, quantity=quantity, exclude_booking_ids=exclude)
         outs = [_slot_out(s, tz) for s in slots]
         per_resource.append(
@@ -230,9 +242,17 @@ def availability(
 
 @router.get("/resources/{resource_id}/availability", response_model=AvailabilityOut)
 def resource_availability(
-    resource_id: uuid.UUID, service_id: uuid.UUID, date: date, db: DB, quantity: int = Query(default=1, ge=1)
+    resource_id: uuid.UUID,
+    service_id: uuid.UUID,
+    date: date,
+    db: DB,
+    quantity: int = Query(default=1, ge=1),
+    duration_minutes: int | None = Query(default=None, gt=0, le=24 * 60),
 ) -> AvailabilityOut:
-    return availability(db, service_id=service_id, date=date, exclude=[], resource_id=resource_id, quantity=quantity)
+    return availability(
+        db, service_id=service_id, date=date, moving=None, resource_id=resource_id, quantity=quantity,
+        duration_minutes=duration_minutes,
+    )
 
 
 @router.get("/availability/alternatives", response_model=list[AlternativeOut])
@@ -242,11 +262,13 @@ def alternatives(
     resource_id: uuid.UUID,
     start: datetime,
     quantity: int = Query(default=1, ge=1),
+    duration_minutes: int | None = Query(default=None, gt=0, le=24 * 60),
 ) -> list[AlternativeOut]:
     """Enhancement: suggestions when the requested slot is unavailable."""
     rules = settings_service.get_rules(db)
     options = suggest_alternatives(
-        db, service_id=service_id, resource_id=resource_id, start=start, quantity=quantity
+        db, service_id=service_id, resource_id=resource_id, start=start, quantity=quantity,
+        duration_minutes=duration_minutes,
     )
     return [
         AlternativeOut(

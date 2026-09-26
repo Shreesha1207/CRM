@@ -324,6 +324,7 @@ export function BookingDetailPage() {
             <DetailRow label="Reference">
               <span className="font-mono text-xs">{b.id.slice(0, 8).toUpperCase()}</span>
             </DetailRow>
+            <DetailRow label="Length">{formatDuration((Date.parse(b.end_datetime) - Date.parse(b.start_datetime)) / 60_000)}</DetailRow>
             <DetailRow label="Price">
               <span className="tabular">{formatMoney(b.price)}</span>
             </DetailRow>

@@ -57,7 +57,7 @@ ManageSchedules = Depends(require_permission(Permission.SCHEDULES_MANAGE))
 
 RESOURCE_COLUMNS = ("name", "description", "type", "capacity", "attributes", "location_id", "status")
 SERVICE_COLUMNS = (
-    "name", "description", "duration_minutes", "price", "capacity",
+    "name", "description", "duration_minutes", "max_duration_minutes", "price", "capacity",
     "booking_type", "buffer_before", "buffer_after", "status",
 )
 

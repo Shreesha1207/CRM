@@ -63,6 +63,37 @@ export function formatMoney(value: string | null | undefined): string {
   return new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value));
 }
 
+/** An hourly rate: "40.00 / h". */
+export function formatRate(value: string | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${formatMoney(value)} / h`;
+}
+
+function toCents(value: string): number {
+  const [whole, fraction = ""] = value.split(".");
+  return Number(whole) * 100 + Number(`${fraction}00`.slice(0, 2));
+}
+
+/** What a booking costs: the hourly rate times the booked hours (times the
+ * places for a group session), rounded half up to the cent -- the same sum
+ * the server makes. Returned as a decimal string for formatMoney. */
+export function bookingPrice(rate: string | null | undefined, minutes: number, places = 1): string | null {
+  if (rate === null || rate === undefined) return null;
+  return (Math.round((toCents(rate) * minutes * places) / 60) / 100).toFixed(2);
+}
+
+/** The lengths a customer may book: multiples of `step` up to `max`. */
+export function lengthOptions(step: number, max: number | null | undefined): number[] {
+  const count = Math.max(1, Math.floor((max ?? step) / step));
+  return Array.from({ length: count }, (_, i) => step * (i + 1));
+}
+
+/** "30 min – 2 h", or one length when it is fixed. */
+export function formatLengthRange(step: number, max: number | null | undefined): string {
+  const options = lengthOptions(step, max);
+  const longest = options[options.length - 1];
+  return longest > step ? `${formatDuration(step)} – ${formatDuration(longest)}` : formatDuration(step);
+}
+
 export function formatDuration(minutes: number): string {
   if (minutes < 60) return `${minutes} min`;
   const h = Math.floor(minutes / 60);

@@ -9,7 +9,7 @@ import { useAuth } from "../auth/AuthContext";
 import { useConfig } from "../components/Layout";
 import { ChevronRight, Mark } from "../components/icons";
 import { Alert, BackLink, Badge, Button, Card, EmptyState, Field, Input, Loading, PageHeader, Select, buttonClass, linkClass } from "../components/ui";
-import { WEEKDAYS, formatDuration, formatMoney, hhmm, titleCase } from "../lib/format";
+import { WEEKDAYS, formatLengthRange, formatRate, hhmm, titleCase } from "../lib/format";
 
 export function HomePage() {
   const { user } = useAuth();
@@ -69,8 +69,8 @@ function ServiceList({ services }: { services: Service[] }) {
               {s.description && <p className="mt-0.5 line-clamp-2 text-sm text-muted">{s.description}</p>}
             </div>
             <div className="shrink-0 text-right">
-              {s.price && <div className="tabular text-sm font-medium text-fg">{formatMoney(s.price)}</div>}
-              <div className="text-xs text-muted">{formatDuration(s.duration_minutes)}</div>
+              {s.price && <div className="tabular text-sm font-medium text-fg">{formatRate(s.price)}</div>}
+              <div className="tabular text-xs text-muted">{formatLengthRange(s.duration_minutes, s.max_duration_minutes)}</div>
             </div>
             <ChevronRight className="h-4 w-4 shrink-0 text-faint" />
           </Link>
@@ -106,7 +106,7 @@ export function ServicesPage() {
             </option>
           ))}
         </Select>
-        <Input type="number" min={0} placeholder="Max price" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} aria-label="Max price" />
+        <Input type="number" min={0} placeholder="Max price / h" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} aria-label="Max price per hour" />
       </Filters>
       {services.isLoading ? <Loading /> : <ServiceList services={services.data ?? []} />}
     </>
@@ -126,8 +126,8 @@ export function ServiceDetailPage() {
         title={s.name}
         subtitle={
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            {formatDuration(s.duration_minutes)}
-            {s.price && <span>· from {formatMoney(s.price)}</span>}
+            {formatLengthRange(s.duration_minutes, s.max_duration_minutes)}
+            {s.price && <span>· from {formatRate(s.price)}</span>}
             {s.booking_type === "CAPACITY" && <GroupBadge capacity={s.capacity} />}
           </span>
         }
@@ -151,7 +151,8 @@ export function ServiceDetailPage() {
                 </Link>
                 <div className="text-sm text-muted">
                   {titleCase(o.resource_type)}
-                  {o.location_name && ` · ${o.location_name}`} · {formatDuration(o.duration_minutes)} · {formatMoney(o.price)}
+                  {o.location_name && ` · ${o.location_name}`} · {formatLengthRange(o.duration_minutes, o.max_duration_minutes)}
+                  {o.price && ` · ${formatRate(o.price)}`}
                 </div>
               </div>
               <Link to={`/book?service=${s.id}&resource=${o.resource_id}`} className={buttonClass("secondary", "sm")}>
@@ -266,7 +267,8 @@ export function ResourceDetailPage() {
                     <div className="min-w-0 flex-1">
                       <div className="font-medium text-fg">{o.service_name}</div>
                       <div className="text-sm text-muted">
-                        {formatDuration(o.duration_minutes)} · {formatMoney(o.price)}
+                        {formatLengthRange(o.duration_minutes, o.max_duration_minutes)}
+                        {o.price && ` · ${formatRate(o.price)}`}
                         {o.booking_type === "CAPACITY" && " · group session"}
                       </div>
                     </div>

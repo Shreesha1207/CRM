@@ -1,4 +1,5 @@
 from datetime import time, timedelta
+from decimal import Decimal
 
 from app.core.timeutils import freeze_time
 from app.models.enums import BookingType
@@ -370,3 +371,86 @@ def test_alternatives_suggested_for_taken_slot(client, make, user_headers) -> No
     options = r.json()
     assert options[0]["resource_name"] == "B" and options[0]["start"].startswith(at(MONDAY, 10))
     assert any(o["same_resource"] for o in options)
+
+
+# ---------------------------------------------------------------- flexible length, hourly price
+
+
+def test_flexible_length_is_booked_in_steps_and_priced_per_hour(client, make, user_headers) -> None:
+    service = make.service(duration=60, price=Decimal("20"), max_duration_minutes=180)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+
+    # Only starts that leave room for the whole chosen length are offered.
+    assert [s["start_time"] for s in slots(client, service, resource, duration_minutes=120)][-1] == "15:00"
+    assert [s["start_time"] for s in slots(client, service, resource, duration_minutes=180)][-1] == "14:00"
+
+    r = book(client, user_headers, service, resource, at(MONDAY, 10), duration_minutes=120)
+    assert r.status_code == 201, r.text
+    booking = r.json()
+    assert booking["end_datetime"].startswith(f"{MONDAY.isoformat()}T12:00")
+    assert booking["price"] == "40.00"  # 20.00 per hour x 2 hours
+    assert book(client, user_headers, service, resource, at(MONDAY, 11)).json()["code"] == "CONFLICT"
+    assert book(client, user_headers, service, resource, at(MONDAY, 12)).status_code == 201
+
+    # Lengths come in steps of the duration, up to the maximum.
+    for minutes in (90, 240):
+        r = book(client, user_headers, service, resource, at(MONDAY, 14), duration_minutes=minutes)
+        assert r.status_code == 422 and r.json()["code"] == "INVALID_DURATION"
+
+
+def test_fixed_length_services_only_take_their_own_length(client, basic, user_headers) -> None:
+    service, resource = basic
+    r = book(client, user_headers, service, resource, at(MONDAY, 10), duration_minutes=120)
+    assert r.status_code == 422 and r.json()["code"] == "INVALID_DURATION"
+    assert book(client, user_headers, service, resource, at(MONDAY, 10), duration_minutes=60).status_code == 201
+
+
+def test_price_is_an_hourly_rate(client, make, user_headers) -> None:
+    half_hour = make.service("Consultation", duration=30, price=Decimal("50"))
+    group = make.service("Class", duration=60, price=Decimal("12"), booking_type=BookingType.CAPACITY, capacity=10)
+    a = make.resource("A", services=[half_hour], hours=make.weekdays(time(9), time(17)))
+    b = make.resource("B", services=[group], hours=make.weekdays(time(9), time(17)))
+    assert book(client, user_headers, half_hour, a, at(MONDAY, 9)).json()["price"] == "25.00"
+    assert book(client, user_headers, group, b, at(MONDAY, 9), quantity=3).json()["price"] == "36.00"
+
+
+def test_moving_a_flexible_booking_keeps_its_length(client, make, user_headers) -> None:
+    service = make.service(duration=60, price=Decimal("20"), max_duration_minutes=180)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    original = book(client, user_headers, service, resource, at(MONDAY, 10), duration_minutes=120).json()
+
+    # The reschedule picker offers times for the booking's own two hours.
+    moving = client.get(
+        "/api/availability",
+        headers=user_headers,
+        params={"service_id": str(service.id), "resource_id": str(resource.id), "date": MONDAY.isoformat(), "exclude_booking_id": original["id"]},
+    ).json()["resources"][0]["slots"]
+    assert moving[-1]["start_time"] == "15:00"
+
+    r = client.post(f"/api/bookings/{original['id']}/reschedule", headers=user_headers, json={"start": at(MONDAY, 13)})
+    assert r.status_code == 200, r.text
+    assert r.json()["end_datetime"].startswith(f"{MONDAY.isoformat()}T15:00")
+    assert r.json()["price"] == "40.00"
+
+
+def test_recurring_series_uses_the_chosen_length(client, make, user_headers) -> None:
+    service = make.service(duration=60, price=Decimal("20"), max_duration_minutes=180)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    r = client.post(
+        "/api/bookings/recurring/preview",
+        headers=user_headers,
+        json={"service_id": str(service.id), "resource_id": str(resource.id), "start": at(MONDAY, 15), "count": 2, "duration_minutes": 180},
+    )
+    assert r.status_code == 200, r.text
+    # 15:00 + 3 hours runs past closing at 17:00.
+    assert [o["code"] for o in r.json()["occurrences"]] == ["OUTSIDE_AVAILABILITY"] * 2
+
+
+def test_service_length_settings_are_validated(client, admin_headers) -> None:
+    def create(**extra):
+        return client.post("/api/admin/services", headers=admin_headers, json={"name": "S", "duration_minutes": 60, "price": "10", **extra})
+
+    assert create(max_duration_minutes=30).status_code == 422
+    assert create(max_duration_minutes=120, booking_type="CAPACITY", capacity=5).status_code == 422
+    ok = create(max_duration_minutes=240)
+    assert ok.status_code == 201 and ok.json()["max_duration_minutes"] == 240

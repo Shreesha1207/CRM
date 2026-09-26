@@ -6,7 +6,7 @@ import { RESOURCE_TYPES } from "../../api/types";
 import { useConfig } from "../../components/Layout";
 import { Close } from "../../components/icons";
 import { Alert, Badge, Button, Checkbox, EmptyState, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, Table, Tabs, Td, Textarea } from "../../components/ui";
-import { WEEKDAYS, formatDuration, formatMoney, hhmm, titleCase } from "../../lib/format";
+import { WEEKDAYS, formatLengthRange, formatRate, hhmm, titleCase } from "../../lib/format";
 import { useCatalog } from "./bookings";
 import { useScheduleChange } from "./scheduleChange";
 
@@ -181,7 +181,7 @@ function ResourceServicesForm({ resource }: { resource: ResourceDetail }) {
                   <span>
                     <span className="font-medium">{s.name}</span>{" "}
                     <span className="text-muted">
-                      {formatDuration(s.duration_minutes)} · {formatMoney(s.price)}
+                      {formatLengthRange(s.duration_minutes, s.max_duration_minutes)} · {formatRate(s.price)}
                     </span>
                   </span>
                 }
@@ -195,10 +195,39 @@ function ResourceServicesForm({ resource }: { resource: ResourceDetail }) {
               />
               {link && (
                 <div className="mt-2 grid gap-2 pl-6 sm:grid-cols-4">
-                  <Input type="number" min={1} placeholder={`Duration (${s.duration_minutes})`} value={link.custom_duration ?? ""} onChange={(e) => update(s.id, { custom_duration: numOrNull(e.target.value) })} />
-                  <Input type="number" min={0} step="0.01" placeholder={`Price (${s.price ?? "—"})`} value={link.custom_price ?? ""} onChange={(e) => update(s.id, { custom_price: strOrNull(e.target.value) })} />
-                  <Input type="number" min={0} placeholder="Buffer before" value={link.custom_buffer_before ?? ""} onChange={(e) => update(s.id, { custom_buffer_before: numOrNull(e.target.value) })} />
-                  <Input type="number" min={0} placeholder="Buffer after" value={link.custom_buffer_after ?? ""} onChange={(e) => update(s.id, { custom_buffer_after: numOrNull(e.target.value) })} />
+                  <Input
+                    type="number"
+                    min={1}
+                    placeholder={`Duration (${s.duration_minutes})`}
+                    aria-label={`${s.name} duration`}
+                    value={link.custom_duration ?? ""}
+                    onChange={(e) => update(s.id, { custom_duration: numOrNull(e.target.value) })}
+                  />
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder={`Price / h (${s.price ?? "—"})`}
+                    aria-label={`${s.name} price per hour`}
+                    value={link.custom_price ?? ""}
+                    onChange={(e) => update(s.id, { custom_price: strOrNull(e.target.value) })}
+                  />
+                  <Input
+                    type="number"
+                    min={0}
+                    placeholder="Buffer before"
+                    aria-label={`${s.name} buffer before`}
+                    value={link.custom_buffer_before ?? ""}
+                    onChange={(e) => update(s.id, { custom_buffer_before: numOrNull(e.target.value) })}
+                  />
+                  <Input
+                    type="number"
+                    min={0}
+                    placeholder="Buffer after"
+                    aria-label={`${s.name} buffer after`}
+                    value={link.custom_buffer_after ?? ""}
+                    onChange={(e) => update(s.id, { custom_buffer_after: numOrNull(e.target.value) })}
+                  />
                 </div>
               )}
             </div>
@@ -428,6 +457,7 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
     name: service?.name ?? "",
     description: service?.description ?? "",
     duration_minutes: String(service?.duration_minutes ?? 60),
+    max_duration_minutes: service?.max_duration_minutes?.toString() ?? "",
     price: service?.price ?? "",
     capacity: service?.capacity?.toString() ?? "",
     booking_type: service?.booking_type ?? "INDIVIDUAL",
@@ -441,6 +471,8 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
         ...form,
         description: strOrNull(form.description),
         duration_minutes: Number(form.duration_minutes),
+        // Group sessions always run for their set length.
+        max_duration_minutes: form.booking_type === "INDIVIDUAL" ? numOrNull(form.max_duration_minutes) : null,
         price: strOrNull(form.price),
         capacity: numOrNull(form.capacity),
         buffer_before: numOrNull(form.buffer_before),
@@ -473,7 +505,7 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
     >
       <div className="space-y-4">
         {save.error && <Alert>{errorMessage(save.error)}</Alert>}
-        {service && <Alert tone="info">Changing the duration or buffers only affects new bookings; existing bookings keep their times.</Alert>}
+        {service && <Alert tone="info">Changing the length, price or buffers only affects new bookings; existing bookings keep their times and prices.</Alert>}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Name">
             <Input required value={form.name} onChange={set("name")} />
@@ -484,10 +516,15 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
               <option value="CAPACITY">Capacity — many people share a session</option>
             </Select>
           </Field>
-          <Field label="Duration (minutes)">
+          <Field label="Duration (minutes)" hint="The standard booking length.">
             <Input type="number" min={5} max={1440} required value={form.duration_minutes} onChange={set("duration_minutes")} />
           </Field>
-          <Field label="Price">
+          {form.booking_type === "INDIVIDUAL" && (
+            <Field label="Longest booking (minutes)" hint="Optional. Customers may then book longer, in steps of the duration.">
+              <Input type="number" min={5} max={1440} value={form.max_duration_minutes} onChange={set("max_duration_minutes")} />
+            </Field>
+          )}
+          <Field label="Price per hour" hint="A booking costs this rate × its hours (× places for group sessions).">
             <Input type="number" min={0} step="0.01" value={form.price} onChange={set("price")} />
           </Field>
           {form.booking_type === "CAPACITY" && (
@@ -531,14 +568,14 @@ export function AdminServicesPage() {
       {services.isLoading ? (
         <Loading />
       ) : (
-        <Table head={["Name", "Type", "Duration", "Buffers", "Price", "Status", ""]}>
+        <Table head={["Name", "Type", "Length", "Buffers", "Rate", "Status", ""]}>
           {services.data?.map((s) => (
             <tr key={s.id} className="hover:bg-subtle">
               <Td className="font-medium">{s.name}</Td>
               <Td>{s.booking_type === "CAPACITY" ? `Group (${s.capacity ?? 1})` : "Individual"}</Td>
-              <Td>{formatDuration(s.duration_minutes)}</Td>
+              <Td>{formatLengthRange(s.duration_minutes, s.max_duration_minutes)}</Td>
               <Td>{s.buffer_before || s.buffer_after ? `${s.buffer_before ?? 0} / ${s.buffer_after ?? 0} min` : "—"}</Td>
-              <Td>{formatMoney(s.price)}</Td>
+              <Td>{formatRate(s.price)}</Td>
               <Td>
                 <StatusBadge status={s.status} />
               </Td>

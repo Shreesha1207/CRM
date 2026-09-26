@@ -45,6 +45,7 @@ def create_with_auto_assign(engine: BookingEngine, body: BookingCreateIn, **fiel
             notes=body.notes,
             additional_resource_ids=body.additional_resource_ids,
             join_waitlist=body.join_waitlist,
+            duration_minutes=body.duration_minutes,
             **fields,
         )
 
@@ -147,6 +148,7 @@ def _recurring_request(body: RecurringIn, default_user_id: uuid.UUID) -> tuple[B
         quantity=body.quantity,
         notes=body.notes,
         override_rules=body.override_rules,
+        duration_minutes=body.duration_minutes,
     )
     spec = RecurrenceSpec(
         frequency=body.frequency, interval=body.interval, count=body.count, custom_starts=body.custom_starts

@@ -89,6 +89,9 @@ export interface Offering {
   service_name: string;
   booking_type: BookingType;
   duration_minutes: number;
+  /** Longest bookable length here; equals duration_minutes when the length is fixed. */
+  max_duration_minutes: number;
+  /** Hourly rate. */
   price: string | null;
   custom_duration: number | null;
   custom_price: string | null;
@@ -108,6 +111,9 @@ export interface Service {
   name: string;
   description: string | null;
   duration_minutes: number;
+  /** Customers may book any multiple of duration_minutes up to this; null = fixed length. */
+  max_duration_minutes: number | null;
+  /** Hourly rate. */
   price: string | null;
   capacity: number | null;
   booking_type: BookingType;

@@ -64,10 +64,12 @@ def run() -> None:
         for d in range(7):
             db.add(OperatingHours(location_id=riverside.id, day_of_week=d, start_time=time(7), end_time=time(22)))
 
-        training = Service(name="Personal Training", description="One-to-one strength and conditioning.", duration_minutes=60, price=Decimal("40.00"), buffer_after=15)
-        consultation = Service(name="Consultation", description="A 30 minute consultation.", duration_minutes=30, price=Decimal("25.00"))
-        meeting = Service(name="Meeting Room", description="Private meeting room with screen.", duration_minutes=60, price=Decimal("15.00"))
-        tennis = Service(name="Tennis Court", description="Outdoor hard court.", duration_minutes=60, price=Decimal("20.00"))
+        # Prices are hourly rates. Individual services can be booked for longer
+        # than their duration, in steps of it, up to max_duration_minutes.
+        training = Service(name="Personal Training", description="One-to-one strength and conditioning.", duration_minutes=60, max_duration_minutes=120, price=Decimal("40.00"), buffer_after=15)
+        consultation = Service(name="Consultation", description="A consultation, from 30 minutes to 2 hours.", duration_minutes=30, max_duration_minutes=120, price=Decimal("50.00"))
+        meeting = Service(name="Meeting Room", description="Private meeting room with screen.", duration_minutes=60, max_duration_minutes=240, price=Decimal("15.00"))
+        tennis = Service(name="Tennis Court", description="Outdoor hard court.", duration_minutes=60, max_duration_minutes=180, price=Decimal("20.00"))
         yoga = Service(name="Yoga Class", description="Group vinyasa flow class.", duration_minutes=60, price=Decimal("12.00"), booking_type=BookingType.CAPACITY, capacity=12)
         db.add_all([training, consultation, meeting, tennis, yoga])
 

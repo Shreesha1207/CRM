@@ -74,6 +74,7 @@ export function SlotPicker({
   resourceId,
   date,
   quantity = 1,
+  duration,
   selected,
   onSelect,
   showUnavailable = true,
@@ -83,6 +84,8 @@ export function SlotPicker({
   resourceId: string | null;
   date: string;
   quantity?: number;
+  /** A customer-chosen length in minutes; omitted for the service's own length. */
+  duration?: number;
   selected: PickedSlot | null;
   onSelect: (slot: PickedSlot) => void;
   showUnavailable?: boolean;
@@ -90,13 +93,14 @@ export function SlotPicker({
   moving?: Booking;
 }) {
   const availability = useQuery({
-    queryKey: ["availability", serviceId, resourceId, date, quantity, moving?.id],
+    queryKey: ["availability", serviceId, resourceId, date, quantity, duration, moving?.id],
     queryFn: () =>
       api.get<Availability>("/api/availability", {
         service_id: serviceId,
         resource_id: resourceId,
         date,
         quantity,
+        duration_minutes: duration,
         exclude_booking_id: moving?.id,
       }),
   });
@@ -156,10 +160,10 @@ export function SlotPicker({
 }
 
 /** Which resources are free at a chosen time (time-first flow). */
-export function useFreeResources(serviceId: string, date: string, start: string | null, quantity = 1) {
+export function useFreeResources(serviceId: string, date: string, start: string | null, quantity = 1, duration?: number) {
   const availability = useQuery({
-    queryKey: ["availability", serviceId, null, date, quantity],
-    queryFn: () => api.get<Availability>("/api/availability", { service_id: serviceId, date, quantity }),
+    queryKey: ["availability", serviceId, null, date, quantity, duration, undefined],
+    queryFn: () => api.get<Availability>("/api/availability", { service_id: serviceId, date, quantity, duration_minutes: duration }),
     enabled: !!start,
   });
   return (availability.data?.resources ?? []).filter((r) => r.slots.some((s) => s.start === start && s.available));
@@ -170,17 +174,26 @@ export function Alternatives({
   resourceId,
   start,
   quantity = 1,
+  duration,
   onPick,
 }: {
   serviceId: string;
   resourceId: string;
   start: string;
   quantity?: number;
+  duration?: number;
   onPick: (alt: Alternative) => void;
 }) {
   const alternatives = useQuery({
-    queryKey: ["alternatives", serviceId, resourceId, start, quantity],
-    queryFn: () => api.get<Alternative[]>("/api/availability/alternatives", { service_id: serviceId, resource_id: resourceId, start, quantity }),
+    queryKey: ["alternatives", serviceId, resourceId, start, quantity, duration],
+    queryFn: () =>
+      api.get<Alternative[]>("/api/availability/alternatives", {
+        service_id: serviceId,
+        resource_id: resourceId,
+        start,
+        quantity,
+        duration_minutes: duration,
+      }),
   });
   if (alternatives.isLoading) return <Loading label="Looking for alternatives…" />;
   if (!alternatives.data?.length) return <p className="text-sm text-muted">No nearby alternatives found.</p>;

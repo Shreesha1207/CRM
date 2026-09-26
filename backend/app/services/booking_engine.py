@@ -88,6 +88,8 @@ class BookingRequest:
     additional_resource_ids: Sequence[uuid.UUID] = ()
     join_waitlist: bool = False
     override_rules: bool = False
+    # A customer-chosen length for services that allow it; None = the service's.
+    duration_minutes: int | None = None
 
 
 @dataclass
@@ -362,7 +364,7 @@ class BookingEngine:
                 status_code=422,
             )
         extras = [self._resource(rid) for rid in extra_ids]
-        offering = resolve_offering(self.db, service, resource, self.rules)
+        offering = resolve_offering(self.db, service, resource, self.rules, duration_minutes=req.duration_minutes)
         start = ensure_aware(req.start, resource_timezone(resource, self.rules))
         return user, offering, extras, start
 
@@ -381,9 +383,6 @@ class BookingEngine:
     ) -> Booking:
         booking_id = uuid.uuid4()
         end = start + offering.duration
-        price = offering.price
-        if price is not None and not offering.exclusive:
-            price = price * quantity
         booking = Booking(
             id=booking_id,
             user_id=user_id,
@@ -395,7 +394,7 @@ class BookingEngine:
             quantity=quantity,
             status=status,
             notes=notes,
-            price=price,
+            price=offering.total_price(quantity),
             created_by=self.actor.id,
             confirmed_at=self.now if status == S.CONFIRMED else None,
             rescheduled_from_id=rescheduled_from_id,
@@ -597,7 +596,9 @@ class BookingEngine:
         target = self._resource(new_resource_id or booking.primary_resource_id)
         service = self.db.get(Service, booking.service_id)
         assert service is not None
-        offering = resolve_offering(self.db, service, target, self.rules)
+        offering = resolve_offering(self.db, service, target, self.rules).for_existing(
+            booking.end_datetime - booking.start_datetime
+        )
         start = (
             ensure_aware(new_start, resource_timezone(target, self.rules))
             if new_start is not None
@@ -717,7 +718,10 @@ class BookingEngine:
         if inactive:
             # The pending booking did not hold its slot; make sure it is still free.
             resource = booking.primary_resource
-            offering = resolve_offering(self.db, booking.service, resource, self.rules)
+            offering = replace(
+                resolve_offering(self.db, booking.service, resource, self.rules),
+                duration=booking.end_datetime - booking.start_datetime,
+            )
             extras = [self.db.get(Resource, a.resource_id) for a in booking.allocations if a.resource_id != resource.id]
             self._evaluate(
                 offering,
@@ -896,9 +900,15 @@ def suggest_alternatives(
     quantity: int = 1,
     limit: int = 6,
     now: datetime | None = None,
+    duration_minutes: int | None = None,
+    keep_length: timedelta | None = None,
 ) -> list[tuple[Resource, SlotCheck]]:
     """Nearby options when the requested slot is gone: the same time on
     another resource, or the closest free times on any suitable resource.
+
+    Options are for the same length: `duration_minutes` for a new booking
+    (resources that don't offer that length are skipped), or `keep_length`
+    for an existing booking that is being moved.
 
     An enhancement on top of the booking guarantees, not part of them: a
     suggestion is still fully re-validated when it is booked.
@@ -921,7 +931,12 @@ def suggest_alternatives(
 
     options: list[tuple[float, int, Resource, SlotCheck]] = []
     for resource in candidates:
-        offering = resolve_offering(db, service, resource, rules)
+        try:
+            offering = resolve_offering(db, service, resource, rules, duration_minutes=duration_minutes)
+        except BookingRejected:
+            continue
+        if keep_length is not None:
+            offering = offering.for_existing(keep_length)
         day = start.astimezone(resource_timezone(resource, rules)).date()
         for d in (day, day + timedelta(days=1)):
             _, slots = generate_slots(db, offering, d, rules, now, quantity=quantity)

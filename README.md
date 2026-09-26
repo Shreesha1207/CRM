@@ -140,7 +140,9 @@ AVAILABLE = Operating hours ∩ Resource availability
 - **Operating hours** apply per location, falling back to a default set. With no hours configured, there is no restriction.
 - **Resource availability** is a set of weekly rules with optional `valid_from`/`valid_until` dates. Multiple periods per day are supported, and `is_available = false` rows carve out breaks. A resource with no rules follows the operating hours.
 - **Exceptions** can apply to one resource, one location, or everything. `BLOCKED`, `UNAVAILABLE`, `HOLIDAY` and `MAINTENANCE` remove time. `SPECIAL_HOURS` *replaces* the recurring schedule for the dates it covers (rule 9: date-specific availability overrides recurring availability).
-- **Slots** are generated dynamically; nothing is pre-generated. They sit on a grid anchored at each availability window. Blocks and bookings mark grid slots unavailable rather than shifting the grid. Only slots that fit the whole service duration are returned. The step is the `slot_interval` setting, or the service duration when that is 0.
+- **Slots** are generated dynamically; nothing is pre-generated. They sit on a grid anchored at each availability window. Blocks and bookings mark grid slots unavailable rather than shifting the grid. Only slots that fit the whole booking length are returned. The step is the `slot_interval` setting, or the service duration when that is 0.
+- **Booking length** is the service's duration (or the resource's custom duration). An individual service with a `max_duration_minutes` lets customers book longer, in multiples of that duration up to the maximum (a 30-minute consultation with a 120-minute maximum can be booked for 30, 60, 90 or 120 minutes); the slot grid keeps stepping by the base duration. Group sessions always run for their set length. A moved booking keeps its own length.
+- **Prices are hourly rates.** A booking costs `rate × booked hours` (× places for group sessions), rounded half up to the cent and stored on the booking, so later rate changes don't touch existing bookings.
 
 ### Clash detection and buffers
 

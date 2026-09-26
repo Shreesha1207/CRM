@@ -9,7 +9,7 @@ import { BookingSummary, DateNav, SlotPicker, type PickedSlot } from "../../comp
 import { useConfig } from "../../components/Layout";
 import { Alert, Button, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td, Textarea } from "../../components/ui";
 import { CancelModal, RescheduleModal } from "../account";
-import { formatDateTime, formatMoney, formatTime, sameDay, titleCase, todayIn } from "../../lib/format";
+import { formatDateTime, formatDuration, formatMoney, formatTime, lengthOptions, sameDay, titleCase, todayIn } from "../../lib/format";
 
 export function useCatalog() {
   const resources = useQuery({ queryKey: ["admin", "resources"], queryFn: () => api.get<Resource[]>("/api/admin/resources") });
@@ -171,6 +171,7 @@ function CreateBookingModal({ onClose }: { onClose: () => void }) {
   const [manualTime, setManualTime] = useState("09:00");
   const [notes, setNotes] = useState("");
   const [quantity, setQuantity] = useState(1);
+  const [duration, setDuration] = useState<number | null>(null); // null = the default length
 
   const users = useQuery({
     queryKey: ["admin", "users", userQuery],
@@ -181,6 +182,11 @@ function CreateBookingModal({ onClose }: { onClose: () => void }) {
     queryFn: () => api.get<ServiceDetail>(`/api/services/${serviceId}`),
     enabled: !!serviceId,
   });
+  // Flexible services can be booked for longer, in steps of the resource's (or service's) length.
+  const offering = service.data?.resources.find((r) => r.resource_id === resourceId);
+  const baseLength = offering?.duration_minutes ?? service.data?.duration_minutes ?? 0;
+  const lengths = baseLength ? lengthOptions(baseLength, offering?.max_duration_minutes ?? service.data?.max_duration_minutes) : [];
+  const customLength = duration && duration !== baseLength && lengths.includes(duration) ? duration : undefined;
   const mutation = useMutation({
     mutationFn: () =>
       api.post<Booking>("/api/admin/bookings", {
@@ -190,6 +196,7 @@ function CreateBookingModal({ onClose }: { onClose: () => void }) {
         // With an override the admin may type any wall-clock time at the resource.
         start: override ? `${date}T${manualTime}` : picked!.start,
         quantity,
+        duration_minutes: customLength,
         notes: notes || null,
         override_rules: override,
       }),
@@ -232,7 +239,7 @@ function CreateBookingModal({ onClose }: { onClose: () => void }) {
           </Field>
           <div className="space-y-4">
             <Field label="Service">
-              <Select value={serviceId} onChange={(e) => { setServiceId(e.target.value); setResourceId(""); setPicked(null); }}>
+              <Select value={serviceId} onChange={(e) => { setServiceId(e.target.value); setResourceId(""); setPicked(null); setDuration(null); }}>
                 <option value="">Choose…</option>
                 {services.filter((s) => s.status === "ACTIVE").map((s) => (
                   <option key={s.id} value={s.id}>
@@ -258,6 +265,24 @@ function CreateBookingModal({ onClose }: { onClose: () => void }) {
             <Input type="number" min={1} value={quantity} onChange={(e) => setQuantity(Math.max(1, Number(e.target.value)))} className="w-24" />
           </Field>
         )}
+        {lengths.length > 1 && (
+          <Field label="Length">
+            <Select
+              value={customLength ?? baseLength}
+              onChange={(e) => {
+                setDuration(Number(e.target.value));
+                setPicked(null);
+              }}
+              className="w-40"
+            >
+              {lengths.map((m) => (
+                <option key={m} value={m}>
+                  {formatDuration(m)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
         {serviceId && (
           <>
             <DateNav date={date} onChange={(d) => { setDate(d); setPicked(null); }} />
@@ -267,7 +292,15 @@ function CreateBookingModal({ onClose }: { onClose: () => void }) {
                 <Input type="time" value={manualTime} onChange={(e) => setManualTime(e.target.value)} className="w-40" />
               </Field>
             ) : (
-              <SlotPicker serviceId={serviceId} resourceId={resourceId || null} date={date} quantity={quantity} selected={picked} onSelect={setPicked} />
+              <SlotPicker
+                serviceId={serviceId}
+                resourceId={resourceId || null}
+                date={date}
+                quantity={quantity}
+                duration={customLength}
+                selected={picked}
+                onSelect={setPicked}
+              />
             )}
             {override && !resourceId && <p className="text-xs text-warn-text">Choose a resource when overriding rules.</p>}
           </>

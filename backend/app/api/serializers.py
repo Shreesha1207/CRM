@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.permissions import Permission, has_permission
 from app.models import Booking, Resource, ResourceService, User
-from app.models.enums import BookingStatus
+from app.models.enums import BookingStatus, BookingType
 from app.schemas import (
     BookingOut,
     LocationOut,
@@ -52,6 +52,10 @@ def offering_out(link: ResourceService) -> OfferingOut:
         service_name=service.name,
         booking_type=service.booking_type,
         duration_minutes=link.custom_duration or service.duration_minutes,
+        max_duration_minutes=max(
+            link.custom_duration or service.duration_minutes,
+            (service.max_duration_minutes or 0) if service.booking_type == BookingType.INDIVIDUAL else 0,
+        ),
         price=link.custom_price if link.custom_price is not None else service.price,
         custom_duration=link.custom_duration,
         custom_price=link.custom_price,
