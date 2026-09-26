@@ -9,6 +9,8 @@ services:
       POSTGRES_USER: booking
       POSTGRES_PASSWORD: booking
       POSTGRES_DB: booking
+    ports:
+      - "5432:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
