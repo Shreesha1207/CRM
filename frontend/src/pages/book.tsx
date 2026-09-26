@@ -171,10 +171,12 @@ export function BookPage() {
     resetSlot();
   };
 
+  // Choosing a service starts the booking over; "Change service" goes back to the list.
   const selectService = (id: string) => {
     setParams(id ? { service: id } : {});
     setResourceId("");
     setDurationState(null);
+    setQuantityState(1);
   };
 
   const isGroup = service.data?.booking_type === "CAPACITY";
@@ -256,12 +258,41 @@ export function BookPage() {
       <div className="grid gap-6 lg:grid-cols-[1fr_300px] lg:gap-8">
         <div className="min-w-0 space-y-4">
           <Step n={1} title="Choose a service" done={!!serviceId}>
-            {services.isLoading ? (
+            {serviceId ? (
+              // Once chosen, the service is locked: the other services are
+              // not selectable until the customer asks to change it.
+              service.error ? (
+                <div className="space-y-3">
+                  <Alert>{errorMessage(service.error)}</Alert>
+                  <Button variant="secondary" size="sm" onClick={() => selectService("")}>
+                    Choose another service
+                  </Button>
+                </div>
+              ) : !service.data ? (
+                <Loading />
+              ) : (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-fg">{service.data.name}</span>
+                      {isGroup && <Badge>Group</Badge>}
+                    </div>
+                    <div className="tabular mt-0.5 text-xs text-muted">
+                      {formatLengthRange(service.data.duration_minutes, service.data.max_duration_minutes)}
+                      {service.data.price && ` · ${formatRate(service.data.price)}`}
+                    </div>
+                  </div>
+                  <Button variant="secondary" size="sm" onClick={() => selectService("")}>
+                    Change service
+                  </Button>
+                </div>
+              )
+            ) : services.isLoading ? (
               <Loading />
             ) : (
               <div className="grid gap-2 sm:grid-cols-2">
                 {services.data?.map((s) => (
-                  <Choice key={s.id} selected={s.id === serviceId} onClick={() => selectService(s.id)}>
+                  <Choice key={s.id} selected={false} onClick={() => selectService(s.id)}>
                     <span className="flex items-center justify-between gap-2">
                       <span className="font-medium text-fg">{s.name}</span>
                       {s.booking_type === "CAPACITY" && <Badge>Group</Badge>}
