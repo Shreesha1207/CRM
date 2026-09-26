@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
-import type { Booking, Page } from "../api/types";
+import type { Booking, Page, Service } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { BookingListItem, BookingRows, BookingSummary, DateNav, SlotPicker, type PickedSlot } from "../components/booking";
 import { useConfig } from "../components/Layout";
@@ -40,7 +40,7 @@ function BookingList({ scope, empty }: { scope: Scope; empty: string }) {
   const bookings = useBookings(scope, 20, offset);
   if (bookings.isLoading) return <Loading />;
   if (bookings.error) return <Alert>{errorMessage(bookings.error)}</Alert>;
-  if (!bookings.data?.items.length) return <EmptyState title={empty} />;
+  if (!bookings.data?.items.length) return scope === "waitlisted" ? <NoWaitlists /> : <EmptyState title={empty} />;
   return (
     <>
       <BookingRows>
@@ -53,6 +53,36 @@ function BookingList({ scope, empty }: { scope: Scope; empty: string }) {
   );
 }
 
+/** How to get on a waitlist, since nothing else in the account area says so. */
+function NoWaitlists() {
+  const services = useQuery({ queryKey: ["services"], queryFn: () => api.get<Service[]>("/api/services") });
+  const groups = (services.data ?? []).filter((s) => s.booking_type === "CAPACITY");
+  return (
+    <EmptyState title="You're not on any waitlists">
+      <p className="mx-auto max-w-md">
+        When a group session is full, choose it on the booking page to join its waitlist. If a place opens up, we'll book you in
+        automatically and let you know.
+      </p>
+      {groups.length > 0 && (
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          {groups.map((s) => (
+            <Link key={s.id} to={`/book?service=${s.id}`} className={buttonClass("secondary", "sm")}>
+              Book {s.name}
+            </Link>
+          ))}
+        </div>
+      )}
+    </EmptyState>
+  );
+}
+
+/** The Waitlisted tab is shown while the waitlist is open, or while the user is still on one. */
+function useShowWaitlist() {
+  const config = useConfig();
+  const waitlisted = useBookings("waitlisted", 5);
+  return { show: !!config.data?.allow_waitlist || !!waitlisted.data?.total, waitlisted };
+}
+
 const newBooking = (
   <Link to="/book" className={buttonClass()}>
     New booking
@@ -62,7 +92,7 @@ const newBooking = (
 export function DashboardPage() {
   const { user } = useAuth();
   const upcoming = useBookings("upcoming", 3);
-  const waitlisted = useBookings("waitlisted", 5);
+  const { show: showWaitlist, waitlisted } = useShowWaitlist();
   const [tab, setTab] = useState<Scope>("upcoming");
   const next = upcoming.data?.items[0];
   return (
@@ -97,10 +127,12 @@ export function DashboardPage() {
               <dt className="text-muted">Upcoming</dt>
               <dd className="tabular font-semibold text-fg">{upcoming.data?.total ?? "–"}</dd>
             </div>
-            <div className="flex justify-between">
-              <dt className="text-muted">On a waitlist</dt>
-              <dd className="tabular font-semibold text-fg">{waitlisted.data?.total ?? "–"}</dd>
-            </div>
+            {showWaitlist && (
+              <div className="flex justify-between">
+                <dt className="text-muted">On a waitlist</dt>
+                <dd className="tabular font-semibold text-fg">{waitlisted.data?.total ?? "–"}</dd>
+              </div>
+            )}
           </dl>
         </Card>
       </div>
@@ -111,7 +143,7 @@ export function DashboardPage() {
           { value: "upcoming", label: "Upcoming" },
           { value: "past", label: "Past" },
           { value: "cancelled", label: "Cancelled" },
-          { value: "waitlisted", label: "Waitlisted" },
+          ...(showWaitlist ? [{ value: "waitlisted" as Scope, label: "Waitlisted" }] : []),
         ]}
       />
       <BookingList key={tab} scope={tab} empty={`No ${tab} bookings.`} />
@@ -122,6 +154,7 @@ export function DashboardPage() {
 export function BookingsPage() {
   const location = useLocation();
   const [tab, setTab] = useState<Scope>("upcoming");
+  const { show: showWaitlist } = useShowWaitlist();
   return (
     <>
       <PageHeader title="My bookings" actions={newBooking} />
@@ -137,7 +170,7 @@ export function BookingsPage() {
           { value: "upcoming", label: "Upcoming" },
           { value: "past", label: "Past" },
           { value: "cancelled", label: "Cancelled" },
-          { value: "waitlisted", label: "Waitlisted" },
+          ...(showWaitlist ? [{ value: "waitlisted" as Scope, label: "Waitlisted" }] : []),
           { value: "all", label: "All" },
         ]}
       />

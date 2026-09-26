@@ -388,6 +388,7 @@ export function BookPage() {
                 date={date}
                 quantity={quantity}
                 duration={customLength}
+                allowWaitlist={config.data?.allow_waitlist}
                 selected={picked}
                 onSelect={(s) => {
                   setPicked(s);

@@ -78,6 +78,7 @@ export function SlotPicker({
   selected,
   onSelect,
   showUnavailable = true,
+  allowWaitlist = false,
   moving,
 }: {
   serviceId: string;
@@ -89,6 +90,8 @@ export function SlotPicker({
   selected: PickedSlot | null;
   onSelect: (slot: PickedSlot) => void;
   showUnavailable?: boolean;
+  /** Full group sessions can be chosen, to join their waitlist. */
+  allowWaitlist?: boolean;
   /** The booking being rescheduled: its own time is not a clash, and its current slot is marked. */
   moving?: Booking;
 }) {
@@ -113,26 +116,40 @@ export function SlotPicker({
     const resource = data.resources[0];
     const slots = (resource?.slots ?? []).filter((s) => showUnavailable || s.available);
     if (!slots.length) return <NoTimes />;
+    const waitlistable = (s: Slot) => allowWaitlist && s.status === "CAPACITY_REACHED";
     return (
       <div>
         <div className={slotGrid}>
           {slots.map((s) => {
             const current =
               moving?.resource.id === resource.resource_id && Date.parse(s.start) === Date.parse(moving.start_datetime);
+            const sub = current
+              ? "Current"
+              : s.available
+                ? s.capacity != null
+                  ? `${s.remaining} left`
+                  : undefined
+                : s.status === "CAPACITY_REACHED"
+                  ? waitlistable(s)
+                    ? "Full · waitlist"
+                    : "Full"
+                  : titleCase(s.status);
             return (
               <SlotButton
                 key={s.start}
                 label={s.start_time}
-                sub={current ? "Current" : s.capacity != null ? (s.available ? `${s.remaining} left` : titleCase(s.status)) : s.available ? undefined : titleCase(s.status)}
-                available={!current && (s.available || s.status === "CAPACITY_REACHED")}
-                title={current ? "The booking's current time" : s.message}
+                sub={sub}
+                available={!current && (s.available || waitlistable(s))}
+                title={current ? "The booking's current time" : waitlistable(s) ? "This session is full: choose it to join the waitlist" : s.message}
                 selected={selected?.start === s.start && selected.resourceId === resource.resource_id}
                 onClick={() => onSelect({ start: s.start, end: s.end, resourceId: resource.resource_id, timezone: resource.timezone, slot: s })}
               />
             );
           })}
         </div>
-        <p className="mt-3 text-xs text-muted">Times shown in {resource.timezone}.</p>
+        <p className="mt-3 text-xs text-muted">
+          Times shown in {resource.timezone}.{slots.some(waitlistable) && " Choose a full session to join its waitlist."}
+        </p>
       </div>
     );
   }

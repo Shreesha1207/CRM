@@ -115,10 +115,12 @@ export function ServicesPage() {
 
 export function ServiceDetailPage() {
   const { id } = useParams();
+  const config = useConfig();
   const service = useQuery({ queryKey: ["service", id], queryFn: () => api.get<ServiceDetail>(`/api/services/${id}`) });
   if (service.isLoading) return <Loading />;
   if (service.error) return <Alert>{errorMessage(service.error)}</Alert>;
   const s = service.data!;
+  const waitlist = s.booking_type === "CAPACITY" && config.data?.allow_waitlist;
   return (
     <>
       <BackLink to="/services">Services</BackLink>
@@ -137,7 +139,16 @@ export function ServiceDetailPage() {
           </Link>
         }
       />
-      {s.description && <p className="-mt-2 mb-8 max-w-2xl text-muted">{s.description}</p>}
+      {(s.description || waitlist) && (
+        <div className="-mt-2 mb-8 max-w-2xl space-y-2">
+          {s.description && <p className="text-muted">{s.description}</p>}
+          {waitlist && (
+            <p className="text-sm text-muted">
+              Full sessions have a waitlist: choose a full time when you book to join it, and we'll book you in if a place opens up.
+            </p>
+          )}
+        </div>
+      )}
       <h2 className="mb-3 text-base font-semibold text-fg">Available with</h2>
       {!s.resources.length ? (
         <EmptyState title="Not bookable right now" />
