@@ -39,6 +39,25 @@ export function formatRange(startIso: string, endIso: string, timeZone: string):
   return `${formatDate(startIso, timeZone)} · ${formatTime(startIso, timeZone)} – ${end}`;
 }
 
+/** "Sat · 10:00 – 11:00", for rows that show the date separately. An end on a
+ * later day still gets its date. */
+export function formatDayTimes(startIso: string, endIso: string, timeZone: string): string {
+  const weekday = new Intl.DateTimeFormat(undefined, { timeZone, weekday: "short" }).format(new Date(startIso));
+  const end = sameDay(startIso, endIso, timeZone)
+    ? formatTime(endIso, timeZone)
+    : `${formatDate(endIso, timeZone)} · ${formatTime(endIso, timeZone)}`;
+  return `${weekday} · ${formatTime(startIso, timeZone)} – ${end}`;
+}
+
+/** Day of month and short month name, for date tiles. */
+export function dayAndMonth(iso: string, timeZone: string): { day: string; month: string } {
+  const parts = new Intl.DateTimeFormat(undefined, { timeZone, day: "numeric", month: "short" }).formatToParts(new Date(iso));
+  return {
+    day: parts.find((p) => p.type === "day")?.value ?? "",
+    month: parts.find((p) => p.type === "month")?.value ?? "",
+  };
+}
+
 export function formatMoney(value: string | null | undefined): string {
   if (value === null || value === undefined) return "—";
   return new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value));

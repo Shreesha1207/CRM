@@ -4,26 +4,60 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { NotificationItem, PublicConfig } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
-import { cx } from "./ui";
+import { formatDateTime } from "../lib/format";
+import { Bell, Close, Mark, Menu, Moon, Sun } from "./icons";
+import { buttonClass, cx } from "./ui";
 
 export function useConfig() {
   return useQuery({ queryKey: ["config"], queryFn: () => api.get<PublicConfig>("/api/config"), staleTime: 5 * 60_000 });
 }
 
-function NavItem({ to, children, end }: { to: string; children: React.ReactNode; end?: boolean }) {
+const iconButton = "inline-flex h-9 w-9 items-center justify-center rounded-md text-muted hover:bg-subtle hover:text-fg";
+
+type NavVariant = "bar" | "menu" | "side";
+
+const NAV_STYLES: Record<NavVariant, { base: string; active: string; idle: string }> = {
+  // Header links: an underline on the header's bottom edge marks the page.
+  bar: {
+    base: "relative flex h-14 items-center text-sm",
+    active: "text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent",
+    idle: "text-muted hover:text-fg",
+  },
+  // Rows in the phone menu.
+  menu: { base: "block rounded-md px-3 py-2.5 text-[15px]", active: "bg-subtle font-medium text-fg", idle: "text-muted hover:text-fg" },
+  // Admin sections: tabs on narrow screens, a side list from lg up.
+  side: {
+    base: "-mb-px whitespace-nowrap border-b-2 py-2 text-sm lg:mb-0 lg:rounded-md lg:border-b-0 lg:px-3 lg:py-1.5",
+    active: "border-accent font-medium text-fg lg:bg-subtle",
+    idle: "border-transparent text-muted hover:text-fg",
+  },
+};
+
+function NavItem({ to, children, end, variant = "bar" }: { to: string; children: React.ReactNode; end?: boolean; variant?: NavVariant }) {
+  const style = NAV_STYLES[variant];
   return (
-    <NavLink
-      to={to}
-      end={end}
-      className={({ isActive }) =>
-        cx(
-          "rounded-md px-3 py-2 text-sm font-medium",
-          isActive ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-        )
-      }
-    >
+    <NavLink to={to} end={end} className={({ isActive }) => cx(style.base, isActive ? style.active : style.idle)}>
       {children}
     </NavLink>
+  );
+}
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "light");
+  const next = theme === "dark" ? "light" : "dark";
+  const toggle = () => {
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem("theme", next);
+    } catch {
+      // Storage can be blocked (private mode); the choice then lasts until reload.
+    }
+    setTheme(next);
+  };
+  return (
+    <button onClick={toggle} className={iconButton} aria-label={`Use ${next} theme`} title={`Use ${next} theme`}>
+      {theme === "dark" ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
+    </button>
   );
 }
 
@@ -45,51 +79,66 @@ function NotificationBell() {
     mutationFn: () => api.post("/api/notifications/read-all"),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }),
   });
+  const config = useConfig();
+  const tz = config.data?.default_timezone ?? "UTC";
 
   useEffect(() => {
+    if (!open) return;
     const onClick = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
-  }, []);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   const unread = count.data?.count ?? 0;
   return (
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((o) => !o)}
-        className="relative rounded-full p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+        className={cx(iconButton, "relative")}
         aria-label={`Notifications${unread ? ` (${unread} unread)` : ""}`}
+        aria-expanded={open}
+        aria-controls="notifications-panel"
       >
-        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
-        </svg>
+        <Bell className="h-[18px] w-[18px]" />
         {unread > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white">
+          <span className="tabular absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-accent-fg">
             {unread > 9 ? "9+" : unread}
           </span>
         )}
       </button>
       {open && (
-        <div className="absolute right-0 z-40 mt-2 w-80 rounded-xl border border-slate-200 bg-white shadow-lg">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
-            <span className="text-sm font-semibold">Notifications</span>
+        <div
+          id="notifications-panel"
+          className="fixed inset-x-3 top-16 z-40 overflow-hidden rounded-lg border border-line bg-surface shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-96"
+        >
+          <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+            <span className="text-sm font-semibold text-fg">Notifications</span>
             {unread > 0 && (
-              <button className="text-xs text-brand-600 hover:underline" onClick={() => readAll.mutate()}>
+              <button className="text-xs font-medium text-accent-text hover:underline" onClick={() => readAll.mutate()}>
                 Mark all read
               </button>
             )}
           </div>
-          <div className="max-h-96 overflow-y-auto">
-            {list.data?.length === 0 && <p className="px-4 py-6 text-center text-sm text-slate-500">Nothing yet.</p>}
+          <div className="max-h-[70dvh] overflow-y-auto sm:max-h-96">
+            {list.data?.length === 0 && <p className="px-4 py-8 text-center text-sm text-muted">Nothing yet.</p>}
             {list.data?.map((n) => (
               <Link
                 key={n.id}
                 to={n.booking_id ? `/bookings/${n.booking_id}` : "#"}
                 onClick={() => setOpen(false)}
-                className={cx("block border-b border-slate-50 px-4 py-3 hover:bg-slate-50", !n.read_at && "bg-brand-50/50")}
+                className="flex gap-3 border-b border-line px-4 py-3 last:border-b-0 hover:bg-subtle"
               >
-                <div className="text-sm font-medium text-slate-800">{n.title}</div>
-                <div className="mt-0.5 whitespace-pre-line text-xs text-slate-500">{n.body}</div>
+                <span aria-hidden className={cx("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", n.read_at ? "bg-transparent" : "bg-accent")} />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-fg">{n.title}</span>
+                  <span className="mt-0.5 block whitespace-pre-line text-xs text-muted">{n.body}</span>
+                  <span className="mt-1 block text-[11px] text-faint">{formatDateTime(n.created_at, tz)}</span>
+                </span>
               </Link>
             ))}
           </div>
@@ -105,67 +154,106 @@ export function Layout() {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const links = (
-    <>
-      <NavItem to="/services">Services</NavItem>
-      <NavItem to="/resources">Resources</NavItem>
-      {user && (
-        <>
-          <NavItem to="/dashboard">Dashboard</NavItem>
-          <NavItem to="/book">Book</NavItem>
-          <NavItem to="/bookings">My bookings</NavItem>
-        </>
-      )}
-      {isStaff && <NavItem to="/admin">Admin</NavItem>}
-    </>
-  );
+  const links = [
+    { to: "/services", label: "Services" },
+    { to: "/resources", label: "Resources" },
+    ...(user
+      ? [
+          { to: "/dashboard", label: "Dashboard" },
+          { to: "/book", label: "Book" },
+          { to: "/bookings", label: "My bookings" },
+        ]
+      : []),
+    ...(isStaff ? [{ to: "/admin", label: "Admin" }] : []),
+  ];
+  const signOut = async () => {
+    setMenuOpen(false);
+    await logout();
+    navigate("/");
+  };
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4">
-          <Link to="/" className="flex items-center gap-2 font-semibold text-slate-900">
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-600 text-sm text-white">B</span>
+    <div className="min-h-dvh">
+      <header className="sticky top-0 z-30 border-b border-line bg-canvas/90 backdrop-blur supports-[backdrop-filter]:bg-canvas/80">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4 sm:px-6">
+          <Link to="/" className="flex shrink-0 items-center gap-2 font-semibold tracking-tight text-fg" onClick={() => setMenuOpen(false)}>
+            <Mark />
             {config.data?.business_name ?? "Bookings"}
           </Link>
-          <nav className="hidden flex-1 items-center gap-1 md:flex">{links}</nav>
-          <div className="ml-auto flex items-center gap-2">
+          <nav className="hidden items-center gap-6 md:flex" aria-label="Main">
+            {links.map((l) => (
+              <NavItem key={l.to} to={l.to}>
+                {l.label}
+              </NavItem>
+            ))}
+          </nav>
+          <div className="ml-auto flex items-center gap-1">
+            <ThemeToggle />
+            {/* Visibility sits on wrappers: `hidden` on the button itself would
+                lose to the button's own `inline-flex`. */}
             {user ? (
               <>
                 <NotificationBell />
-                <Link to="/profile" className="hidden text-sm text-slate-600 hover:text-slate-900 sm:block">
-                  {user.name}
-                </Link>
-                <button
-                  className="rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
-                  onClick={async () => {
-                    await logout();
-                    navigate("/");
-                  }}
-                >
-                  Sign out
-                </button>
+                <div className="ml-2 hidden items-center gap-1 md:flex">
+                  <Link to="/profile" className="max-w-40 truncate text-sm text-muted hover:text-fg">
+                    {user.name}
+                  </Link>
+                  <button className={buttonClass("ghost")} onClick={signOut}>
+                    Sign out
+                  </button>
+                </div>
               </>
             ) : (
               <>
-                <NavItem to="/login">Sign in</NavItem>
-                <Link to="/register" className="rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700">
-                  Create account
+                <Link to="/login" className={buttonClass("ghost", "md", "ml-1")}>
+                  Sign in
                 </Link>
+                <div className="ml-1 hidden sm:block">
+                  <Link to="/register" className={buttonClass()}>
+                    Create account
+                  </Link>
+                </div>
               </>
             )}
-            <button className="rounded-md p-2 text-slate-600 md:hidden" onClick={() => setMenuOpen((o) => !o)} aria-label="Menu">
-              ☰
+            <button
+              className={cx(iconButton, "md:hidden")}
+              onClick={() => setMenuOpen((o) => !o)}
+              aria-label={menuOpen ? "Close menu" : "Menu"}
+              aria-expanded={menuOpen}
+            >
+              {menuOpen ? <Close className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </button>
           </div>
         </div>
         {menuOpen && (
-          <nav className="flex flex-col gap-1 border-t border-slate-100 px-4 py-2 md:hidden" onClick={() => setMenuOpen(false)}>
-            {links}
-          </nav>
+          <div className="border-t border-line bg-surface md:hidden">
+            <nav className="mx-auto max-w-6xl space-y-0.5 px-3 py-2" aria-label="Menu" onClick={() => setMenuOpen(false)}>
+              {links.map((l) => (
+                <NavItem key={l.to} to={l.to} variant="menu">
+                  {l.label}
+                </NavItem>
+              ))}
+              {!user && (
+                <NavItem to="/register" variant="menu">
+                  Create account
+                </NavItem>
+              )}
+            </nav>
+            {user && (
+              <div className="flex items-center justify-between gap-3 border-t border-line px-6 py-3">
+                <Link to="/profile" className="min-w-0" onClick={() => setMenuOpen(false)}>
+                  <span className="block truncate text-sm font-medium text-fg">{user.name}</span>
+                  <span className="block truncate text-xs text-muted">{user.email}</span>
+                </Link>
+                <button className={buttonClass("secondary", "sm")} onClick={signOut}>
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </header>
-      <main className="mx-auto max-w-7xl px-4 py-8">
+      <main className="mx-auto max-w-6xl px-4 pb-16 pt-6 sm:px-6 sm:pt-10">
         <Outlet />
       </main>
     </div>
@@ -189,11 +277,14 @@ const ADMIN_LINKS: { to: string; label: string; permission: string; end?: boolea
 export function AdminLayout() {
   const { can } = useAuth();
   return (
-    <div className="grid gap-8 lg:grid-cols-[200px_1fr]">
-      <aside>
-        <nav className="flex gap-1 overflow-x-auto lg:sticky lg:top-20 lg:flex-col">
+    <div className="grid gap-6 lg:grid-cols-[176px_1fr] lg:gap-10">
+      <aside className="min-w-0">
+        <nav
+          aria-label="Admin"
+          className="-mx-4 flex gap-5 overflow-x-auto border-b border-line px-4 sm:-mx-6 sm:px-6 lg:sticky lg:top-24 lg:mx-0 lg:flex-col lg:gap-0.5 lg:border-b-0 lg:px-0"
+        >
           {ADMIN_LINKS.filter((l) => can(l.permission)).map((l) => (
-            <NavItem key={l.to} to={l.to} end={l.end}>
+            <NavItem key={l.to} to={l.to} end={l.end} variant="side">
               {l.label}
             </NavItem>
           ))}

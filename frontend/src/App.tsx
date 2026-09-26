@@ -1,6 +1,7 @@
 import { Link, Route, Routes } from "react-router-dom";
 import { RequireAuth } from "./auth/AuthContext";
 import { AdminLayout, Layout } from "./components/Layout";
+import { linkClass } from "./components/ui";
 import { BookingDetailPage, BookingsPage, DashboardPage, ProfilePage } from "./pages/account";
 import { AdminBookingsPage } from "./pages/admin/bookings";
 import { AdminCalendarPage } from "./pages/admin/calendar";
@@ -24,8 +25,9 @@ import {
 function NotFound() {
   return (
     <div className="py-20 text-center">
-      <h1 className="text-2xl font-semibold">Page not found</h1>
-      <Link to="/" className="mt-4 inline-block text-brand-700 hover:underline">
+      <p className="tabular text-sm font-medium text-muted">404</p>
+      <h1 className="mt-2 text-2xl font-semibold tracking-tight">Page not found</h1>
+      <Link to="/" className={`mt-4 inline-block text-sm ${linkClass}`}>
         Go home
       </Link>
     </div>

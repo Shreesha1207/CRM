@@ -115,10 +115,10 @@ export function AdminUsersPage() {
         <>
           <Table head={["Name", "E-mail", "Role", "Status", "Joined", ""]}>
             {users.data?.items.map((u) => (
-              <tr key={u.id} className="hover:bg-slate-50">
+              <tr key={u.id} className="hover:bg-subtle">
                 <Td className="font-medium">
                   {u.name}
-                  {u.id === me?.id && <span className="ml-1 text-xs text-slate-400">(you)</span>}
+                  {u.id === me?.id && <span className="ml-1 text-xs text-faint">(you)</span>}
                 </Td>
                 <Td>{u.email}</Td>
                 <Td>{titleCase(u.role)}</Td>
@@ -176,7 +176,7 @@ export function AdminSettingsPage() {
               return (
                 <div key={d.key}>
                   <Checkbox label={<span className="font-medium">{titleCase(d.key)}</span>} checked={!!value} onChange={(e) => set(d.key, e.target.checked)} />
-                  <p className="ml-6 text-xs text-slate-500">{d.description}</p>
+                  <p className="ml-6 text-xs text-muted">{d.description}</p>
                 </div>
               );
             }
@@ -253,13 +253,13 @@ export function AdminAuditPage() {
                 <Td className="font-medium">{titleCase(l.action)}</Td>
                 <Td>
                   {l.entity_type}
-                  {l.entity_id && <div className="font-mono text-[11px] text-slate-400">{l.entity_id.slice(0, 8)}</div>}
+                  {l.entity_id && <div className="font-mono text-[11px] text-faint">{l.entity_id.slice(0, 8)}</div>}
                 </Td>
                 <Td>
                   {(l.old_value || l.new_value) && (
                     <details>
-                      <summary className="cursor-pointer text-xs text-brand-700">View</summary>
-                      <pre className="mt-1 max-w-md overflow-x-auto rounded bg-slate-50 p-2 text-[11px]">
+                      <summary className="cursor-pointer text-xs text-accent-text">View</summary>
+                      <pre className="mt-1 max-w-md overflow-x-auto rounded bg-subtle p-2 text-[11px]">
                         {JSON.stringify({ before: l.old_value, after: l.new_value }, null, 2)}
                       </pre>
                     </details>

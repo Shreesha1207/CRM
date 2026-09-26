@@ -4,6 +4,7 @@ import { api, errorMessage } from "../../api/client";
 import type { AvailabilityException, Booking, CalendarData, Resource } from "../../api/types";
 import { BOOKING_STATUSES } from "../../api/types";
 import { useConfig } from "../../components/Layout";
+import { ChevronLeft, ChevronRight } from "../../components/icons";
 import { Alert, Button, Loading, PageHeader, Select, cx } from "../../components/ui";
 import {
   WEEKDAYS_SHORT,
@@ -24,21 +25,28 @@ import { AdminBookingModal, useCatalog } from "./bookings";
 
 type View = "day" | "week" | "month";
 const HOUR_PX = 48;
+// One soft colour per resource, readable on both themes.
 const PALETTE = [
-  "bg-sky-100 border-sky-400 text-sky-900",
-  "bg-emerald-100 border-emerald-400 text-emerald-900",
-  "bg-violet-100 border-violet-400 text-violet-900",
-  "bg-amber-100 border-amber-400 text-amber-900",
-  "bg-rose-100 border-rose-400 text-rose-900",
-  "bg-teal-100 border-teal-400 text-teal-900",
-  "bg-indigo-100 border-indigo-400 text-indigo-900",
+  { block: "bg-sky-50 border-sky-500 text-sky-950 dark:bg-sky-950/60 dark:text-sky-100", dot: "bg-sky-500" },
+  { block: "bg-emerald-50 border-emerald-600 text-emerald-950 dark:bg-emerald-950/60 dark:text-emerald-100", dot: "bg-emerald-600" },
+  { block: "bg-violet-50 border-violet-500 text-violet-950 dark:bg-violet-950/60 dark:text-violet-100", dot: "bg-violet-500" },
+  { block: "bg-amber-50 border-amber-500 text-amber-950 dark:bg-amber-950/60 dark:text-amber-100", dot: "bg-amber-500" },
+  { block: "bg-rose-50 border-rose-500 text-rose-950 dark:bg-rose-950/60 dark:text-rose-100", dot: "bg-rose-500" },
+  { block: "bg-teal-50 border-teal-600 text-teal-950 dark:bg-teal-950/60 dark:text-teal-100", dot: "bg-teal-600" },
+  { block: "bg-indigo-50 border-indigo-500 text-indigo-950 dark:bg-indigo-950/60 dark:text-indigo-100", dot: "bg-indigo-500" },
 ];
 
 function statusStyle(b: Booking, colorIndex: number): string {
-  if (b.status === "CONFLICTED") return "bg-red-100 border-red-500 text-red-900";
-  if (b.status === "PENDING") return "bg-amber-50 border-amber-400 border-dashed text-amber-900";
-  if (b.status === "CANCELLED" || b.status === "NO_SHOW") return "bg-slate-100 border-slate-300 text-slate-500 line-through";
-  return PALETTE[colorIndex % PALETTE.length];
+  if (b.status === "CONFLICTED") return "bg-danger-soft border-danger text-danger-text";
+  if (b.status === "PENDING") return "bg-warn-soft border-amber-500 border-dashed text-warn-text";
+  if (b.status === "CANCELLED" || b.status === "NO_SHOW") return "bg-subtle border-line-strong text-faint line-through";
+  return PALETTE[colorIndex % PALETTE.length].block;
+}
+
+function dotStyle(b: Booking, colorIndex: number): string {
+  if (b.status === "CONFLICTED") return "bg-danger";
+  if (b.status === "CANCELLED" || b.status === "NO_SHOW") return "bg-line-strong";
+  return PALETTE[colorIndex % PALETTE.length].dot;
 }
 
 interface Placed<T> {
@@ -112,17 +120,23 @@ function Timeline({
   const hours = Array.from({ length: toHour - fromHour }, (_, i) => fromHour + i);
   const nowParts = zonedParts(new Date(), tz);
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+    <div className="overflow-x-auto rounded-lg border border-line bg-surface">
       <div className="grid min-w-[640px]" style={{ gridTemplateColumns: `56px repeat(${columns.length}, minmax(120px, 1fr))` }}>
-        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white" />
+        <div className="sticky top-0 z-10 border-b border-line bg-surface" />
         {columns.map((c) => (
-          <div key={c.key} className={cx("sticky top-0 z-10 border-b border-l border-slate-200 bg-white px-2 py-2 text-center text-xs font-semibold", c.day === nowParts.date && !c.resource && "text-brand-700")}>
+          <div
+            key={c.key}
+            className={cx(
+              "sticky top-0 z-10 truncate border-b border-l border-line bg-surface px-2 py-2 text-center text-xs font-semibold",
+              c.day === nowParts.date && !c.resource ? "text-accent-text" : "text-fg",
+            )}
+          >
             {c.label}
           </div>
         ))}
         <div className="relative" style={{ height: hours.length * HOUR_PX }}>
           {hours.map((h, i) => (
-            <div key={h} className={cx("absolute right-2 text-[11px] text-slate-400", i > 0 && "-translate-y-2")} style={{ top: i * HOUR_PX }}>
+            <div key={h} className={cx("tabular absolute right-2 text-[11px] text-faint", i > 0 && "-translate-y-2")} style={{ top: i * HOUR_PX }}>
               {String(h).padStart(2, "0")}:00
             </div>
           ))}
@@ -143,35 +157,35 @@ function Timeline({
               return m ? [{ bl, ...m }] : [];
             });
           return (
-            <div key={c.key} className="relative border-l border-slate-200" style={{ height: hours.length * HOUR_PX }}>
+            <div key={c.key} className="relative border-l border-line" style={{ height: hours.length * HOUR_PX }}>
               {hours.map((_, i) => (
-                <div key={i} className="absolute inset-x-0 border-t border-slate-100" style={{ top: i * HOUR_PX }} />
+                <div key={i} className="absolute inset-x-0 border-t border-line" style={{ top: i * HOUR_PX }} />
               ))}
               {blocks.map(({ bl, start, end }) => (
                 <div
                   key={bl.id}
                   title={`${titleCase(bl.type)}${bl.reason ? `: ${bl.reason}` : ""}`}
-                  className="absolute inset-x-0 px-1 text-[10px] font-medium uppercase text-slate-500"
+                  className="absolute inset-x-0 px-1 text-[10px] font-medium uppercase text-muted"
                   style={{
                     top: ((start - fromHour * 60) / 60) * HOUR_PX,
                     height: ((end - start) / 60) * HOUR_PX,
-                    background: "repeating-linear-gradient(135deg, #f1f5f9 0 6px, #e2e8f0 6px 12px)",
+                    background: "repeating-linear-gradient(135deg, var(--subtle) 0 6px, var(--line) 6px 12px)",
                   }}
                 >
                   {titleCase(bl.type)}
                 </div>
               ))}
               {c.day === nowParts.date && nowParts.hour >= fromHour && nowParts.hour < toHour && (
-                <div className="absolute inset-x-0 z-10 border-t-2 border-red-400" style={{ top: ((nowParts.hour * 60 + nowParts.minute - fromHour * 60) / 60) * HOUR_PX }} />
+                <div className="absolute inset-x-0 z-10 border-t-2 border-danger" style={{ top: ((nowParts.hour * 60 + nowParts.minute - fromHour * 60) / 60) * HOUR_PX }} />
               )}
               {placedBookings.map(({ item: b, top, height, lane, lanes }) => (
                 <button
                   key={b.id}
                   onClick={() => onOpen(b)}
-                  className={cx("absolute overflow-hidden rounded-md border-l-4 px-1.5 py-0.5 text-left text-[11px] leading-tight shadow-sm hover:z-20 hover:shadow", statusStyle(b, colorOf(b)))}
+                  className={cx("absolute overflow-hidden rounded border-l-[3px] px-1.5 py-0.5 text-left text-[11px] leading-tight hover:z-20 hover:ring-1 hover:ring-line-strong", statusStyle(b, colorOf(b)))}
                   style={{ top, height, left: `calc(${(lane / lanes) * 100}% + 2px)`, width: `calc(${100 / lanes}% - 4px)` }}
                 >
-                  <span className="font-semibold">{formatTime(b.start_datetime, tz)}</span> {b.service.name}
+                  <span className="tabular font-semibold">{formatTime(b.start_datetime, tz)}</span> {b.service.name}
                   <span className="block truncate">{c.resource ? b.user.name : `${b.resource.name} · ${b.user.name}`}</span>
                   {b.service.booking_type === "CAPACITY" && <span className="block">×{b.quantity}</span>}
                 </button>
@@ -180,7 +194,7 @@ function Timeline({
           );
         })}
       </div>
-      {days.length === 0 && <p className="p-4 text-sm text-slate-500">Nothing to show.</p>}
+      {days.length === 0 && <p className="p-4 text-sm text-muted">Nothing to show.</p>}
     </div>
   );
 }
@@ -206,8 +220,8 @@ function MonthGrid({ month, data, tz, colorOf, onOpen, onDay }: {
     return map;
   }, [data, tz]);
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 text-center text-xs font-semibold text-slate-500">
+    <div className="overflow-hidden rounded-lg border border-line bg-surface">
+      <div className="grid grid-cols-7 border-b border-line bg-subtle text-center text-xs font-medium text-muted">
         {WEEKDAYS_SHORT.map((d) => (
           <div key={d} className="py-2">
             {d}
@@ -219,18 +233,31 @@ function MonthGrid({ month, data, tz, colorOf, onOpen, onDay }: {
           const items = (byDay.get(day) ?? []).sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
           const inMonth = day.slice(0, 7) === first.slice(0, 7);
           return (
-            <div key={day} className={cx("min-h-28 border-b border-r border-slate-100 p-1.5", !inMonth && "bg-slate-50/60")}>
-              <button onClick={() => onDay(day)} className={cx("mb-1 rounded px-1.5 text-xs font-medium hover:bg-slate-100", day === today ? "bg-brand-600 text-white hover:bg-brand-700" : inMonth ? "text-slate-700" : "text-slate-400")}>
+            <div key={day} className={cx("min-h-16 border-b border-r border-line p-1 sm:min-h-28 sm:p-1.5", !inMonth && "bg-subtle/50")}>
+              <button
+                onClick={() => onDay(day)}
+                className={cx(
+                  "tabular mb-1 rounded px-1.5 text-xs font-medium",
+                  day === today ? "bg-accent text-accent-fg" : inMonth ? "text-fg hover:bg-subtle" : "text-faint hover:bg-subtle",
+                )}
+              >
                 {Number(day.slice(8))}
               </button>
-              <div className="space-y-0.5">
+              {items.length > 0 && (
+                <button onClick={() => onDay(day)} className="flex flex-wrap gap-0.5 px-1 sm:hidden" aria-label={`${items.length} bookings`}>
+                  {items.slice(0, 6).map((b) => (
+                    <span key={b.id} className={cx("h-1.5 w-1.5 rounded-full", dotStyle(b, colorOf(b)))} />
+                  ))}
+                </button>
+              )}
+              <div className="hidden space-y-0.5 sm:block">
                 {items.slice(0, 3).map((b) => (
-                  <button key={b.id} onClick={() => onOpen(b)} className={cx("block w-full truncate rounded border-l-2 px-1 text-left text-[11px]", statusStyle(b, colorOf(b)))}>
+                  <button key={b.id} onClick={() => onOpen(b)} className={cx("block w-full truncate rounded-sm border-l-2 px-1 text-left text-[11px]", statusStyle(b, colorOf(b)))}>
                     {formatTime(b.start_datetime, tz)} {b.service.name}
                   </button>
                 ))}
                 {items.length > 3 && (
-                  <button onClick={() => onDay(day)} className="px-1 text-[11px] text-slate-500 hover:underline">
+                  <button onClick={() => onDay(day)} className="px-1 text-[11px] text-muted hover:underline">
                     +{items.length - 3} more
                   </button>
                 )}
@@ -247,7 +274,8 @@ export function AdminCalendarPage() {
   const config = useConfig();
   const tz = config.data?.default_timezone ?? "UTC";
   const { resources, services, locations } = useCatalog();
-  const [view, setView] = useState<View>("week");
+  // Phones start on the day view: a week of columns doesn't fit.
+  const [view, setView] = useState<View>(() => (window.matchMedia("(max-width: 767px)").matches ? "day" : "week"));
   const [anchor, setAnchor] = useState(todayIn(tz));
   const [filters, setFilters] = useState({ resource_id: "", service_id: "", location_id: "", status: "" });
   const [selected, setSelected] = useState<Booking | null>(null);
@@ -306,26 +334,33 @@ export function AdminCalendarPage() {
   return (
     <>
       <PageHeader title="Calendar" subtitle={`Times in ${tz}. Hatched areas are blocked.`} />
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="inline-flex rounded-lg bg-slate-100 p-1 text-sm">
+      <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <div className="inline-flex rounded-md border border-line-strong p-0.5 text-sm">
           {(["day", "week", "month"] as View[]).map((v) => (
-            <button key={v} onClick={() => setView(v)} className={cx("rounded-md px-3 py-1 font-medium capitalize", view === v ? "bg-white shadow-sm" : "text-slate-500")}>
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              aria-pressed={view === v}
+              className={cx("rounded px-3 py-1 font-medium capitalize", view === v ? "bg-accent text-accent-fg" : "text-muted hover:text-fg")}
+            >
               {v}
             </button>
           ))}
         </div>
-        <Button variant="secondary" size="sm" onClick={() => step(-1)} aria-label="Previous">
-          ←
-        </Button>
-        <Button variant="secondary" size="sm" onClick={() => setAnchor(todayIn(tz))}>
-          Today
-        </Button>
-        <Button variant="secondary" size="sm" onClick={() => step(1)} aria-label="Next">
-          →
-        </Button>
-        <span className="ml-2 font-semibold">{title}</span>
+        <div className="flex items-center gap-1.5">
+          <Button variant="secondary" size="sm" className="w-8 px-0" onClick={() => step(-1)} aria-label="Previous">
+            <ChevronLeft />
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => setAnchor(todayIn(tz))}>
+            Today
+          </Button>
+          <Button variant="secondary" size="sm" className="w-8 px-0" onClick={() => step(1)} aria-label="Next">
+            <ChevronRight />
+          </Button>
+        </div>
+        <span className="font-semibold text-fg">{title}</span>
       </div>
-      <div className="mb-4 grid gap-2 sm:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
         <Select value={filters.resource_id} onChange={(e) => setFilters({ ...filters, resource_id: e.target.value })} aria-label="Resource">
           <option value="">All resources</option>
           {resources.map((r) => (
@@ -397,7 +432,7 @@ export function AdminCalendarPage() {
         />
       )}
       {view === "day" && (data?.resources.length ?? 0) > shownResources.length && (
-        <p className="mt-2 text-xs text-slate-500">Showing the first {shownResources.length} resources — filter to see others.</p>
+        <p className="mt-2 text-xs text-muted">Showing the first {shownResources.length} resources — filter to see others.</p>
       )}
       {selected && <AdminBookingModal booking={selected} onClose={() => setSelected(null)} />}
     </>

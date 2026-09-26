@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api, errorMessage } from "../../api/client";
 import type { Alternative, Booking, Dashboard, Page } from "../../api/types";
 import { useConfig } from "../../components/Layout";
-import { Alert, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Stat, StatusBadge, Textarea } from "../../components/ui";
+import { Alert, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Stat, StatusBadge, Textarea, linkClass } from "../../components/ui";
 import { formatDateTime, formatDuration, formatRange } from "../../lib/format";
 
 export function AdminOverviewPage() {
@@ -23,7 +23,7 @@ export function AdminOverviewPage() {
   return (
     <>
       <PageHeader title="Overview" subtitle={`All times in ${d.timezone}`} />
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Today's bookings" value={d.todays_bookings} />
         <Stat label="Upcoming" value={d.upcoming_bookings} />
         <Stat label="Pending" value={d.pending_bookings} />
@@ -45,43 +45,43 @@ export function AdminOverviewPage() {
       )}
       <div className="mt-8 grid gap-6 lg:grid-cols-2">
         <Card>
-          <h2 className="mb-1 font-semibold">Resource utilization</h2>
-          <p className="mb-4 text-xs text-slate-500">Booked time as a share of bookable time, next 7 days.</p>
+          <h2 className="mb-1 text-sm font-semibold text-fg">Resource utilization</h2>
+          <p className="mb-4 text-xs text-muted">Booked time as a share of bookable time, next 7 days.</p>
           <div className="space-y-3">
             {d.resource_utilization.map((u) => (
               <div key={u.resource_id}>
-                <div className="mb-1 flex justify-between text-sm">
-                  <span>{u.resource_name}</span>
-                  <span className="text-slate-500">
+                <div className="mb-1 flex justify-between gap-3 text-sm">
+                  <span className="min-w-0 truncate text-fg">{u.resource_name}</span>
+                  <span className="tabular shrink-0 text-muted">
                     {Math.round(u.utilization * 100)}% · {formatDuration(u.booked_minutes)} of {formatDuration(u.available_minutes)}
                   </span>
                 </div>
-                <div className="h-2 rounded-full bg-slate-100">
-                  <div className="h-2 rounded-full bg-brand-500" style={{ width: `${Math.min(100, u.utilization * 100)}%` }} />
+                <div className="h-1.5 rounded-full bg-subtle">
+                  <div className="h-1.5 rounded-full bg-accent" style={{ width: `${Math.min(100, u.utilization * 100)}%` }} />
                 </div>
               </div>
             ))}
-            {!d.resource_utilization.length && <p className="text-sm text-slate-500">No active resources.</p>}
+            {!d.resource_utilization.length && <p className="text-sm text-muted">No active resources.</p>}
           </div>
         </Card>
         <Card>
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="font-semibold">Coming up</h2>
-            <Link to="/admin/calendar" className="text-sm text-brand-700 hover:underline">
+            <h2 className="text-sm font-semibold text-fg">Coming up</h2>
+            <Link to="/admin/calendar" className={`text-sm ${linkClass}`}>
               Open calendar
             </Link>
           </div>
           {next.length === 0 ? (
-            <p className="text-sm text-slate-500">Nothing scheduled.</p>
+            <p className="text-sm text-muted">Nothing scheduled.</p>
           ) : (
-            <ul className="divide-y divide-slate-100">
+            <ul className="-my-2.5 divide-y divide-line">
               {next.map((b) => (
                 <li key={b.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
-                  <div>
-                    <div className="font-medium">
+                  <div className="min-w-0">
+                    <div className="font-medium text-fg">
                       {b.service.name} · {b.resource.name}
                     </div>
-                    <div className="text-slate-500">
+                    <div className="tabular text-muted">
                       {formatDateTime(b.start_datetime, b.timezone)} · {b.user.name}
                     </div>
                   </div>
@@ -116,22 +116,22 @@ function ResolveModal({ booking, onClose }: { booking: Booking; onClose: () => v
     <Modal open wide title="Resolve conflict" onClose={onClose}>
       <div className="space-y-5">
         <div>
-          <div className="font-medium">
+          <div className="font-medium text-fg">
             {booking.service.name} · {booking.resource.name} · {booking.user.name}
           </div>
-          <div className="text-sm text-slate-600">{formatRange(booking.start_datetime, booking.end_datetime, booking.timezone)}</div>
-          <div className="mt-1 text-sm text-red-600">{booking.conflict_reason}</div>
+          <div className="tabular text-sm text-muted">{formatRange(booking.start_datetime, booking.end_datetime, booking.timezone)}</div>
+          <div className="mt-1 text-sm text-danger-text">{booking.conflict_reason}</div>
         </div>
         {resolve.error && <Alert>{errorMessage(resolve.error)}</Alert>}
         <Field label="Note for the audit log / customer (optional)">
           <Textarea value={reason} onChange={(e) => setReason(e.target.value)} />
         </Field>
         <div>
-          <h3 className="mb-2 text-sm font-semibold">Move to an available slot</h3>
+          <h3 className="mb-2 text-sm font-semibold text-fg">Move to an available slot</h3>
           {detail.isLoading ? (
             <Loading label="Finding alternatives…" />
           ) : detail.data?.alternatives.length ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               {detail.data.alternatives.map((a) => (
                 <button
                   key={`${a.resource_id}${a.start}`}
@@ -140,18 +140,18 @@ function ResolveModal({ booking, onClose }: { booking: Booking; onClose: () => v
                       a.same_resource ? { action: "reschedule", start: a.start } : { action: "reschedule", start: a.start, resource_id: a.resource_id },
                     )
                   }
-                  className="rounded-lg px-3 py-2 text-left text-sm ring-1 ring-slate-300 hover:ring-brand-500"
+                  className="rounded-md border border-line-strong bg-surface px-3 py-2 text-left text-sm hover:border-accent"
                 >
-                  <span className="block font-medium">{a.resource_name}</span>
-                  <span className="text-xs text-slate-500">{formatDateTime(a.start, a.timezone)}</span>
+                  <span className="block font-medium text-fg">{a.resource_name}</span>
+                  <span className="text-xs text-muted">{formatDateTime(a.start, a.timezone)}</span>
                 </button>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-slate-500">No nearby free slots. Use Bookings → Reschedule for other dates.</p>
+            <p className="text-sm text-muted">No nearby free slots. Use Bookings → Reschedule for other dates.</p>
           )}
         </div>
-        <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+        <div className="flex flex-wrap gap-2 border-t border-line pt-4">
           <Button variant="secondary" loading={resolve.isPending} onClick={() => resolve.mutate({ action: "override" })}>
             Override &amp; keep booking
           </Button>
@@ -176,22 +176,24 @@ export function AdminConflictsPage() {
       ) : !conflicts.data?.items.length ? (
         <EmptyState title="No conflicts">Every booking fits the current schedule.</EmptyState>
       ) : (
-        <div className="space-y-3">
+        <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface">
           {conflicts.data.items.map((b) => (
-            <Card key={b.id} className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <div className="font-medium">
+            <li key={b.id} className="flex flex-wrap items-center justify-between gap-4 px-4 py-3.5 sm:px-5">
+              <div className="min-w-0">
+                <div className="font-medium text-fg">
                   {b.service.name} · {b.resource.name}
                 </div>
-                <div className="text-sm text-slate-600">
+                <div className="tabular text-sm text-muted">
                   {formatRange(b.start_datetime, b.end_datetime, b.timezone ?? config.data?.default_timezone ?? "UTC")} · {b.user.name}
                 </div>
-                <div className="text-sm text-red-600">{b.conflict_reason}</div>
+                <div className="text-sm text-danger-text">{b.conflict_reason}</div>
               </div>
-              <Button onClick={() => setSelected(b)}>Resolve</Button>
-            </Card>
+              <Button size="sm" onClick={() => setSelected(b)}>
+                Resolve
+              </Button>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
       {selected && <ResolveModal booking={selected} onClose={() => setSelected(null)} />}
     </>

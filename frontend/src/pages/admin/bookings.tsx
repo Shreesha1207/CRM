@@ -22,12 +22,12 @@ function History({ bookingId }: { bookingId: string }) {
   const history = useQuery({ queryKey: ["booking-history", bookingId], queryFn: () => api.get<AuditLog[]>(`/api/admin/bookings/${bookingId}/history`) });
   if (history.isLoading) return <Loading />;
   return (
-    <ol className="space-y-2 border-l border-slate-200 pl-4 text-sm">
+    <ol className="space-y-2 border-l border-line pl-4 text-sm">
       {history.data?.map((h) => (
         <li key={h.id}>
           <span className="font-medium">{titleCase(h.action)}</span>
-          <span className="text-slate-500"> · {h.actor_name ?? "system"} · {new Date(h.created_at).toLocaleString()}</span>
-          {h.new_value?.reason ? <div className="text-xs text-slate-500">{String(h.new_value.reason)}</div> : null}
+          <span className="text-muted"> · {h.actor_name ?? "system"} · {new Date(h.created_at).toLocaleString()}</span>
+          {h.new_value?.reason ? <div className="text-xs text-muted">{String(h.new_value.reason)}</div> : null}
         </li>
       ))}
     </ol>
@@ -64,7 +64,7 @@ function ReassignModal({ booking, onClose }: { booking: Booking; onClose: () => 
     >
       <div className="space-y-4">
         {mutation.error && <Alert>{errorMessage(mutation.error)}</Alert>}
-        <p className="text-sm text-slate-600">Same time, different {booking.resource.type.toLowerCase()}. The new resource is checked for availability first.</p>
+        <p className="text-sm text-muted">Same time, different {booking.resource.type.toLowerCase()}. The new resource is checked for availability first.</p>
         <Field label="Resource">
           <Select value={resourceId} onChange={(e) => setResourceId(e.target.value)}>
             <option value="">Choose…</option>
@@ -114,8 +114,8 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
             <BookingSummary booking={b} />
             <div className="text-right text-sm">
               <div className="font-medium">{b.user.name}</div>
-              <div className="text-slate-500">{b.user.email}</div>
-              <div className="mt-1 text-slate-500">{formatMoney(b.price)}</div>
+              <div className="text-muted">{b.user.email}</div>
+              <div className="mt-1 text-muted">{formatMoney(b.price)}</div>
             </div>
           </div>
           {b.conflict_reason && <Alert tone="warning">Conflict: {b.conflict_reason}</Alert>}
@@ -145,7 +145,7 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
             </div>
           )}
           <div>
-            <h3 className="mb-2 text-sm font-semibold">History</h3>
+            <h3 className="mb-2 text-sm font-semibold text-fg">History</h3>
             <History bookingId={b.id} />
           </div>
         </div>
@@ -269,7 +269,7 @@ function CreateBookingModal({ onClose }: { onClose: () => void }) {
             ) : (
               <SlotPicker serviceId={serviceId} resourceId={resourceId || null} date={date} quantity={quantity} selected={picked} onSelect={setPicked} />
             )}
-            {override && !resourceId && <p className="text-xs text-amber-700">Choose a resource when overriding rules.</p>}
+            {override && !resourceId && <p className="text-xs text-warn-text">Choose a resource when overriding rules.</p>}
           </>
         )}
         <Field label="Notes">
@@ -303,8 +303,8 @@ export function AdminBookingsPage() {
   return (
     <>
       <PageHeader title="Bookings" actions={can("bookings:manage") && <Button onClick={() => setCreating(true)}>New booking</Button>} />
-      <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <Input placeholder="Customer name or e-mail" value={filters.q} onChange={set("q")} />
+      <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <Input placeholder="Customer name or e-mail" value={filters.q} onChange={set("q")} className="col-span-2 lg:col-span-1" />
         <Select value={filters.status} onChange={set("status")} aria-label="Status">
           <option value="">All statuses</option>
           {BOOKING_STATUSES.map((s) => (
@@ -348,20 +348,20 @@ export function AdminBookingsPage() {
         <>
           <Table head={["When", "Customer", "Service", "Resource", "Status", ""]}>
             {bookings.data!.items.map((b) => (
-              <tr key={b.id} className={focus === b.id ? "bg-brand-50" : "hover:bg-slate-50"}>
+              <tr key={b.id} className={focus === b.id ? "bg-accent-soft" : "hover:bg-subtle"}>
                 <Td>
                   <div className="font-medium">{formatDateTime(b.start_datetime, b.timezone)}</div>
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-muted">
                     until {sameDay(b.start_datetime, b.end_datetime, b.timezone) ? formatTime(b.end_datetime, b.timezone) : formatDateTime(b.end_datetime, b.timezone)}
                   </div>
                 </Td>
                 <Td>
                   <div>{b.user.name}</div>
-                  <div className="text-xs text-slate-500">{b.user.email}</div>
+                  <div className="text-xs text-muted">{b.user.email}</div>
                 </Td>
                 <Td>
                   {b.service.name}
-                  {b.quantity > 1 && <span className="text-xs text-slate-500"> ×{b.quantity}</span>}
+                  {b.quantity > 1 && <span className="text-xs text-muted"> ×{b.quantity}</span>}
                 </Td>
                 <Td>{b.resource.name}</Td>
                 <Td>
@@ -376,7 +376,9 @@ export function AdminBookingsPage() {
             ))}
             {bookings.data!.items.length === 0 && (
               <tr>
-                <Td className="py-8 text-center text-slate-500">No bookings match these filters.</Td>
+                <Td colSpan={6} className="py-8 text-center text-muted">
+                  No bookings match these filters.
+                </Td>
               </tr>
             )}
           </Table>

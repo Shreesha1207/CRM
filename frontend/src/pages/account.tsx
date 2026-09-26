@@ -4,9 +4,26 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
 import type { Booking, Page } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
-import { BookingListItem, BookingSummary, DateNav, SlotPicker, type PickedSlot } from "../components/booking";
+import { BookingListItem, BookingRows, BookingSummary, DateNav, SlotPicker, type PickedSlot } from "../components/booking";
 import { useConfig } from "../components/Layout";
-import { Alert, Button, Card, EmptyState, Field, Input, Loading, Modal, PageHeader, Pagination, Tabs, Textarea } from "../components/ui";
+import {
+  Alert,
+  BackLink,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  Field,
+  Input,
+  Loading,
+  Modal,
+  PageHeader,
+  Pagination,
+  Tabs,
+  Textarea,
+  buttonClass,
+  linkClass,
+} from "../components/ui";
 import { formatDateTime, formatDuration, formatMoney, formatRange, todayIn, zonedParts } from "../lib/format";
 
 type Scope = "upcoming" | "past" | "cancelled" | "waitlisted" | "all";
@@ -25,14 +42,22 @@ function BookingList({ scope, empty }: { scope: Scope; empty: string }) {
   if (bookings.error) return <Alert>{errorMessage(bookings.error)}</Alert>;
   if (!bookings.data?.items.length) return <EmptyState title={empty} />;
   return (
-    <div className="space-y-3">
-      {bookings.data.items.map((b) => (
-        <BookingListItem key={b.id} booking={b} to={`/bookings/${b.id}`} />
-      ))}
+    <>
+      <BookingRows>
+        {bookings.data.items.map((b) => (
+          <BookingListItem key={b.id} booking={b} to={`/bookings/${b.id}`} />
+        ))}
+      </BookingRows>
       <Pagination total={bookings.data.total} limit={20} offset={offset} onChange={setOffset} />
-    </div>
+    </>
   );
 }
+
+const newBooking = (
+  <Link to="/book" className={buttonClass()}>
+    New booking
+  </Link>
+);
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -42,39 +67,39 @@ export function DashboardPage() {
   const next = upcoming.data?.items[0];
   return (
     <>
-      <PageHeader
-        title={`Hello, ${user?.name.split(" ")[0]}`}
-        subtitle="Here's what's coming up."
-        actions={<Link to="/book" className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700">New booking</Link>}
-      />
-      <div className="mb-8 grid gap-4 md:grid-cols-3">
+      <PageHeader title={`Hello, ${user?.name.split(" ")[0]}`} subtitle="Here's what's coming up." actions={newBooking} />
+      <div className="mb-10 grid gap-4 md:grid-cols-3">
         <Card className="md:col-span-2">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Next booking</p>
+          <p className="text-xs font-medium text-muted">Next booking</p>
           {upcoming.isLoading ? (
             <Loading />
           ) : next ? (
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-4">
+            <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
               <BookingSummary booking={next} />
-              <div className="flex gap-2">
-                <Link to={`/bookings/${next.id}`} className="rounded-lg px-3 py-1.5 text-sm font-medium text-brand-700 ring-1 ring-brand-200 hover:bg-brand-50">
-                  View
-                </Link>
-              </div>
+              <Link to={`/bookings/${next.id}`} className={buttonClass("secondary", "sm")}>
+                View
+              </Link>
             </div>
           ) : (
-            <p className="mt-3 text-sm text-slate-500">No upcoming bookings. <Link to="/book" className="text-brand-700 hover:underline">Book something</Link>.</p>
+            <p className="mt-3 text-sm text-muted">
+              No upcoming bookings.{" "}
+              <Link to="/book" className={linkClass}>
+                Book something
+              </Link>
+              .
+            </p>
           )}
         </Card>
         <Card>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">At a glance</p>
+          <p className="text-xs font-medium text-muted">At a glance</p>
           <dl className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between">
-              <dt className="text-slate-500">Upcoming</dt>
-              <dd className="font-semibold">{upcoming.data?.total ?? "–"}</dd>
+              <dt className="text-muted">Upcoming</dt>
+              <dd className="tabular font-semibold text-fg">{upcoming.data?.total ?? "–"}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-slate-500">On a waitlist</dt>
-              <dd className="font-semibold">{waitlisted.data?.total ?? "–"}</dd>
+              <dt className="text-muted">On a waitlist</dt>
+              <dd className="tabular font-semibold text-fg">{waitlisted.data?.total ?? "–"}</dd>
             </div>
           </dl>
         </Card>
@@ -89,7 +114,7 @@ export function DashboardPage() {
           { value: "waitlisted", label: "Waitlisted" },
         ]}
       />
-      <BookingList scope={tab} empty={`No ${tab} bookings.`} />
+      <BookingList key={tab} scope={tab} empty={`No ${tab} bookings.`} />
     </>
   );
 }
@@ -99,8 +124,12 @@ export function BookingsPage() {
   const [tab, setTab] = useState<Scope>("upcoming");
   return (
     <>
-      <PageHeader title="My bookings" actions={<Link to="/book" className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700">New booking</Link>} />
-      {(location.state as { created?: boolean } | null)?.created && <div className="mb-4"><Alert tone="success">Your bookings were created.</Alert></div>}
+      <PageHeader title="My bookings" actions={newBooking} />
+      {(location.state as { created?: boolean } | null)?.created && (
+        <div className="mb-4">
+          <Alert tone="success">Your bookings were created.</Alert>
+        </div>
+      )}
       <Tabs
         value={tab}
         onChange={setTab}
@@ -112,7 +141,7 @@ export function BookingsPage() {
           { value: "all", label: "All" },
         ]}
       />
-      <BookingList scope={tab} empty="Nothing here yet." />
+      <BookingList key={tab} scope={tab} empty="Nothing here yet." />
     </>
   );
 }
@@ -163,13 +192,24 @@ export function RescheduleModal({
         </>
       }
     >
-      <p className="mb-4 text-sm text-slate-600">
+      <p className="mb-4 text-sm text-muted">
         Currently {formatRange(booking.start_datetime, booking.end_datetime, booking.timezone)} with {booking.resource.name}. Your current slot is kept
         until the new one is confirmed.
       </p>
-      {mutation.error && <div className="mb-4"><Alert>{errorMessage(mutation.error)}</Alert></div>}
+      {mutation.error && (
+        <div className="mb-4">
+          <Alert>{errorMessage(mutation.error)}</Alert>
+        </div>
+      )}
       <div className="mb-4">
-        <DateNav date={date} onChange={(d) => { setDate(d); setPicked(null); }} min={todayIn(config.data?.default_timezone ?? "UTC")} />
+        <DateNav
+          date={date}
+          onChange={(d) => {
+            setDate(d);
+            setPicked(null);
+          }}
+          min={todayIn(config.data?.default_timezone ?? "UTC")}
+        />
       </div>
       <SlotPicker
         serviceId={booking.service.id}
@@ -181,9 +221,9 @@ export function RescheduleModal({
         moving={booking}
       />
       {admin && (
-        <label className="mt-4 flex items-center gap-2 text-sm text-slate-600">
-          <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} /> Override booking rules (audited)
-        </label>
+        <div className="mt-4">
+          <Checkbox label="Override booking rules (audited)" checked={override} onChange={(e) => setOverride(e.target.checked)} />
+        </div>
       )}
     </Modal>
   );
@@ -216,7 +256,7 @@ export function CancelModal({ booking, open, onClose, admin }: { booking: Bookin
       }
     >
       <div className="space-y-4">
-        <p className="text-sm text-slate-600">
+        <p className="text-sm text-muted">
           {booking.service.name} · {formatRange(booking.start_datetime, booking.end_datetime, booking.timezone)}
         </p>
         {mutation.error && <Alert>{errorMessage(mutation.error)}</Alert>}
@@ -225,6 +265,15 @@ export function CancelModal({ booking, open, onClose, admin }: { booking: Bookin
         </Field>
       </div>
     </Modal>
+  );
+}
+
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[6.5rem_1fr] gap-4 py-3 sm:grid-cols-[8rem_1fr]">
+      <dt className="text-sm text-muted">{label}</dt>
+      <dd className="min-w-0 text-sm text-fg">{children}</dd>
+    </div>
   );
 }
 
@@ -240,71 +289,69 @@ export function BookingDetailPage() {
   const state = location.state as { created?: boolean; rescheduled?: boolean } | null;
   const windowNote = (minutes: number, verb: string) =>
     minutes > 0 ? `You can ${verb} online until ${formatDuration(minutes)} before the start.` : null;
+  const notes = [windowNote(config.data?.cancellation_window ?? 0, "cancel"), windowNote(config.data?.rescheduling_window ?? 0, "reschedule")].filter(Boolean);
 
   return (
     <>
-      <PageHeader title="Booking details" actions={<Link to="/bookings" className="text-sm text-slate-500 hover:text-slate-700">← All bookings</Link>} />
-      <div className="mb-4 space-y-3">
+      <BackLink to="/bookings">My bookings</BackLink>
+      <PageHeader title="Booking details" />
+      <div className="mb-4 space-y-3 empty:hidden">
         {state?.created && b.status === "CONFIRMED" && <Alert tone="success">You're booked! A confirmation has been sent.</Alert>}
         {state?.created && b.status === "PENDING" && <Alert tone="info">Request received. We'll confirm shortly.</Alert>}
-        {state?.created && b.status === "WAITLISTED" && <Alert tone="info">You're #{b.waitlist_position} on the waitlist. We'll confirm you automatically if a place opens.</Alert>}
+        {state?.created && b.status === "WAITLISTED" && (
+          <Alert tone="info">You're #{b.waitlist_position} on the waitlist. We'll confirm you automatically if a place opens.</Alert>
+        )}
         {state?.rescheduled && <Alert tone="success">Your booking has been moved.</Alert>}
-        {b.status === "CONFLICTED" && <Alert tone="warning">A schedule change affects this booking{b.conflict_reason ? ` (${b.conflict_reason})` : ""}. Our team will contact you, or you can reschedule it now.</Alert>}
+        {b.status === "CONFLICTED" && (
+          <Alert tone="warning">
+            A schedule change affects this booking{b.conflict_reason ? ` (${b.conflict_reason})` : ""}. Our team will contact you, or you can reschedule it now.
+          </Alert>
+        )}
         {b.rescheduled_to_id && (
           <Alert tone="info">
-            This booking was moved. <Link to={`/bookings/${b.rescheduled_to_id}`} className="font-medium underline">See the new booking</Link>.
+            This booking was moved.{" "}
+            <Link to={`/bookings/${b.rescheduled_to_id}`} className="font-medium underline">
+              See the new booking
+            </Link>
+            .
           </Alert>
         )}
       </div>
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <BookingSummary booking={b} />
-          <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-slate-500">Reference</dt>
-              <dd className="font-mono text-xs">{b.id.slice(0, 8).toUpperCase()}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">Price</dt>
-              <dd>{formatMoney(b.price)}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">Booked</dt>
-              <dd>{formatDateTime(b.created_at, b.timezone)}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">Timezone</dt>
-              <dd>{b.timezone}</dd>
-            </div>
+          <BookingSummary booking={b} compact />
+          <dl className="mt-4 divide-y divide-line border-t border-line">
+            <DetailRow label="Reference">
+              <span className="font-mono text-xs">{b.id.slice(0, 8).toUpperCase()}</span>
+            </DetailRow>
+            <DetailRow label="Price">
+              <span className="tabular">{formatMoney(b.price)}</span>
+            </DetailRow>
+            {b.quantity > 1 && <DetailRow label="Places">{b.quantity}</DetailRow>}
+            <DetailRow label="Booked">{formatDateTime(b.created_at, b.timezone)}</DetailRow>
+            <DetailRow label="Timezone">{b.timezone}</DetailRow>
             {b.notes && (
-              <div className="sm:col-span-2">
-                <dt className="text-slate-500">Notes</dt>
-                <dd className="whitespace-pre-line">{b.notes}</dd>
-              </div>
+              <DetailRow label="Notes">
+                <span className="whitespace-pre-line">{b.notes}</span>
+              </DetailRow>
             )}
             {b.cancelled_at && (
-              <div className="sm:col-span-2">
-                <dt className="text-slate-500">Cancelled</dt>
-                <dd>
-                  {formatDateTime(b.cancelled_at, b.timezone)}
-                  {b.cancellation_reason && ` — ${b.cancellation_reason}`}
-                </dd>
-              </div>
+              <DetailRow label="Cancelled">
+                {formatDateTime(b.cancelled_at, b.timezone)}
+                {b.cancellation_reason && ` — ${b.cancellation_reason}`}
+              </DetailRow>
             )}
             {b.rescheduled_from_id && (
-              <div className="sm:col-span-2">
-                <dt className="text-slate-500">Moved from</dt>
-                <dd>
-                  <Link to={`/bookings/${b.rescheduled_from_id}`} className="text-brand-700 hover:underline">
-                    previous booking
-                  </Link>
-                </dd>
-              </div>
+              <DetailRow label="Moved from">
+                <Link to={`/bookings/${b.rescheduled_from_id}`} className={linkClass}>
+                  previous booking
+                </Link>
+              </DetailRow>
             )}
           </dl>
         </Card>
-        <Card>
-          <h2 className="mb-3 font-semibold">Manage</h2>
+        <Card className="self-start">
+          <h2 className="mb-3 text-sm font-semibold text-fg">Manage</h2>
           <div className="flex flex-col gap-2">
             <Button variant="secondary" disabled={!b.can_reschedule} onClick={() => setModal("reschedule")}>
               Reschedule
@@ -313,10 +360,13 @@ export function BookingDetailPage() {
               {b.status === "WAITLISTED" ? "Leave waitlist" : "Cancel booking"}
             </Button>
           </div>
-          <div className="mt-4 space-y-1 text-xs text-slate-500">
-            <p>{windowNote(config.data?.cancellation_window ?? 0, "cancel")}</p>
-            <p>{windowNote(config.data?.rescheduling_window ?? 0, "reschedule")}</p>
-          </div>
+          {notes.length > 0 && (
+            <div className="mt-4 space-y-1 text-xs text-muted">
+              {notes.map((n) => (
+                <p key={n}>{n}</p>
+              ))}
+            </div>
+          )}
         </Card>
       </div>
       {modal === "cancel" && <CancelModal booking={b} open onClose={() => setModal(null)} />}
@@ -340,7 +390,7 @@ export function ProfilePage() {
       <PageHeader title="Profile" subtitle={user?.email} />
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
-          <h2 className="mb-4 font-semibold">Your details</h2>
+          <h2 className="mb-4 text-sm font-semibold text-fg">Your details</h2>
           <form
             className="space-y-4"
             onSubmit={(e) => {
@@ -362,7 +412,7 @@ export function ProfilePage() {
           </form>
         </Card>
         <Card>
-          <h2 className="mb-4 font-semibold">Change password</h2>
+          <h2 className="mb-4 text-sm font-semibold text-fg">Change password</h2>
           <form
             className="space-y-4"
             onSubmit={(e) => {
@@ -373,10 +423,23 @@ export function ProfilePage() {
             {password.isSuccess && <Alert tone="success">Password updated. Other sessions were signed out.</Alert>}
             {password.error && <Alert>{errorMessage(password.error)}</Alert>}
             <Field label="Current password">
-              <Input type="password" required autoComplete="current-password" value={passwords.current_password} onChange={(e) => setPasswords({ ...passwords, current_password: e.target.value })} />
+              <Input
+                type="password"
+                required
+                autoComplete="current-password"
+                value={passwords.current_password}
+                onChange={(e) => setPasswords({ ...passwords, current_password: e.target.value })}
+              />
             </Field>
             <Field label="New password" hint="At least 8 characters.">
-              <Input type="password" required minLength={8} autoComplete="new-password" value={passwords.new_password} onChange={(e) => setPasswords({ ...passwords, new_password: e.target.value })} />
+              <Input
+                type="password"
+                required
+                minLength={8}
+                autoComplete="new-password"
+                value={passwords.new_password}
+                onChange={(e) => setPasswords({ ...passwords, new_password: e.target.value })}
+              />
             </Field>
             <Button type="submit" loading={password.isPending}>
               Update password

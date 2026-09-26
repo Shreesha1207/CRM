@@ -78,33 +78,33 @@ export function useScheduleChange<T>(defaultTimeZone: string, onApplied?: (resul
       }
     >
       <div className="space-y-5">
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <ul className="divide-y divide-slate-100 rounded-lg ring-1 ring-slate-200">
+        {error && <p className="text-sm text-danger-text">{error}</p>}
+        <ul className="divide-y divide-line rounded-md border border-line">
           {pending.preview.affected_bookings.map((a) => (
             <li key={a.booking_id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm">
-              <div>
-                <div className="font-medium">
+              <div className="min-w-0">
+                <div className="font-medium text-fg">
                   {a.booking.service_name} · {a.booking.resource_name}
                 </div>
-                <div className="text-slate-500">
+                <div className="tabular text-muted">
                   {formatDateTime(a.booking.start_datetime, defaultTimeZone)} · {a.booking.user_name}
                 </div>
               </div>
               <div className="text-right">
                 <StatusBadge status={a.booking.status} />
-                <div className="mt-1 text-xs text-red-600">{a.message}</div>
+                <div className="mt-1 text-xs text-danger-text">{a.message}</div>
               </div>
             </li>
           ))}
         </ul>
         <fieldset className="space-y-2">
-          <legend className="mb-2 text-sm font-medium text-slate-700">What should happen to them?</legend>
+          <legend className="mb-2 text-sm font-medium text-fg">What should happen to them?</legend>
           {ACTIONS.map((a) => (
-            <label key={a.value} className="flex cursor-pointer gap-3 rounded-lg p-3 ring-1 ring-slate-200 has-[:checked]:bg-brand-50 has-[:checked]:ring-brand-400">
+            <label key={a.value} className="flex cursor-pointer gap-3 rounded-md border border-line p-3 has-[:checked]:border-accent has-[:checked]:bg-accent-soft">
               <input type="radio" name="conflict_action" value={a.value} checked={action === a.value} onChange={() => setAction(a.value)} className="mt-1" />
               <span>
-                <span className="block text-sm font-medium">{a.label}</span>
-                <span className="block text-xs text-slate-500">{a.description}</span>
+                <span className="block text-sm font-medium text-fg">{a.label}</span>
+                <span className="block text-xs text-muted">{a.description}</span>
               </span>
             </label>
           ))}

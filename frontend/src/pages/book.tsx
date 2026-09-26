@@ -5,27 +5,62 @@ import { ApiError, api, errorMessage } from "../api/client";
 import type { Booking, RecurringPreview, Service, ServiceDetail } from "../api/types";
 import { Alternatives, DateNav, SlotPicker, useFreeResources, type PickedSlot } from "../components/booking";
 import { useConfig } from "../components/Layout";
-import { Alert, Badge, Button, Card, Checkbox, Field, Input, Loading, PageHeader, Select, Textarea, cx } from "../components/ui";
+import { Check } from "../components/icons";
+import { Alert, Badge, Button, Checkbox, Field, Input, Loading, PageHeader, Select, Textarea, cx } from "../components/ui";
 import { formatDateTime, formatDuration, formatMoney, formatRange, titleCase, todayIn } from "../lib/format";
 
 type Mode = "resource" | "time";
 
 function Step({ n, title, children, done }: { n: number; title: string; children: React.ReactNode; done?: boolean }) {
   return (
-    <Card>
-      <div className="mb-4 flex items-center gap-3">
+    <section className="rounded-lg border border-line bg-surface">
+      <header className="flex items-center gap-3 border-b border-line px-4 py-3 sm:px-5">
         <span
           className={cx(
-            "flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold",
-            done ? "bg-emerald-100 text-emerald-700" : "bg-brand-100 text-brand-700",
+            "tabular flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+            done ? "bg-accent text-accent-fg" : "border border-line-strong text-muted",
           )}
         >
-          {done ? "✓" : n}
+          {done ? <Check className="h-3.5 w-3.5" /> : n}
         </span>
-        <h2 className="font-semibold">{title}</h2>
-      </div>
+        <h2 className="text-sm font-semibold text-fg">{title}</h2>
+      </header>
+      <div className="p-4 sm:p-5">{children}</div>
+    </section>
+  );
+}
+
+/** A selectable option (a service, a resource). */
+function Choice({ selected, onClick, children }: { selected: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={cx(
+        "w-full rounded-md border px-3 py-2.5 text-left transition-colors",
+        selected ? "border-accent bg-accent-soft" : "border-line-strong bg-surface hover:border-accent",
+      )}
+    >
       {children}
-    </Card>
+    </button>
+  );
+}
+
+function SummaryList({ rows, total }: { rows: [string, React.ReactNode][]; total: string | null }) {
+  return (
+    <dl className="space-y-2 text-sm">
+      {rows.map(([label, value]) => (
+        <div key={label} className="flex justify-between gap-4">
+          <dt className="text-muted">{label}</dt>
+          <dd className="text-right font-medium text-fg">{value}</dd>
+        </div>
+      ))}
+      <div className="flex justify-between gap-4 border-t border-line pt-2">
+        <dt className="text-muted">Price</dt>
+        <dd className="tabular font-semibold text-fg">{total ?? "—"}</dd>
+      </div>
+    </dl>
   );
 }
 
@@ -62,10 +97,22 @@ export function BookPage() {
     setPicked(null);
     setPreview(null);
   };
-  const setMode = (m: Mode) => { setModeState(m); resetSlot(); };
-  const setResourceId = (id: string) => { setResourceIdState(id); resetSlot(); };
-  const setDate = (d: string) => { setDateState(d); resetSlot(); };
-  const setQuantity = (q: number) => { setQuantityState(q); resetSlot(); };
+  const setMode = (m: Mode) => {
+    setModeState(m);
+    resetSlot();
+  };
+  const setResourceId = (id: string) => {
+    setResourceIdState(id);
+    resetSlot();
+  };
+  const setDate = (d: string) => {
+    setDateState(d);
+    resetSlot();
+  };
+  const setQuantity = (q: number) => {
+    setQuantityState(q);
+    resetSlot();
+  };
 
   const selectService = (id: string) => {
     setParams(id ? { service: id } : {});
@@ -121,33 +168,37 @@ export function BookPage() {
     return isGroup ? Number(offering.price) * quantity : Number(offering.price);
   }, [offering, quantity, isGroup]);
 
+  const summary: [string, React.ReactNode][] = [
+    ["Service", service.data?.name ?? "—"],
+    ["With", offering && effectiveResource ? offering.resource_name : picked ? "Any available" : "—"],
+    ["When", picked ? formatRange(picked.start, picked.end, picked.timezone) : "—"],
+    ...(isGroup ? [["Places", quantity] as [string, React.ReactNode]] : []),
+  ];
+  const summaryTotal = total != null ? formatMoney(String(total)) : null;
+  const confirmationNote = config.data?.require_admin_confirmation && (
+    <p className="mt-4 text-xs text-muted">Bookings are confirmed by our team; you'll be notified.</p>
+  );
+
   return (
     <>
       <PageHeader title="Make a booking" subtitle="Availability is checked live and confirmed again when you book." />
-      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-        <div className="space-y-5">
+      <div className="grid gap-6 lg:grid-cols-[1fr_300px] lg:gap-8">
+        <div className="min-w-0 space-y-4">
           <Step n={1} title="Choose a service" done={!!serviceId}>
             {services.isLoading ? (
               <Loading />
             ) : (
               <div className="grid gap-2 sm:grid-cols-2">
                 {services.data?.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => selectService(s.id)}
-                    className={cx(
-                      "rounded-lg p-3 text-left ring-1 transition",
-                      s.id === serviceId ? "bg-brand-50 ring-2 ring-brand-500" : "bg-white ring-slate-200 hover:ring-brand-300",
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">{s.name}</span>
-                      {s.booking_type === "CAPACITY" && <Badge tone="WAITLISTED">Group</Badge>}
-                    </div>
-                    <div className="mt-0.5 text-xs text-slate-500">
+                  <Choice key={s.id} selected={s.id === serviceId} onClick={() => selectService(s.id)}>
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-fg">{s.name}</span>
+                      {s.booking_type === "CAPACITY" && <Badge>Group</Badge>}
+                    </span>
+                    <span className="tabular mt-0.5 block text-xs text-muted">
                       {formatDuration(s.duration_minutes)} · {formatMoney(s.price)}
-                    </div>
-                  </button>
+                    </span>
+                  </Choice>
                 ))}
               </div>
             )}
@@ -155,12 +206,13 @@ export function BookPage() {
 
           {serviceId && service.data && (
             <Step n={2} title="Choose how to book" done={mode === "time" || !!resourceId}>
-              <div className="mb-4 inline-flex rounded-lg bg-slate-100 p-1 text-sm">
+              <div className="mb-4 inline-flex rounded-md border border-line-strong p-0.5 text-sm">
                 {(["resource", "time"] as Mode[]).map((m) => (
                   <button
                     key={m}
                     onClick={() => setMode(m)}
-                    className={cx("rounded-md px-3 py-1.5 font-medium", mode === m ? "bg-white shadow-sm" : "text-slate-500")}
+                    aria-pressed={mode === m}
+                    className={cx("rounded px-3 py-1.5 font-medium", mode === m ? "bg-accent text-accent-fg" : "text-muted hover:text-fg")}
                   >
                     {m === "resource" ? "Pick who / what first" : "Pick a time first"}
                   </button>
@@ -169,35 +221,35 @@ export function BookPage() {
               {mode === "resource" ? (
                 <div className="grid gap-2 sm:grid-cols-2">
                   {service.data.resources.map((r) => (
-                    <button
-                      key={r.resource_id}
-                      onClick={() => setResourceId(r.resource_id)}
-                      className={cx(
-                        "rounded-lg p-3 text-left ring-1",
-                        r.resource_id === resourceId ? "bg-brand-50 ring-2 ring-brand-500" : "bg-white ring-slate-200 hover:ring-brand-300",
-                      )}
-                    >
-                      <div className="font-medium">{r.resource_name}</div>
-                      <div className="text-xs text-slate-500">
+                    <Choice key={r.resource_id} selected={r.resource_id === resourceId} onClick={() => setResourceId(r.resource_id)}>
+                      <span className="block font-medium text-fg">{r.resource_name}</span>
+                      <span className="block text-xs text-muted">
                         {titleCase(r.resource_type)}
                         {r.location_name && ` · ${r.location_name}`} · {formatMoney(r.price)}
-                      </div>
-                    </button>
+                      </span>
+                    </Choice>
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-slate-500">You'll see every free time across {service.data.resources.length} resources, then choose.</p>
+                <p className="text-sm text-muted">You'll see every free time across {service.data.resources.length} resources, then choose.</p>
               )}
             </Step>
           )}
 
           {serviceId && (mode === "time" || resourceId) && (
             <Step n={3} title="Pick a date and time" done={!!picked}>
-              <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
                 <DateNav date={date} onChange={setDate} min={today} />
                 {isGroup && (
                   <Field label="Places">
-                    <Input type="number" min={1} max={service.data?.capacity ?? 100} value={quantity} onChange={(e) => setQuantity(Math.max(1, Number(e.target.value)))} className="w-24" />
+                    <Input
+                      type="number"
+                      min={1}
+                      max={service.data?.capacity ?? 100}
+                      value={quantity}
+                      onChange={(e) => setQuantity(Math.max(1, Number(e.target.value)))}
+                      className="w-24"
+                    />
                   </Field>
                 )}
               </div>
@@ -214,22 +266,17 @@ export function BookPage() {
                 }}
               />
               {mode === "time" && picked && (
-                <div className="mt-5 border-t border-slate-100 pt-4">
-                  <p className="mb-2 text-sm font-medium">Free at {picked.slot?.start_time ?? formatDateTime(picked.start, picked.timezone)}:</p>
+                <div className="mt-5 border-t border-line pt-4">
+                  <p className="mb-2 text-sm font-medium text-fg">Free at {picked.slot?.start_time ?? formatDateTime(picked.start, picked.timezone)}:</p>
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => setChosenResource("")}
-                      className={cx("rounded-lg px-3 py-1.5 text-sm ring-1", !chosenResource ? "bg-brand-600 text-white ring-brand-600" : "ring-slate-300")}
-                    >
-                      Any available
-                    </button>
-                    {freeResources.map((r) => (
+                    {[{ resource_id: "", resource_name: "Any available" }, ...freeResources].map((r) => (
                       <button
                         key={r.resource_id}
                         onClick={() => setChosenResource(r.resource_id)}
+                        aria-pressed={chosenResource === r.resource_id}
                         className={cx(
-                          "rounded-lg px-3 py-1.5 text-sm ring-1",
-                          chosenResource === r.resource_id ? "bg-brand-600 text-white ring-brand-600" : "ring-slate-300",
+                          "rounded-md border px-3 py-1.5 text-sm",
+                          chosenResource === r.resource_id ? "border-accent bg-accent text-accent-fg" : "border-line-strong text-fg hover:border-accent",
                         )}
                       >
                         {r.resource_name}
@@ -250,26 +297,60 @@ export function BookPage() {
                     {config.data?.allow_waitlist ? "You can join the waitlist and we'll confirm you automatically if a place opens." : "Please choose another time."}
                   </Alert>
                 )}
+                <div className="rounded-md bg-subtle p-4 lg:hidden">
+                  <SummaryList rows={summary} total={summaryTotal} />
+                </div>
                 <Field label="Notes (optional)">
                   <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={2000} />
                 </Field>
                 {config.data?.allow_recurring_bookings && effectiveResource && !slotFull && (
-                  <div className="rounded-lg bg-slate-50 p-4">
-                    <Checkbox label="Repeat this booking" checked={repeat} onChange={(e) => { setRepeat(e.target.checked); setPreview(null); }} />
+                  <div className="rounded-md border border-line p-4">
+                    <Checkbox
+                      label="Repeat this booking"
+                      checked={repeat}
+                      onChange={(e) => {
+                        setRepeat(e.target.checked);
+                        setPreview(null);
+                      }}
+                    />
                     {repeat && (
                       <div className="mt-3 grid gap-3 sm:grid-cols-3">
                         <Field label="Frequency">
-                          <Select value={frequency} onChange={(e) => { setFrequency(e.target.value); setPreview(null); }}>
+                          <Select
+                            value={frequency}
+                            onChange={(e) => {
+                              setFrequency(e.target.value);
+                              setPreview(null);
+                            }}
+                          >
                             <option value="DAILY">Daily</option>
                             <option value="WEEKLY">Weekly</option>
                             <option value="MONTHLY">Monthly</option>
                           </Select>
                         </Field>
                         <Field label="Every">
-                          <Input type="number" min={1} max={52} value={interval} onChange={(e) => { setInterval(Math.max(1, Number(e.target.value))); setPreview(null); }} />
+                          <Input
+                            type="number"
+                            min={1}
+                            max={52}
+                            value={interval}
+                            onChange={(e) => {
+                              setInterval(Math.max(1, Number(e.target.value)));
+                              setPreview(null);
+                            }}
+                          />
                         </Field>
                         <Field label="Occurrences">
-                          <Input type="number" min={2} max={52} value={count} onChange={(e) => { setCount(Math.max(1, Number(e.target.value))); setPreview(null); }} />
+                          <Input
+                            type="number"
+                            min={2}
+                            max={52}
+                            value={count}
+                            onChange={(e) => {
+                              setCount(Math.max(1, Number(e.target.value)));
+                              setPreview(null);
+                            }}
+                          />
                         </Field>
                       </div>
                     )}
@@ -299,15 +380,15 @@ export function BookPage() {
                 )}
 
                 {preview && (
-                  <div className="rounded-lg ring-1 ring-slate-200">
-                    <div className="border-b border-slate-100 px-4 py-2 text-sm font-medium">
+                  <div className="overflow-hidden rounded-md border border-line">
+                    <div className="border-b border-line bg-subtle px-4 py-2 text-sm font-medium text-fg">
                       {preview.available_count} available · {preview.conflict_count} unavailable
                     </div>
-                    <ul className="max-h-64 divide-y divide-slate-50 overflow-y-auto text-sm">
+                    <ul className="max-h-64 divide-y divide-line overflow-y-auto text-sm">
                       {preview.occurrences.map((o) => (
-                        <li key={o.start} className="flex justify-between gap-3 px-4 py-2">
-                          <span className={o.available ? "" : "text-slate-400 line-through"}>{formatRange(o.start, o.end, picked.timezone)}</span>
-                          <span className={o.available ? "text-emerald-600" : "text-red-600"}>{o.available ? "Available" : o.message}</span>
+                        <li key={o.start} className="flex flex-wrap justify-between gap-x-3 gap-y-0.5 px-4 py-2">
+                          <span className={cx("tabular", o.available ? "text-fg" : "text-faint line-through")}>{formatRange(o.start, o.end, picked.timezone)}</span>
+                          <span className={o.available ? "text-ok-text" : "text-danger-text"}>{o.available ? "Available" : o.message}</span>
                         </li>
                       ))}
                     </ul>
@@ -335,44 +416,18 @@ export function BookPage() {
                     )
                   )}
                 </div>
+                <div className="lg:hidden">{confirmationNote}</div>
               </div>
             </Step>
           )}
         </div>
 
-        <aside className="lg:sticky lg:top-20 lg:self-start">
-          <Card>
-            <h2 className="mb-3 font-semibold">Summary</h2>
-            <dl className="space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <dt className="text-slate-500">Service</dt>
-                <dd className="text-right font-medium">{service.data?.name ?? "—"}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-slate-500">With</dt>
-                <dd className="text-right font-medium">
-                  {offering && effectiveResource ? offering.resource_name : picked ? "Any available" : "—"}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-slate-500">When</dt>
-                <dd className="text-right font-medium">{picked ? formatRange(picked.start, picked.end, picked.timezone) : "—"}</dd>
-              </div>
-              {isGroup && (
-                <div className="flex justify-between gap-3">
-                  <dt className="text-slate-500">Places</dt>
-                  <dd className="font-medium">{quantity}</dd>
-                </div>
-              )}
-              <div className="flex justify-between gap-3 border-t border-slate-100 pt-2">
-                <dt className="text-slate-500">Price</dt>
-                <dd className="font-semibold">{total != null ? formatMoney(String(total)) : "—"}</dd>
-              </div>
-            </dl>
-            {config.data?.require_admin_confirmation && (
-              <p className="mt-4 text-xs text-slate-500">Bookings are confirmed by our team; you'll be notified.</p>
-            )}
-          </Card>
+        <aside className="hidden lg:sticky lg:top-24 lg:block lg:self-start">
+          <div className="rounded-lg border border-line bg-surface p-5">
+            <h2 className="mb-3 text-sm font-semibold text-fg">Summary</h2>
+            <SummaryList rows={summary} total={summaryTotal} />
+            {confirmationNote}
+          </div>
         </aside>
       </div>
     </>

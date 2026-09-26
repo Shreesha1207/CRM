@@ -4,6 +4,7 @@ import { api, errorMessage } from "../../api/client";
 import type { AvailabilityRule, Location, Offering, Resource, ResourceDetail, ScheduleChange, Service } from "../../api/types";
 import { RESOURCE_TYPES } from "../../api/types";
 import { useConfig } from "../../components/Layout";
+import { Close } from "../../components/icons";
 import { Alert, Badge, Button, Checkbox, EmptyState, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, Table, Tabs, Td, Textarea } from "../../components/ui";
 import { WEEKDAYS, formatDuration, formatMoney, hhmm, titleCase } from "../../lib/format";
 import { useCatalog } from "./bookings";
@@ -42,7 +43,7 @@ function MetadataEditor({ pairs, onChange }: { pairs: Pair[]; onChange: (p: Pair
           <Input placeholder="key (e.g. specialization)" value={p.key} onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
           <Input placeholder="value (e.g. Strength, 8, true)" value={p.value} onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
           <Button variant="ghost" onClick={() => onChange(pairs.filter((_, j) => j !== i))} aria-label="Remove">
-            ✕
+            <Close />
           </Button>
         </div>
       ))}
@@ -132,7 +133,7 @@ function ResourceDetailsForm({ resource, onSaved }: { resource: ResourceDetail |
         <Textarea value={form.description} onChange={set("description")} />
       </Field>
       <div>
-        <p className="mb-2 text-sm font-medium text-slate-700">Custom attributes</p>
+        <p className="mb-2 text-sm font-medium text-fg">Custom attributes</p>
         <MetadataEditor pairs={pairs} onChange={setPairs} />
       </div>
       <Button type="submit" loading={create.isPending || change.busy}>
@@ -169,8 +170,8 @@ function ResourceServicesForm({ resource }: { resource: ResourceDetail }) {
     <div className="space-y-4">
       {save.isSuccess && <Alert tone="success">Saved.</Alert>}
       {save.error && <Alert>{errorMessage(save.error)}</Alert>}
-      <p className="text-sm text-slate-500">Choose the services this resource provides. Leave overrides empty to use the service defaults.</p>
-      <div className="divide-y divide-slate-100 rounded-lg ring-1 ring-slate-200">
+      <p className="text-sm text-muted">Choose the services this resource provides. Leave overrides empty to use the service defaults.</p>
+      <div className="divide-y divide-line rounded-lg border border-line">
         {services.map((s) => {
           const link = links[s.id];
           return (
@@ -179,7 +180,7 @@ function ResourceServicesForm({ resource }: { resource: ResourceDetail }) {
                 label={
                   <span>
                     <span className="font-medium">{s.name}</span>{" "}
-                    <span className="text-slate-500">
+                    <span className="text-muted">
                       {formatDuration(s.duration_minutes)} · {formatMoney(s.price)}
                     </span>
                   </span>
@@ -225,24 +226,24 @@ export function WeeklyRulesEditor<T extends { day_of_week: number; start_time: s
   extra?: (rule: T, update: (patch: Partial<T>) => void) => React.ReactNode;
 }) {
   return (
-    <div className="divide-y divide-slate-100 rounded-lg ring-1 ring-slate-200">
+    <div className="divide-y divide-line rounded-lg border border-line">
       {WEEKDAYS.map((day, d) => {
         const dayRules = rules.map((r, i) => ({ r, i })).filter(({ r }) => r.day_of_week === d);
         return (
           <div key={d} className="flex flex-wrap items-start gap-3 p-3">
-            <div className="w-24 pt-2 text-sm font-medium">{day}</div>
+            <div className="w-full pt-2 text-sm font-medium sm:w-24">{day}</div>
             <div className="flex-1 space-y-2">
-              {dayRules.length === 0 && <p className="pt-2 text-sm text-slate-400">Closed / unavailable</p>}
+              {dayRules.length === 0 && <p className="pt-2 text-sm text-faint">Closed / unavailable</p>}
               {dayRules.map(({ r, i }) => {
                 const update = (patch: Partial<T>) => onChange(rules.map((x, j) => (j === i ? { ...x, ...patch } : x)));
                 return (
                   <div key={i} className="flex flex-wrap items-center gap-2">
                     <Input type="time" aria-label={`${day} start`} value={hhmm(r.start_time)} onChange={(e) => update({ start_time: e.target.value } as Partial<T>)} className="w-32" />
-                    <span className="text-slate-400">–</span>
+                    <span className="text-faint">–</span>
                     <Input type="time" aria-label={`${day} end`} value={hhmm(r.end_time)} onChange={(e) => update({ end_time: e.target.value } as Partial<T>)} className="w-32" />
                     {extra?.(r, update)}
                     <Button variant="ghost" size="sm" onClick={() => onChange(rules.filter((_, j) => j !== i))} aria-label="Remove period">
-                      ✕
+                      <Close />
                     </Button>
                   </div>
                 );
@@ -265,7 +266,7 @@ function ResourceAvailabilityForm({ resource }: { resource: ResourceDetail }) {
   const change = useScheduleChange(config.data?.default_timezone ?? "UTC", () => setSaved(true));
   return (
     <div className="space-y-4">
-      <p className="text-sm text-slate-500">
+      <p className="text-sm text-muted">
         Recurring weekly hours in {resource.timezone}. An end time earlier than the start runs past midnight. With no periods at all the resource follows the
         operating hours. "Break" periods are carved out of available ones.
       </p>
@@ -284,9 +285,9 @@ function ResourceAvailabilityForm({ resource }: { resource: ResourceDetail }) {
               <option value="1">Available</option>
               <option value="0">Break</option>
             </Select>
-            <span className="text-xs text-slate-500">valid</span>
+            <span className="text-xs text-muted">valid</span>
             <Input type="date" aria-label="Valid from" title="Valid from (optional)" value={r.valid_from ?? ""} onChange={(e) => update({ valid_from: strOrNull(e.target.value) })} className="w-36" />
-            <span className="text-xs text-slate-500">to</span>
+            <span className="text-xs text-muted">to</span>
             <Input type="date" aria-label="Valid until" title="Valid until (optional)" value={r.valid_until ?? ""} onChange={(e) => update({ valid_until: strOrNull(e.target.value) })} className="w-36" />
           </>
         )}
@@ -357,7 +358,7 @@ export function AdminResourcesPage() {
         subtitle="Anything that can be booked: people, rooms, courts, equipment…"
         actions={<Button onClick={() => setEditing(null)}>New resource</Button>}
       />
-      <div className="mb-4 w-48">
+      <div className="mb-4 w-full sm:w-48">
         <Select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
           <option value="">All statuses</option>
           <option value="ACTIVE">Active</option>
@@ -372,7 +373,7 @@ export function AdminResourcesPage() {
       ) : (
         <Table head={["Name", "Type", "Location", "Capacity", "Status", ""]}>
           {resources.data.map((r) => (
-            <tr key={r.id} className="hover:bg-slate-50">
+            <tr key={r.id} className="hover:bg-subtle">
               <Td>
                 <div className="font-medium">{r.name}</div>
                 {Object.keys(r.metadata).length > 0 && (
@@ -388,7 +389,7 @@ export function AdminResourcesPage() {
               <Td>{titleCase(r.type)}</Td>
               <Td>
                 {r.location?.name ?? "—"}
-                <div className="text-xs text-slate-500">{r.timezone}</div>
+                <div className="text-xs text-muted">{r.timezone}</div>
               </Td>
               <Td>{r.capacity ?? "—"}</Td>
               <Td>
@@ -532,7 +533,7 @@ export function AdminServicesPage() {
       ) : (
         <Table head={["Name", "Type", "Duration", "Buffers", "Price", "Status", ""]}>
           {services.data?.map((s) => (
-            <tr key={s.id} className="hover:bg-slate-50">
+            <tr key={s.id} className="hover:bg-subtle">
               <Td className="font-medium">{s.name}</Td>
               <Td>{s.booking_type === "CAPACITY" ? `Group (${s.capacity ?? 1})` : "Individual"}</Td>
               <Td>{formatDuration(s.duration_minutes)}</Td>
@@ -647,7 +648,7 @@ export function AdminLocationsPage() {
       ) : (
         <Table head={["Name", "Address", "Timezone", "Status", ""]}>
           {locations.data.map((l) => (
-            <tr key={l.id} className="hover:bg-slate-50">
+            <tr key={l.id} className="hover:bg-subtle">
               <Td className="font-medium">{l.name}</Td>
               <Td>{l.address ?? "—"}</Td>
               <Td>{l.timezone}</Td>

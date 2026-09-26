@@ -1,16 +1,163 @@
 @import "tailwindcss";
 
-@theme {
-  --color-brand-50: #eef6ff;
-  --color-brand-100: #d9eaff;
-  --color-brand-500: #2f6fed;
-  --color-brand-600: #1f5ad6;
-  --color-brand-700: #1a47a8;
+/* Dark mode follows the data-theme attribute on <html> (set before first
+   paint by /theme.js), not only the OS setting, so users can choose. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Semantic colour tokens. Components use these names only (bg-surface,
+   text-muted, border-line, bg-accent...), so both themes are defined here
+   and nowhere else. */
+:root {
+  color-scheme: light;
+  --canvas: #f5f4f0;
+  --surface: #ffffff;
+  --subtle: #efede7;
+  --line: #e4e1d9;
+  --line-strong: #ccc8be;
+  --fg: #1d1c1a;
+  --muted: #5f5b53;
+  --faint: #938e84;
+
+  --accent: #1f5e4c;
+  --accent-hover: #174a3c;
+  --accent-fg: #ffffff;
+  --accent-soft: #e1ede7;
+  --accent-text: #1b5646;
+
+  --danger: #b3261e;
+  --danger-soft: #f9e6e4;
+  --danger-text: #9a1f18;
+  --warn-soft: #faf0da;
+  --warn-text: #8a5700;
+  --ok-soft: #e3efe5;
+  --ok-text: #2c6538;
+  --info-soft: #e3ecf5;
+  --info-text: #28577f;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #111210;
+  --surface: #191a18;
+  --subtle: #23241f;
+  --line: #2c2d29;
+  --line-strong: #3f403a;
+  --fg: #ecebe5;
+  --muted: #a6a398;
+  --faint: #75726a;
+
+  --accent: #7cc4a6;
+  --accent-hover: #95d2b8;
+  --accent-fg: #0c1813;
+  --accent-soft: #1b2d26;
+  --accent-text: #8fd0b4;
+
+  --danger: #e5695e;
+  --danger-soft: #3a1c19;
+  --danger-text: #f2958c;
+  --warn-soft: #33280f;
+  --warn-text: #e3b456;
+  --ok-soft: #1a2b1e;
+  --ok-text: #86c793;
+  --info-soft: #172433;
+  --info-text: #86b6e2;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-subtle: var(--subtle);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-text: var(--danger-text);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-text: var(--warn-text);
+  --color-ok-soft: var(--ok-soft);
+  --color-ok-text: var(--ok-text);
+  --color-info-soft: var(--info-soft);
+  --color-info-text: var(--info-text);
 }
 
 @layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    background: var(--canvas);
+    color: var(--fg);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"] {
+    accent-color: var(--accent);
+  }
+  /* Dates, times and prices line up. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Tables become a stack of labelled rows on small screens (labels come from
+   the header, see Table in components/ui.tsx). */
+@media (max-width: 639px) {
+  .stack-table thead {
+    display: none;
+  }
+  .stack-table,
+  .stack-table tbody,
+  .stack-table tr,
+  .stack-table td {
+    display: block;
+    width: 100%;
+  }
+  .stack-table tr {
+    padding: 0.75rem 1rem;
+  }
+  .stack-table tr + tr {
+    border-top: 1px solid var(--line);
+  }
+  .stack-table td {
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    padding: 0.25rem 0;
+    text-align: right;
+  }
+  .stack-table td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    text-align: left;
+    font-size: 0.75rem;
+    padding-top: 0.125rem;
+  }
+  .stack-table td[data-label=""]::before {
+    content: none;
+  }
+  .stack-table td[data-label=""] {
+    justify-content: flex-end;
+  }
+  .stack-table td[colspan] {
+    justify-content: center;
+    text-align: center;
   }
 }

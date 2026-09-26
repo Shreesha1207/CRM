@@ -22,10 +22,10 @@ function OperatingHoursEditor() {
     <Card>
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="font-semibold">Operating hours</h2>
-          <p className="text-sm text-slate-500">Bookings can't normally happen outside these hours. Days without a period are closed.</p>
+          <h2 className="text-base font-semibold">Operating hours</h2>
+          <p className="mt-0.5 text-sm text-muted">Bookings can't normally happen outside these hours. Days without a period are closed.</p>
         </div>
-        <Select value={locationId} onChange={(e) => setLocationId(e.target.value)} className="w-64" aria-label="Scope">
+        <Select value={locationId} onChange={(e) => setLocationId(e.target.value)} className="w-full sm:w-64" aria-label="Scope">
           <option value="">Default (all locations without their own)</option>
           {locations.map((l) => (
             <option key={l.id} value={l.id}>
@@ -92,8 +92,8 @@ function ExceptionForm({ tz }: { tz: string }) {
   };
   return (
     <Card>
-      <h2 className="font-semibold">Block time, holidays &amp; special hours</h2>
-      <p className="mb-4 text-sm text-slate-500">
+      <h2 className="text-base font-semibold">Block time, holidays &amp; special hours</h2>
+      <p className="mb-4 mt-0.5 text-sm text-muted">
         Blocks override regular availability. <strong>Special hours</strong> replace the regular hours for the dates they cover. Times are local to the
         resource / location.
       </p>
@@ -193,7 +193,7 @@ function ExceptionList({ tz }: { tz: string }) {
     (e.resource_id ? resources.find((r) => r.id === e.resource_id)?.timezone : locations.find((l) => l.id === e.location_id)?.timezone) ?? tz;
   return (
     <div>
-      <h2 className="mb-3 font-semibold">Upcoming blocks &amp; exceptions</h2>
+      <h2 className="mb-3 text-base font-semibold">Upcoming blocks &amp; exceptions</h2>
       {remove.error && <div className="mb-3"><Alert>{remove.error}</Alert></div>}
       {exceptions.isLoading ? (
         <Loading />
@@ -202,7 +202,7 @@ function ExceptionList({ tz }: { tz: string }) {
           {exceptions.data?.map((e) => (
             <tr key={e.id}>
               <Td>
-                <Badge tone={e.type === "SPECIAL_HOURS" ? "ACTIVE" : "CONFLICTED"}>{titleCase(e.type)}</Badge>
+                <Badge tone={e.type === "SPECIAL_HOURS" ? "accent" : "warn"}>{titleCase(e.type)}</Badge>
               </Td>
               <Td>{scopeName(e)}</Td>
               <Td>{formatDateTime(e.start_datetime, tzFor(e))}</Td>
@@ -217,7 +217,9 @@ function ExceptionList({ tz }: { tz: string }) {
           ))}
           {exceptions.data?.length === 0 && (
             <tr>
-              <Td className="py-6 text-slate-500">Nothing scheduled.</Td>
+              <Td colSpan={6} className="py-6 text-center text-muted">
+                Nothing scheduled.
+              </Td>
             </tr>
           )}
         </Table>

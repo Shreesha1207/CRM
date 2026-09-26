@@ -2,8 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { Alternative, Availability, Booking, Slot } from "../api/types";
-import { addDays, formatDateTime, formatMoney, formatRange, formatTime, longDate, titleCase } from "../lib/format";
-import { Alert, Button, Card, Input, Loading, StatusBadge, cx } from "./ui";
+import { addDays, dayAndMonth, formatDateTime, formatDayTimes, formatMoney, formatRange, formatTime, longDate, titleCase } from "../lib/format";
+import { ChevronLeft, ChevronRight } from "./icons";
+import { Alert, Input, Loading, StatusBadge, cx } from "./ui";
 
 export interface PickedSlot {
   start: string;
@@ -13,17 +14,22 @@ export interface PickedSlot {
   slot?: Slot;
 }
 
+const stepButton =
+  "inline-flex h-9 w-9 items-center justify-center rounded-md border border-line-strong bg-surface text-muted hover:bg-subtle hover:text-fg disabled:cursor-not-allowed disabled:opacity-40";
+
 export function DateNav({ date, onChange, min }: { date: string; onChange: (d: string) => void; min?: string }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button variant="secondary" size="sm" disabled={!!min && date <= min} onClick={() => onChange(addDays(date, -1))} aria-label="Previous day">
-        ←
-      </Button>
-      <Input type="date" value={date} min={min} onChange={(e) => e.target.value && onChange(e.target.value)} className="w-auto" />
-      <Button variant="secondary" size="sm" onClick={() => onChange(addDays(date, 1))} aria-label="Next day">
-        →
-      </Button>
-      <span className="text-sm text-slate-500">{longDate(date)}</span>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <div className="flex items-center gap-1.5">
+        <button type="button" className={stepButton} disabled={!!min && date <= min} onClick={() => onChange(addDays(date, -1))} aria-label="Previous day">
+          <ChevronLeft />
+        </button>
+        <Input type="date" value={date} min={min} onChange={(e) => e.target.value && onChange(e.target.value)} className="w-auto" aria-label="Date" />
+        <button type="button" className={stepButton} onClick={() => onChange(addDays(date, 1))} aria-label="Next day">
+          <ChevronRight />
+        </button>
+      </div>
+      <span className="text-sm text-muted">{longDate(date)}</span>
     </div>
   );
 }
@@ -43,16 +49,22 @@ function SlotButton({ label, sub, available, selected, title, onClick }: {
       disabled={!available}
       onClick={onClick}
       className={cx(
-        "rounded-lg px-3 py-2 text-sm font-medium ring-1 transition",
-        selected && "bg-brand-600 text-white ring-brand-600",
-        !selected && available && "bg-white text-slate-800 ring-slate-300 hover:ring-brand-500",
-        !available && "cursor-not-allowed bg-slate-50 text-slate-400 line-through ring-slate-200",
+        "tabular rounded-md border px-2 py-2 text-sm font-medium transition-colors",
+        selected && "border-accent bg-accent text-accent-fg",
+        !selected && available && "border-line-strong bg-surface text-fg hover:border-accent",
+        !available && "cursor-not-allowed border-transparent bg-subtle text-faint line-through",
       )}
     >
       {label}
-      {sub && <span className={cx("block text-[11px] font-normal", selected ? "text-white/80" : "text-slate-500")}>{sub}</span>}
+      {sub && <span className={cx("block text-[11px] font-normal no-underline", selected ? "opacity-80" : "text-muted")}>{sub}</span>}
     </button>
   );
+}
+
+const slotGrid = "grid grid-cols-3 gap-2 min-[400px]:grid-cols-4 sm:grid-cols-5 lg:grid-cols-6";
+
+function NoTimes() {
+  return <p className="rounded-md bg-subtle px-4 py-6 text-center text-sm text-muted">No times on this date. Try another day.</p>;
 }
 
 /** Shows slots for one resource, or -- with resourceId null -- for every
@@ -96,10 +108,10 @@ export function SlotPicker({
   if (resourceId) {
     const resource = data.resources[0];
     const slots = (resource?.slots ?? []).filter((s) => showUnavailable || s.available);
-    if (!slots.length) return <p className="py-6 text-sm text-slate-500">No times on this date. Try another day.</p>;
+    if (!slots.length) return <NoTimes />;
     return (
       <div>
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-6">
+        <div className={slotGrid}>
           {slots.map((s) => {
             const current =
               moving?.resource.id === resource.resource_id && Date.parse(s.start) === Date.parse(moving.start_datetime);
@@ -116,17 +128,17 @@ export function SlotPicker({
             );
           })}
         </div>
-        <p className="mt-3 text-xs text-slate-500">Times shown in {resource.timezone}.</p>
+        <p className="mt-3 text-xs text-muted">Times shown in {resource.timezone}.</p>
       </div>
     );
   }
 
   const slots = data.slots.filter((s) => showUnavailable || s.available);
-  if (!slots.length) return <p className="py-6 text-sm text-slate-500">No times on this date. Try another day.</p>;
+  if (!slots.length) return <NoTimes />;
   const tz = data.resources[0]?.timezone ?? "UTC";
   return (
     <div>
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-6">
+      <div className={slotGrid}>
         {slots.map((s) => (
           <SlotButton
             key={s.start}
@@ -138,7 +150,7 @@ export function SlotPicker({
           />
         ))}
       </div>
-      <p className="mt-3 text-xs text-slate-500">Times shown in {tz}.</p>
+      <p className="mt-3 text-xs text-muted">Times shown in {tz}.</p>
     </div>
   );
 }
@@ -171,19 +183,19 @@ export function Alternatives({
     queryFn: () => api.get<Alternative[]>("/api/availability/alternatives", { service_id: serviceId, resource_id: resourceId, start, quantity }),
   });
   if (alternatives.isLoading) return <Loading label="Looking for alternatives…" />;
-  if (!alternatives.data?.length) return <p className="text-sm text-slate-500">No nearby alternatives found.</p>;
+  if (!alternatives.data?.length) return <p className="text-sm text-muted">No nearby alternatives found.</p>;
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium text-slate-700">Suggested alternatives</p>
-      <div className="flex flex-wrap gap-2">
+      <p className="text-sm font-medium text-fg">Suggested alternatives</p>
+      <div className="grid gap-2 sm:grid-cols-2">
         {alternatives.data.map((a) => (
           <button
             key={`${a.resource_id}-${a.start}`}
             onClick={() => onPick(a)}
-            className="rounded-lg bg-white px-3 py-2 text-left text-sm ring-1 ring-slate-300 hover:ring-brand-500"
+            className="rounded-md border border-line-strong bg-surface px-3 py-2 text-left text-sm hover:border-accent"
           >
-            <span className="block font-medium">{a.resource_name}</span>
-            <span className="text-xs text-slate-500">{formatDateTime(a.start, a.timezone)}</span>
+            <span className="block font-medium text-fg">{a.resource_name}</span>
+            <span className="text-xs text-muted">{formatDateTime(a.start, a.timezone)}</span>
           </button>
         ))}
       </div>
@@ -191,36 +203,66 @@ export function Alternatives({
   );
 }
 
+function WaitlistPosition({ booking }: { booking: Booking }) {
+  if (booking.waitlist_position == null) return null;
+  return <span className="text-xs text-muted">#{booking.waitlist_position} on the waitlist</span>;
+}
+
 export function BookingSummary({ booking, compact }: { booking: Booking; compact?: boolean }) {
   return (
     <div className="min-w-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-semibold text-slate-900">{booking.service.name}</span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-base font-semibold text-fg">{booking.service.name}</span>
         <StatusBadge status={booking.status} />
-        {booking.waitlist_position != null && <span className="text-xs text-violet-700">#{booking.waitlist_position} on waitlist</span>}
+        <WaitlistPosition booking={booking} />
       </div>
-      <div className="mt-1 text-sm text-slate-600">
+      <div className="tabular mt-1 text-sm text-fg">{formatRange(booking.start_datetime, booking.end_datetime, booking.timezone)}</div>
+      <div className="mt-0.5 text-sm text-muted">
         {booking.resource.name}
         {booking.additional_resources.length > 0 && ` + ${booking.additional_resources.map((r) => r.name).join(", ")}`}
         {booking.location && ` · ${booking.location.name}`}
       </div>
-      <div className="mt-1 text-sm text-slate-800">{formatRange(booking.start_datetime, booking.end_datetime, booking.timezone)}</div>
-      {!compact && booking.quantity > 1 && <div className="mt-1 text-xs text-slate-500">Quantity: {booking.quantity}</div>}
+      {!compact && booking.quantity > 1 && <div className="mt-1 text-xs text-muted">Places: {booking.quantity}</div>}
     </div>
   );
 }
 
+export function DateTile({ iso, timeZone }: { iso: string; timeZone: string }) {
+  const { day, month } = dayAndMonth(iso, timeZone);
+  return (
+    <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-md border border-line bg-canvas leading-none">
+      <span className="text-[10px] font-medium uppercase tracking-wide text-muted">{month}</span>
+      <span className="tabular mt-1 text-lg font-semibold text-fg">{day}</span>
+    </div>
+  );
+}
+
+/** A list of bookings; each row opens the booking. */
+export function BookingRows({ children }: { children: React.ReactNode }) {
+  return <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface">{children}</ul>;
+}
+
 export function BookingListItem({ booking, to }: { booking: Booking; to: string }) {
   return (
-    <Card className="flex flex-wrap items-center justify-between gap-4">
-      <BookingSummary booking={booking} compact />
-      <div className="flex items-center gap-3">
-        {booking.price && <span className="text-sm text-slate-500">{formatMoney(booking.price)}</span>}
-        <Link to={to} className="rounded-lg px-3 py-1.5 text-sm font-medium text-brand-700 ring-1 ring-brand-200 hover:bg-brand-50">
-          View
-        </Link>
-      </div>
-    </Card>
+    <li>
+      <Link to={to} className="flex items-center gap-3 px-3 py-3 hover:bg-subtle sm:gap-4 sm:px-4">
+        <DateTile iso={booking.start_datetime} timeZone={booking.timezone} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            <span className="font-medium text-fg">{booking.service.name}</span>
+            <StatusBadge status={booking.status} />
+            <WaitlistPosition booking={booking} />
+          </div>
+          <div className="tabular mt-0.5 text-sm text-fg">{formatDayTimes(booking.start_datetime, booking.end_datetime, booking.timezone)}</div>
+          <div className="truncate text-sm text-muted">
+            {booking.resource.name}
+            {booking.location && ` · ${booking.location.name}`}
+          </div>
+        </div>
+        {booking.price && <span className="tabular hidden text-sm text-muted sm:block">{formatMoney(booking.price)}</span>}
+        <ChevronRight className="h-4 w-4 shrink-0 text-faint" />
+      </Link>
+    </li>
   );
 }
 
