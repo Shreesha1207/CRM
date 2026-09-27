@@ -326,7 +326,7 @@ export function ResourceDetailPage() {
                   <li key={d} className="flex justify-between gap-4">
                     <span className="text-muted">{WEEKDAYS[d]}</span>
                     <span className="tabular text-right text-fg">
-                      {rules.length === 0 ? <span className="text-faint">Closed</span> : rules.map((x) => `${hhmm(x.start_time)}–${hhmm(x.end_time)}`).join(", ")}
+                      {rules.length === 0 ? <span className="text-faint">Unavailable</span> : rules.map((x) => `${hhmm(x.start_time)}–${hhmm(x.end_time)}`).join(", ")}
                     </span>
                   </li>
                 ))}
