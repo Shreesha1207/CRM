@@ -123,6 +123,8 @@ frontend/src/
                 resources, services, schedules, locations, users, settings, audit
 ```
 
+Colours are semantic tokens (`bg-surface`, `text-muted`, `border-line`, `bg-accent`…) defined once in `src/index.css` for a light and a dark theme. The theme follows the system setting until the user picks one in the header; `public/theme.js` applies it before the first paint (the CSP only allows same-origin scripts). Layouts work down to phone width: tables stack into labelled rows, dialogs open as bottom sheets and the header folds into a menu.
+
 ---
 
 ## How the core rules are enforced
@@ -253,7 +255,7 @@ Interactive docs: `http://localhost:8000/api/docs` (development only).
 | --- | --- |
 | Auth | `POST /api/auth/register · login · logout · forgot-password · reset-password · change-password`, `GET/PUT /api/auth/me`, `GET /api/auth/session` |
 | Catalogue | `GET /api/services[/:id]`, `GET /api/resources[/:id]`, `GET /api/resources/:id/availability`, `GET /api/locations`, `GET /api/config` |
-| Availability | `GET /api/availability?service_id&date[&resource_id][&location_id][&quantity]`, `GET /api/availability/alternatives` |
+| Availability | `GET /api/availability?service_id&date[&resource_id][&location_id][&quantity][&duration_minutes]`, `GET /api/availability/alternatives` |
 | Bookings | `POST/GET /api/bookings`, `GET /api/bookings/:id`, `POST /api/bookings/:id/cancel · reschedule`, `POST /api/bookings/recurring[/preview]` |
 | Notifications | `GET /api/notifications`, `GET /api/notifications/unread-count`, `POST /api/notifications/:id/read · read-all` |
 | Admin: bookings | `GET/POST /api/admin/bookings`, `GET/PUT /api/admin/bookings/:id`, `POST …/:id/cancel · reschedule · reassign · confirm · complete · no-show`, `GET …/:id/history` |
@@ -265,6 +267,8 @@ Interactive docs: `http://localhost:8000/api/docs` (development only).
 Schedule-changing admin endpoints accept `?dry_run=true&conflict_action=keep|mark_conflicted|cancel`.
 
 Naive datetimes (e.g. `"2026-09-28T10:00"`) are wall-clock time at the resource's location. Datetimes with an offset are taken as absolute instants.
+
+Bookings, recurring bookings and alternatives take an optional `duration_minutes` for services with a flexible length; without it a booking gets the service's standard length.
 
 ---
 
