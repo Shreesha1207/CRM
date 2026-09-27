@@ -1,6 +1,9 @@
 from datetime import time, timedelta
 
-from app.models.enums import BookingType
+from sqlalchemy import select
+
+from app.models import Notification
+from app.models.enums import BookingType, NotificationChannel
 from tests.conftest import MONDAY, at
 
 
@@ -151,6 +154,35 @@ def test_admin_crud_for_catalogue(client, admin_headers) -> None:
 
     # A service without bookings is deleted; one with bookings would be deactivated.
     assert client.delete(f"/api/admin/services/{svc['id']}", headers=admin_headers).json()["deleted"] is True
+
+
+def test_location_map_links(client, make, db, user_headers, admin_headers) -> None:
+    locations = "/api/admin/locations"
+    # Only web links: the link ends up in an href.
+    bad = client.post(locations, headers=admin_headers, json={"name": "X", "map_url": "javascript:alert(1)"})
+    assert bad.status_code == 422
+    own = client.post(locations, headers=admin_headers, json={"name": "Club", "map_url": " https://maps.app.goo.gl/abc "}).json()
+    assert own["map_url"] == own["google_maps_url"] == "https://maps.app.goo.gl/abc"
+    assert client.post(locations, headers=admin_headers, json={"name": "Nowhere"}).json()["google_maps_url"] is None
+
+    # Without a link of its own, a location links to a Maps search for its address.
+    hq = make.location(name="HQ")
+    hq.address = "1 Main St, Springfield"
+    make.db.commit()
+    search = "https://www.google.com/maps/search/?api=1&query=HQ%2C+1+Main+St%2C+Springfield"
+    assert next(x for x in client.get("/api/locations").json() if x["name"] == "HQ")["google_maps_url"] == search
+
+    service = make.service()
+    resource = make.resource(services=[service], location=hq, hours=make.weekdays(time(9), time(17)))
+    assert client.get(f"/api/services/{service.id}").json()["resources"][0]["location"]["google_maps_url"] == search
+    booking = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
+    assert booking["location"] == {"id": str(hq.id), "name": "HQ", "address": "1 Main St, Springfield", "google_maps_url": search}
+
+    # Messages say where; the e-mail also links to the map.
+    [note] = client.get("/api/notifications", headers=user_headers).json()
+    assert note["body"].endswith("\nWhere: HQ, 1 Main St, Springfield")
+    email = db.scalars(select(Notification).where(Notification.channel == NotificationChannel.EMAIL)).one()
+    assert email.body == f"{note['body']}\nMap: {search}"
 
 
 def test_settings_validation_and_update(client, admin_headers) -> None:

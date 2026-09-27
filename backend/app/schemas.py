@@ -5,8 +5,9 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator, model_validator
 
+from app.core.maps import google_maps_url
 from app.core.timeutils import is_valid_timezone
 from app.models.enums import (
     BookingStatus,
@@ -111,21 +112,48 @@ def _check_tz(value: str) -> str:
     return value
 
 
+def _check_map_url(value: str | None) -> str | None:
+    value = (value or "").strip()
+    if not value:
+        return None
+    # Only web links: the value ends up in an href.
+    if not value.lower().startswith(("https://", "http://")):
+        raise ValueError("Enter a web link starting with https://")
+    return value
+
+
 class LocationIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     address: str | None = None
+    map_url: str | None = Field(default=None, max_length=2000)
     timezone: str = "UTC"
     status: RecordStatus = RecordStatus.ACTIVE
 
     _tz = field_validator("timezone")(_check_tz)
+    _map_url = field_validator("map_url")(_check_map_url)
 
 
 class LocationOut(ORM):
     id: uuid.UUID
     name: str
     address: str | None
+    map_url: str | None
     timezone: str
     status: RecordStatus
+
+    @computed_field
+    @property
+    def google_maps_url(self) -> str | None:
+        return google_maps_url(self.name, self.address, self.map_url)
+
+
+class LocationRef(BaseModel):
+    """A location as shown on a booking or an offering: enough to get there."""
+
+    id: uuid.UUID
+    name: str
+    address: str | None
+    google_maps_url: str | None
 
 
 # ---------------------------------------------------------------- resources & services
@@ -247,6 +275,7 @@ class OfferingOut(BaseModel):
     custom_buffer_before: int | None
     custom_buffer_after: int | None
     location_name: str | None
+    location: LocationRef | None
     status: RecordStatus
 
 
@@ -460,7 +489,7 @@ class BookingOut(BaseModel):
     service: ServiceRef
     resource: ResourceRef
     additional_resources: list[ResourceRef]
-    location: Ref | None
+    location: LocationRef | None
     timezone: str
     start_datetime: datetime
     end_datetime: datetime

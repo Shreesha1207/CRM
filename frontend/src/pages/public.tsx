@@ -8,13 +8,14 @@ import { RESOURCE_TYPES } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { useConfig } from "../components/Layout";
 import { ChevronRight, Mark } from "../components/icons";
-import { Alert, BackLink, Badge, Button, Card, EmptyState, Field, Input, Loading, PageHeader, Select, buttonClass, linkClass } from "../components/ui";
+import { Alert, BackLink, Badge, Button, Card, EmptyState, Field, Input, Loading, MapLink, PageHeader, Select, buttonClass, linkClass } from "../components/ui";
 import { WEEKDAYS, formatLengthRange, formatRate, hhmm, titleCase } from "../lib/format";
 
 export function HomePage() {
   const { user } = useAuth();
   const config = useConfig();
   const services = useQuery({ queryKey: ["services"], queryFn: () => api.get<Service[]>("/api/services") });
+  const locations = useQuery({ queryKey: ["locations"], queryFn: () => api.get<Location[]>("/api/locations") });
   return (
     <div className="space-y-12 sm:space-y-16">
       <section className="max-w-2xl pt-2 sm:pt-8">
@@ -41,6 +42,20 @@ export function HomePage() {
         </div>
         {services.isLoading ? <Loading /> : <ServiceList services={(services.data ?? []).slice(0, 6)} />}
       </section>
+      {!!locations.data?.length && (
+        <section>
+          <h2 className="mb-3 text-base font-semibold text-fg">Where to find us</h2>
+          <ul className="grid gap-3 sm:grid-cols-2">
+            {locations.data.map((l) => (
+              <li key={l.id} className="rounded-lg border border-line bg-surface px-4 py-3.5 sm:px-5">
+                <div className="font-medium text-fg">{l.name}</div>
+                {l.address && <div className="text-sm text-muted">{l.address}</div>}
+                <MapLink url={l.google_maps_url} className="mt-2" />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }
@@ -293,6 +308,14 @@ export function ResourceDetailPage() {
           </section>
         </div>
         <div className="space-y-4">
+          {r.location && (
+            <Card>
+              <h2 className="mb-2 text-sm font-semibold text-fg">Location</h2>
+              <p className="text-sm text-fg">{r.location.name}</p>
+              {r.location.address && <p className="text-sm text-muted">{r.location.address}</p>}
+              <MapLink url={r.location.google_maps_url} className="mt-2" />
+            </Card>
+          )}
           <Card>
             <h2 className="mb-3 text-sm font-semibold text-fg">Weekly hours</h2>
             {r.availability.length === 0 ? (

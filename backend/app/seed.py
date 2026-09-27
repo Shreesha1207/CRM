@@ -53,8 +53,9 @@ def run() -> None:
             ]
         )
 
-        downtown = Location(name="Downtown", address="12 MG Road", timezone=tz)
-        riverside = Location(name="Riverside Sports Club", address="4 River Lane", timezone=tz)
+        # Without a map_url of their own, locations link to a Maps search for their address.
+        downtown = Location(name="Downtown", address="12 MG Road, Bengaluru", timezone=tz)
+        riverside = Location(name="Riverside Sports Club", address="4 River Lane, Bengaluru", timezone=tz)
         db.add_all([downtown, riverside])
         db.flush()
 

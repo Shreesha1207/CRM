@@ -52,8 +52,19 @@ export interface Location {
   id: string;
   name: string;
   address: string | null;
+  /** The location's own Google Maps link, if an admin set one. */
+  map_url: string | null;
+  /** Where the location opens in Google Maps: its own link, or a search for its address. */
+  google_maps_url: string | null;
   timezone: string;
   status: RecordStatus;
+}
+
+export interface LocationRef {
+  id: string;
+  name: string;
+  address: string | null;
+  google_maps_url: string | null;
 }
 
 export interface Resource {
@@ -98,6 +109,7 @@ export interface Offering {
   custom_buffer_before: number | null;
   custom_buffer_after: number | null;
   location_name: string | null;
+  location: LocationRef | null;
   status: RecordStatus;
 }
 
@@ -188,7 +200,7 @@ export interface Booking {
   service: Ref & { booking_type: BookingType; duration_minutes: number };
   resource: Ref & { type: ResourceType };
   additional_resources: (Ref & { type: ResourceType })[];
-  location: Ref | null;
+  location: LocationRef | null;
   timezone: string;
   start_datetime: string;
   end_datetime: string;

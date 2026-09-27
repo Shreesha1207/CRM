@@ -3,7 +3,7 @@ import { Children, cloneElement, isValidElement, useEffect, useId } from "react"
 import { Link } from "react-router-dom";
 import type { BookingStatus } from "../api/types";
 import { titleCase } from "../lib/format";
-import { ArrowLeft, Close } from "./icons";
+import { ArrowLeft, Close, MapPin } from "./icons";
 
 export function cx(...classes: (string | false | null | undefined)[]): string {
   return classes.filter(Boolean).join(" ");
@@ -11,6 +11,17 @@ export function cx(...classes: (string | false | null | undefined)[]): string {
 
 /** Inline text links. */
 export const linkClass = "font-medium text-accent-text underline-offset-2 hover:underline";
+
+/** Opens a location in Google Maps: a new tab, or the Maps app on phones. */
+export function MapLink({ url, children = "Open in Google Maps", className }: { url: string | null | undefined; children?: ReactNode; className?: string }) {
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" className={cx("inline-flex items-center gap-1.5 text-sm", linkClass, className)}>
+      <MapPin className="h-4 w-4 shrink-0" />
+      {children}
+    </a>
+  );
+}
 
 export function BackLink({ to, children }: { to: string; children: ReactNode }) {
   return (

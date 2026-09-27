@@ -7,14 +7,15 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.maps import google_maps_url
 from app.core.permissions import Permission, has_permission
-from app.models import Booking, Resource, ResourceService, User
+from app.models import Booking, Location, Resource, ResourceService, User
 from app.models.enums import BookingStatus, BookingType
 from app.schemas import (
     BookingOut,
     LocationOut,
+    LocationRef,
     OfferingOut,
-    Ref,
     ResourceOut,
     ResourceRef,
     ServiceRef,
@@ -42,6 +43,17 @@ def resource_out(resource: Resource, rules: BookingRules) -> ResourceOut:
     )
 
 
+def location_ref(location: Location | None) -> LocationRef | None:
+    if location is None:
+        return None
+    return LocationRef(
+        id=location.id,
+        name=location.name,
+        address=location.address,
+        google_maps_url=google_maps_url(location.name, location.address, location.map_url),
+    )
+
+
 def offering_out(link: ResourceService) -> OfferingOut:
     service, resource = link.service, link.resource
     return OfferingOut(
@@ -62,6 +74,7 @@ def offering_out(link: ResourceService) -> OfferingOut:
         custom_buffer_before=link.custom_buffer_before,
         custom_buffer_after=link.custom_buffer_after,
         location_name=resource.location.name if resource.location else None,
+        location=location_ref(resource.location),
         status=link.status,
     )
 
@@ -147,7 +160,7 @@ def bookings_out(
                 ),
                 resource=ResourceRef(id=resource.id, name=resource.name, type=resource.type),
                 additional_resources=additional,
-                location=Ref(id=resource.location.id, name=resource.location.name) if resource.location else None,
+                location=location_ref(resource.location),
                 timezone=resource_timezone(resource, rules).key,
                 start_datetime=b.start_datetime,
                 end_datetime=b.end_datetime,

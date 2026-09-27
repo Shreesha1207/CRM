@@ -16,6 +16,7 @@ import {
   Field,
   Input,
   Loading,
+  MapLink,
   Modal,
   PageHeader,
   Pagination,
@@ -354,6 +355,13 @@ export function BookingDetailPage() {
         <Card className="lg:col-span-2">
           <BookingSummary booking={b} compact />
           <dl className="mt-4 divide-y divide-line border-t border-line">
+            {b.location && (
+              <DetailRow label="Where">
+                <div>{b.location.name}</div>
+                {b.location.address && <div className="text-muted">{b.location.address}</div>}
+                <MapLink url={b.location.google_maps_url} className="mt-1" />
+              </DetailRow>
+            )}
             <DetailRow label="Reference">
               <span className="font-mono text-xs">{b.id.slice(0, 8).toUpperCase()}</span>
             </DetailRow>

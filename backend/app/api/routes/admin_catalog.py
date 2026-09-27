@@ -109,7 +109,7 @@ def update_location(
     actor: User = ManageLocations,
 ) -> ScheduleChangeOut:
     location = _get(db, Location, location_id, "Location")
-    old = audit.snapshot(location, "name", "address", "timezone", "status")
+    old = audit.snapshot(location, "name", "address", "map_url", "timezone", "status")
     resource_ids = list(db.scalars(select(Resource.id).where(Resource.location_id == location_id)))
 
     def mutate() -> Location:

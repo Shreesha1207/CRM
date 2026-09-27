@@ -82,6 +82,8 @@ class Location(UUIDPk, Timestamps, Base):
 
     name: Mapped[str] = mapped_column(String(200))
     address: Mapped[str | None] = mapped_column(Text)
+    # A Google Maps link to the exact place; without one, links search for the address.
+    map_url: Mapped[str | None] = mapped_column(Text)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
     status: Mapped[RecordStatus] = mapped_column(_enum(RecordStatus), default=RecordStatus.ACTIVE)
 

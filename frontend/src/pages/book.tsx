@@ -6,7 +6,7 @@ import type { Booking, RecurringPreview, Service, ServiceDetail } from "../api/t
 import { Alternatives, DateNav, SlotPicker, useFreeResources, type PickedSlot } from "../components/booking";
 import { useConfig } from "../components/Layout";
 import { Check } from "../components/icons";
-import { Alert, Badge, Button, Checkbox, Field, Input, Loading, PageHeader, Select, Textarea, cx } from "../components/ui";
+import { Alert, Badge, Button, Checkbox, Field, Input, Loading, MapLink, PageHeader, Select, Textarea, cx } from "../components/ui";
 import {
   bookingPrice,
   formatDateTime,
@@ -247,6 +247,17 @@ export function BookPage() {
   const summary: [string, React.ReactNode][] = [
     ["Service", service.data?.name ?? "—"],
     ["With", offering && effectiveResource ? offering.resource_name : picked ? "Any available" : "—"],
+    ...(offering?.location && effectiveResource
+      ? [
+          [
+            "Where",
+            <>
+              <span className="block">{offering.location.name}</span>
+              <MapLink url={offering.location.google_maps_url} className="text-xs" />
+            </>,
+          ] as [string, React.ReactNode],
+        ]
+      : []),
     ["When", picked ? formatRange(picked.start, picked.end, picked.timezone) : "—"],
     ...(service.data ? [["Length", formatDuration(bookedMinutes)] as [string, React.ReactNode]] : []),
     ...(isGroup ? [["Places", quantity] as [string, React.ReactNode]] : []),

@@ -5,7 +5,7 @@ import type { AvailabilityRule, Location, Offering, Resource, ResourceDetail, Sc
 import { RESOURCE_TYPES } from "../../api/types";
 import { useConfig } from "../../components/Layout";
 import { Close } from "../../components/icons";
-import { Alert, Badge, Button, Checkbox, EmptyState, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, Table, Tabs, Td, Textarea } from "../../components/ui";
+import { Alert, Badge, Button, Checkbox, EmptyState, Field, Input, Loading, MapLink, Modal, PageHeader, Select, StatusBadge, Table, Tabs, Td, Textarea } from "../../components/ui";
 import { WEEKDAYS, formatLengthRange, formatRate, hhmm, titleCase } from "../../lib/format";
 import { useCatalog } from "./bookings";
 import { useScheduleChange } from "./scheduleChange";
@@ -606,11 +606,13 @@ function LocationForm({ location, onClose }: { location: Location | null; onClos
   const [form, setForm] = useState({
     name: location?.name ?? "",
     address: location?.address ?? "",
+    map_url: location?.map_url ?? "",
     timezone: location?.timezone ?? config.data?.default_timezone ?? "UTC",
     status: location?.status ?? "ACTIVE",
   });
+  const body = () => ({ ...form, address: strOrNull(form.address), map_url: strOrNull(form.map_url.trim()) });
   const create = useMutation({
-    mutationFn: () => api.post("/api/admin/locations", { ...form, address: strOrNull(form.address) }),
+    mutationFn: () => api.post("/api/admin/locations", body()),
     onSuccess: () => {
       queryClient.invalidateQueries();
       onClose();
@@ -620,7 +622,7 @@ function LocationForm({ location, onClose }: { location: Location | null; onClos
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setForm({ ...form, [k]: e.target.value });
   const submit = () =>
     location
-      ? change.run((p) => api.put<ScheduleChange>(`/api/admin/locations/${location.id}`, { ...form, address: strOrNull(form.address) }, p))
+      ? change.run((p) => api.put<ScheduleChange>(`/api/admin/locations/${location.id}`, body(), p))
       : create.mutate();
   return (
     <Modal
@@ -645,6 +647,9 @@ function LocationForm({ location, onClose }: { location: Location | null; onClos
         </Field>
         <Field label="Address">
           <Textarea value={form.address} onChange={set("address")} />
+        </Field>
+        <Field label="Google Maps link (optional)" hint="Paste the place's Share link from Google Maps. Without one, customers get a Maps search for the address.">
+          <Input type="url" inputMode="url" placeholder="https://maps.app.goo.gl/…" value={form.map_url} onChange={set("map_url")} />
         </Field>
         <Field label="Timezone" hint="All schedules at this location are interpreted in this timezone.">
           <Select value={form.timezone} onChange={set("timezone")}>
@@ -687,7 +692,14 @@ export function AdminLocationsPage() {
           {locations.data.map((l) => (
             <tr key={l.id} className="hover:bg-subtle">
               <Td className="font-medium">{l.name}</Td>
-              <Td>{l.address ?? "—"}</Td>
+              <Td>
+                {l.address ?? "—"}
+                <div className="mt-0.5">
+                  <MapLink url={l.google_maps_url} className="text-xs">
+                    Map
+                  </MapLink>
+                </div>
+              </Td>
               <Td>{l.timezone}</Td>
               <Td>
                 <StatusBadge status={l.status} />

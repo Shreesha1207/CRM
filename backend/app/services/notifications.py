@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.maps import google_maps_url
 from app.core.timeutils import utcnow
 from app.models import Booking, Notification, User
 from app.models.enums import (
@@ -54,6 +55,7 @@ def notify(
     booking_id=None,
     dedupe_key: str | None = None,
     channels=DEFAULT_CHANNELS,
+    email_body: str | None = None,
 ) -> None:
     now = utcnow()
     for channel in channels:
@@ -63,7 +65,7 @@ def notify(
             type=type,
             channel=channel,
             title=title,
-            body=body,
+            body=email_body if email_body is not None and channel == NotificationChannel.EMAIL else body,
             # In-app messages are "delivered" by being stored.
             status=NotificationStatus.SENT if channel == NotificationChannel.IN_APP else NotificationStatus.PENDING,
             sent_at=now if channel == NotificationChannel.IN_APP else None,
@@ -82,6 +84,17 @@ def _booking_line(db: Session, booking: Booking) -> str:
     return f"{booking.service.name} with {booking.primary_resource.name}, {_when(db, booking)}"
 
 
+def _with_place(booking: Booking, body: str) -> dict[str, str]:
+    """Message texts for a booking the customer is going to: where it is, and
+    in the e-mail a Google Maps link to get there."""
+    location = booking.primary_resource.location
+    if location is None:
+        return {"body": body}
+    body += f"\nWhere: {location.name}" + (f", {location.address}" if location.address else "")
+    url = google_maps_url(location.name, location.address, location.map_url)
+    return {"body": body, "email_body": f"{body}\nMap: {url}" if url else body}
+
+
 def _on_created(db: Session, event: DomainEvent) -> None:
     booking: Booking = event.payload["booking"]
     titles = {
@@ -90,7 +103,9 @@ def _on_created(db: Session, event: DomainEvent) -> None:
         BookingStatus.WAITLISTED: (NotificationType.BOOKING_CREATED, "You are on the waitlist"),
     }
     type_, title = titles.get(booking.status, (NotificationType.BOOKING_CREATED, "Booking created"))
-    notify(db, user_id=booking.user_id, booking_id=booking.id, type=type_, title=title, body=_booking_line(db, booking))
+    notify(
+        db, user_id=booking.user_id, booking_id=booking.id, type=type_, title=title, **_with_place(booking, _booking_line(db, booking))
+    )
 
 
 def _on_confirmed(db: Session, event: DomainEvent) -> None:
@@ -101,7 +116,7 @@ def _on_confirmed(db: Session, event: DomainEvent) -> None:
         booking_id=booking.id,
         type=NotificationType.BOOKING_CONFIRMED,
         title="Booking confirmed",
-        body=_booking_line(db, booking),
+        **_with_place(booking, _booking_line(db, booking)),
     )
 
 
@@ -130,7 +145,7 @@ def _on_rescheduled(db: Session, event: DomainEvent) -> None:
         booking_id=booking.id,
         type=NotificationType.RESOURCE_CHANGED if changed else NotificationType.BOOKING_RESCHEDULED,
         title="Your booking was moved" if changed else "Booking rescheduled",
-        body=f"New time: {_booking_line(db, booking)}",
+        **_with_place(booking, f"New time: {_booking_line(db, booking)}"),
     )
 
 
@@ -142,7 +157,7 @@ def _on_promoted(db: Session, event: DomainEvent) -> None:
         booking_id=booking.id,
         type=NotificationType.WAITLIST_PROMOTION,
         title="A place opened up – you're booked!",
-        body=_booking_line(db, booking),
+        **_with_place(booking, _booking_line(db, booking)),
     )
 
 
@@ -247,8 +262,8 @@ def queue_reminders(db: Session, now: datetime) -> int:
             booking_id=booking.id,
             type=NotificationType.BOOKING_REMINDER,
             title=f"Reminder: your booking starts in {label}",
-            body=_booking_line(db, booking),
             dedupe_key=f"reminder:{booking.id}:{minutes}",
+            **_with_place(booking, _booking_line(db, booking)),
         )
         queued += 1
     db.commit()
