@@ -2,6 +2,7 @@ from datetime import time, timedelta
 from decimal import Decimal
 
 from app.core.timeutils import freeze_time
+from app.models import ResourceService
 from app.models.enums import BookingType
 from tests.conftest import MONDAY, NOW, at, auth_headers
 
@@ -444,6 +445,63 @@ def test_recurring_series_uses_the_chosen_length(client, make, user_headers) -> 
     assert r.status_code == 200, r.text
     # 15:00 + 3 hours runs past closing at 17:00.
     assert [o["code"] for o in r.json()["occurrences"]] == ["OUTSIDE_AVAILABILITY"] * 2
+
+
+def test_time_first_with_a_chosen_length_skips_resources_that_cannot_do_it(client, make, db, user_headers) -> None:
+    service = make.service(duration=60, price=Decimal("20"), max_duration_minutes=120)
+    a = make.resource("A", services=[service], hours=make.weekdays(time(9), time(17)))
+    make.resource("B", services=[service], hours=make.weekdays(time(9), time(17)))
+    # A offers the service in 45-minute steps (45 or 90 minutes), so never for two hours.
+    db.get(ResourceService, (a.id, service.id)).custom_duration = 45
+    db.commit()
+
+    r = client.get("/api/availability", params={"service_id": str(service.id), "date": MONDAY.isoformat(), "duration_minutes": 120})
+    assert [x["resource_name"] for x in r.json()["resources"]] == ["B"]
+    r = client.get(
+        "/api/availability",
+        params={"service_id": str(service.id), "resource_id": str(a.id), "date": MONDAY.isoformat(), "duration_minutes": 120},
+    )
+    assert r.status_code == 422 and r.json()["code"] == "INVALID_DURATION"
+
+    # "Any available" for two hours skips A and books B.
+    r = client.post(
+        "/api/bookings", headers=user_headers, json={"service_id": str(service.id), "start": at(MONDAY, 10), "duration_minutes": 120}
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["resource"]["name"] == "B" and r.json()["price"] == "40.00"
+
+
+def test_alternatives_keep_the_chosen_length(client, make, user_headers) -> None:
+    service = make.service(duration=60, price=Decimal("20"), max_duration_minutes=120)
+    a = make.resource("A", services=[service], hours=[(0, time(9), time(13))])
+    make.resource("B", services=[service], hours=[(0, time(9), time(11))])
+    book(client, user_headers, service, a, at(MONDAY, 10), duration_minutes=120)
+
+    r = client.get(
+        "/api/availability/alternatives",
+        params={"service_id": str(service.id), "resource_id": str(a.id), "start": at(MONDAY, 10), "duration_minutes": 120},
+    )
+    options = [(o["resource_name"], o["start"][11:16], o["end"][11:16]) for o in r.json()]
+    # Only two-hour options: B closes at 11:00, so B at 10:00 does not fit, 09:00 does.
+    assert options == [("B", "09:00", "11:00")]
+
+
+def test_admin_books_a_chosen_length(client, make, user, admin_headers) -> None:
+    service = make.service(duration=60, price=Decimal("20"), max_duration_minutes=180)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    r = client.post(
+        "/api/admin/bookings",
+        headers=admin_headers,
+        json={
+            "user_id": str(user.id),
+            "service_id": str(service.id),
+            "resource_id": str(resource.id),
+            "start": at(MONDAY, 9),
+            "duration_minutes": 180,
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["end_datetime"].startswith(f"{MONDAY.isoformat()}T12:00") and r.json()["price"] == "60.00"
 
 
 def test_service_length_settings_are_validated(client, admin_headers) -> None:

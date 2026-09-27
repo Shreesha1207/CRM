@@ -1,9 +1,11 @@
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 
 from sqlalchemy import select
 
+from app.core.timeutils import freeze_time
 from app.models import Notification
-from app.models.enums import BookingType, NotificationChannel
+from app.models.enums import BookingType, NotificationChannel, NotificationType
+from app.services import notifications
 from tests.conftest import MONDAY, at
 
 
@@ -183,6 +185,45 @@ def test_location_map_links(client, make, db, user_headers, admin_headers) -> No
     assert note["body"].endswith("\nWhere: HQ, 1 Main St, Springfield")
     email = db.scalars(select(Notification).where(Notification.channel == NotificationChannel.EMAIL)).one()
     assert email.body == f"{note['body']}\nMap: {search}"
+
+
+def test_location_map_link_can_be_changed_and_cleared(client, admin_headers) -> None:
+    loc = client.post("/api/admin/locations", headers=admin_headers, json={"name": "HQ", "address": "1 Main St"}).json()
+
+    def update(map_url):
+        body = {"name": "HQ", "address": "1 Main St", "timezone": "UTC", "map_url": map_url}
+        r = client.put(f"/api/admin/locations/{loc['id']}", headers=admin_headers, json=body)
+        assert r.status_code == 200, r.text
+        return r.json()["result"]
+
+    assert update("https://maps.app.goo.gl/xyz")["google_maps_url"] == "https://maps.app.goo.gl/xyz"
+    cleared = update("  ")
+    assert cleared["map_url"] is None
+    assert cleared["google_maps_url"] == "https://www.google.com/maps/search/?api=1&query=HQ%2C+1+Main+St"
+    # The audit trail records the link like any other field.
+    [first, second] = client.get("/api/admin/audit-logs", headers=admin_headers, params={"action": "LOCATION_UPDATED"}).json()["items"]
+    assert {first["new_value"]["old"]["map_url"], second["new_value"]["old"]["map_url"]} == {None, "https://maps.app.goo.gl/xyz"}
+
+
+def test_moves_and_reminders_say_where_to_go(client, make, db, user_headers) -> None:
+    hq = make.location(name="HQ")
+    hq.address = "1 Main St"
+    make.db.commit()
+    service = make.service()
+    resource = make.resource(services=[service], location=hq, hours=make.weekdays(time(9), time(17)))
+    booking = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
+    moved = client.post(f"/api/bookings/{booking['id']}/reschedule", headers=user_headers, json={"start": at(MONDAY, 11)}).json()
+
+    note = next(n for n in client.get("/api/notifications", headers=user_headers).json() if n["type"] == "BOOKING_RESCHEDULED")
+    assert note["body"].startswith("New time:") and note["body"].endswith("\nWhere: HQ, 1 Main St")
+
+    start = datetime.fromisoformat(moved["start_datetime"])
+    freeze_time(start - timedelta(minutes=30))
+    assert notifications.queue_reminders(db, start - timedelta(minutes=30)) == 1
+    reminder = db.scalars(
+        select(Notification).where(Notification.type == NotificationType.BOOKING_REMINDER, Notification.channel == NotificationChannel.EMAIL)
+    ).one()
+    assert reminder.body.endswith("\nWhere: HQ, 1 Main St\nMap: https://www.google.com/maps/search/?api=1&query=HQ%2C+1+Main+St")
 
 
 def test_settings_validation_and_update(client, admin_headers) -> None:
