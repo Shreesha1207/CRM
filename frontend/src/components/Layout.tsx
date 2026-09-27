@@ -119,7 +119,7 @@ function NotificationBell() {
           <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
             <span className="text-sm font-semibold text-fg">Notifications</span>
             {unread > 0 && (
-              <button className="text-xs font-medium text-accent-text hover:underline" onClick={() => readAll.mutate()}>
+              <button className="-my-1 min-h-6 text-xs font-medium text-accent-text hover:underline" onClick={() => readAll.mutate()}>
                 Mark all read
               </button>
             )}

@@ -16,7 +16,7 @@ export const linkClass = "font-medium text-accent-text underline-offset-2 hover:
 export function MapLink({ url, children = "Open in Google Maps", className }: { url: string | null | undefined; children?: ReactNode; className?: string }) {
   if (!url || !/^https?:\/\//i.test(url)) return null;
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" className={cx("inline-flex items-center gap-1.5 text-sm", linkClass, className)}>
+    <a href={url} target="_blank" rel="noopener noreferrer" className={cx("inline-flex min-h-6 items-center gap-1.5 text-sm", linkClass, className)}>
       <MapPin className="h-4 w-4 shrink-0" />
       {children}
     </a>
@@ -25,7 +25,7 @@ export function MapLink({ url, children = "Open in Google Maps", className }: { 
 
 export function BackLink({ to, children }: { to: string; children: ReactNode }) {
   return (
-    <Link to={to} className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted hover:text-fg">
+    <Link to={to} className="mb-4 inline-flex min-h-6 items-center gap-1.5 text-sm text-muted hover:text-fg">
       <ArrowLeft className="h-4 w-4" />
       {children}
     </Link>
@@ -150,7 +150,7 @@ export function Select({ children, ...props }: SelectHTMLAttributes<HTMLSelectEl
 
 export function Checkbox({ label, ...props }: InputHTMLAttributes<HTMLInputElement> & { label: ReactNode }) {
   return (
-    <label className="inline-flex items-center gap-2 text-sm text-fg">
+    <label className="inline-flex min-h-6 items-center gap-2 text-sm text-fg">
       <input type="checkbox" {...props} className="h-4 w-4 rounded border-line-strong" />
       {label}
     </label>
@@ -284,7 +284,7 @@ export function Tabs<T extends string>({
             key={t.value}
             onClick={() => onChange(t.value)}
             className={cx(
-              "-mb-px border-b-2 py-2 text-sm font-medium",
+              "-mb-px min-w-6 border-b-2 py-2 text-sm font-medium",
               value === t.value ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg",
             )}
           >
