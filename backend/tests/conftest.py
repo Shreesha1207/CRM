@@ -3,8 +3,10 @@ constraint and timezone handling are exactly what needs verifying."""
 
 import os
 
-os.environ.setdefault(
-    "DATABASE_URL", "postgresql+psycopg://booking:booking@localhost:5432/booking_test"
+# The suite drops the whole schema, so it reads TEST_DATABASE_URL and never
+# DATABASE_URL, which may point at a real (e.g. hosted) database.
+os.environ["DATABASE_URL"] = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql+psycopg://booking:booking@localhost:5432/booking_test"
 )
 os.environ["RUN_BACKGROUND_JOBS"] = "false"
 # Tests move the frozen clock by days; keep sessions alive across that.

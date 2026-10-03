@@ -56,11 +56,12 @@ The seed builds a small catalogue spanning several industries: a strength coach 
 ### Tests
 
 ```bash
-cd backend && pytest            # 70 tests, against a real PostgreSQL database
+cd backend && pytest            # 88 tests, against a real PostgreSQL database
+cd frontend && npm test         # unit tests for prices and booking lengths
 cd frontend && npm run build    # type-check + production build
 ```
 
-The tests use the `booking_test` database by default (override with `DATABASE_URL`). They rebuild the schema by running the Alembic migrations, so the migration itself is tested too.
+The tests use the `booking_test` database by default; override it with `TEST_DATABASE_URL`. They ignore `DATABASE_URL` on purpose: they drop and rebuild the schema (by running the Alembic migrations, so the migration itself is tested too), which must never happen to a real database.
 
 ---
 
