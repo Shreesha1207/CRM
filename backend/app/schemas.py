@@ -49,6 +49,11 @@ class LoginIn(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class GoogleAuthIn(BaseModel):
+    credential: str
+    role: Role | None = None
+
+
 class ForgotPasswordIn(BaseModel):
     email: EmailStr
 

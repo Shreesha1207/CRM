@@ -13,6 +13,7 @@ interface AuthState {
   can: (permission: string) => boolean;
   login: (email: string, password: string) => Promise<Me>;
   register: (data: { name: string; email: string; phone?: string; password: string }) => Promise<Me>;
+  loginWithGoogle: (credential: string, role?: string) => Promise<Me>;
   logout: () => Promise<void>;
   refresh: () => Promise<unknown>;
 }
@@ -62,6 +63,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [setUser],
   );
 
+  const loginWithGoogle = useCallback(
+    async (credential: string, role?: string) => {
+      const res = await api.post<{ user: Me }>("/api/auth/google", { credential, role });
+      setUser(res.user);
+      return res.user;
+    },
+    [setUser],
+  );
+
   const logout = useCallback(async () => {
     try {
       await api.post("/api/auth/logout");
@@ -81,10 +91,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       can: (p: string) => permissions.has(p),
       login,
       register,
+      loginWithGoogle,
       logout,
       refresh: me.refetch,
     };
-  }, [me.data, me.isLoading, me.refetch, login, register, logout]);
+  }, [me.data, me.isLoading, me.refetch, login, register, loginWithGoogle, logout]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -10,6 +10,7 @@ import { useConfig } from "../components/Layout";
 import { ChevronRight, Mark } from "../components/icons";
 import { Alert, BackLink, Badge, Button, Card, EmptyState, Field, Input, Loading, MapLink, PageHeader, Select, buttonClass, linkClass } from "../components/ui";
 import { WEEKDAYS, formatLengthRange, formatRate, hhmm, titleCase } from "../lib/format";
+import { GoogleLogin } from "@react-oauth/google";
 
 export function HomePage() {
   const { user } = useAuth();
@@ -361,11 +362,12 @@ function AuthCard({ title, children, footer }: { title: string; children: React.
 }
 
 export function LoginPage() {
-  const { login, user, isStaff } = useAuth();
+  const { login, loginWithGoogle, user, isStaff } = useAuth();
   const [params] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const mutation = useMutation({ mutationFn: () => login(email, password) });
+  const googleMutation = useMutation({ mutationFn: (credential: string) => loginWithGoogle(credential) });
   // Once signed in (now or earlier), go where the user was heading.
   const next = params.get("next");
   if (user) return <Navigate to={next && next.startsWith("/") && !next.startsWith("//") ? next : isStaff ? "/admin" : "/dashboard"} replace />;
@@ -377,13 +379,37 @@ export function LoginPage() {
     <AuthCard title="Sign in" footer={<>No account? <Link to="/register" className={linkClass}>Create one</Link></>}>
       <form onSubmit={submit} className="space-y-4">
         {mutation.error && <Alert>{errorMessage(mutation.error)}</Alert>}
+        {googleMutation.error && <Alert>{errorMessage(googleMutation.error)}</Alert>}
+        
+        <div className="flex justify-center">
+          <GoogleLogin
+            onSuccess={(credentialResponse) => {
+              if (credentialResponse.credential) {
+                googleMutation.mutate(credentialResponse.credential);
+              }
+            }}
+            onError={() => {
+              console.log('Login Failed');
+            }}
+          />
+        </div>
+
+        <div className="relative my-4">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t border-line"></span>
+          </div>
+          <div className="relative flex justify-center text-xs uppercase">
+            <span className="bg-surface px-2 text-muted">Or continue with e-mail</span>
+          </div>
+        </div>
+
         <Field label="E-mail">
           <Input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
         </Field>
         <Field label="Password">
           <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
-        <Button type="submit" className="w-full" loading={mutation.isPending}>
+        <Button type="submit" className="w-full" loading={mutation.isPending || googleMutation.isPending}>
           Sign in
         </Button>
         <Link to="/forgot-password" className="block text-center text-sm text-muted hover:text-fg">
@@ -395,14 +421,29 @@ export function LoginPage() {
 }
 
 export function RegisterPage() {
-  const { register, user } = useAuth();
+  const { register, loginWithGoogle, user } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ name: "", email: "", phone: "", password: "" });
+  const [role, setRole] = useState("USER");
   const mutation = useMutation({ mutationFn: () => register({ ...form, phone: form.phone || undefined }), onSuccess: () => navigate("/dashboard") });
+  const googleMutation = useMutation({ mutationFn: (credential: string) => loginWithGoogle(credential, role), onSuccess: () => navigate(role === "ADMIN" ? "/admin" : "/dashboard") });
+  
   if (user) return <Navigate to="/dashboard" replace />;
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
+  
   return (
     <AuthCard title="Create your account" footer={<>Already registered? <Link to="/login" className={linkClass}>Sign in</Link></>}>
+      <div className="mb-6 space-y-4">
+        <div className="flex gap-4">
+          <Button type="button" className="flex-1" variant={role === "USER" ? "primary" : "secondary"} onClick={() => setRole("USER")}>
+            Sign up for User
+          </Button>
+          <Button type="button" className="flex-1" variant={role === "ADMIN" ? "primary" : "secondary"} onClick={() => setRole("ADMIN")}>
+            Sign up for Admin
+          </Button>
+        </div>
+      </div>
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -411,6 +452,31 @@ export function RegisterPage() {
         className="space-y-4"
       >
         {mutation.error && <Alert>{errorMessage(mutation.error)}</Alert>}
+        {googleMutation.error && <Alert>{errorMessage(googleMutation.error)}</Alert>}
+
+        <div className="flex justify-center">
+          <GoogleLogin
+            text={role === "ADMIN" ? "signup_with" : "continue_with"}
+            onSuccess={(credentialResponse) => {
+              if (credentialResponse.credential) {
+                googleMutation.mutate(credentialResponse.credential);
+              }
+            }}
+            onError={() => {
+              console.log('Signup Failed');
+            }}
+          />
+        </div>
+
+        <div className="relative my-4">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t border-line"></span>
+          </div>
+          <div className="relative flex justify-center text-xs uppercase">
+            <span className="bg-surface px-2 text-muted">Or register with e-mail</span>
+          </div>
+        </div>
+
         <Field label="Name">
           <Input required autoComplete="name" value={form.name} onChange={set("name")} />
         </Field>
@@ -423,8 +489,8 @@ export function RegisterPage() {
         <Field label="Password" hint="At least 8 characters.">
           <Input type="password" required minLength={8} autoComplete="new-password" value={form.password} onChange={set("password")} />
         </Field>
-        <Button type="submit" className="w-full" loading={mutation.isPending}>
-          Create account
+        <Button type="submit" className="w-full" loading={mutation.isPending || googleMutation.isPending}>
+          Create {role === "ADMIN" ? "admin " : ""}account
         </Button>
       </form>
     </AuthCard>

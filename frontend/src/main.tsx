@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import { ApiError } from "./api/client";
 import { App } from "./App";
 import { AuthProvider } from "./auth/AuthContext";
+import { GoogleOAuthProvider } from "@react-oauth/google";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -22,9 +23,11 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
+        <GoogleOAuthProvider clientId="958098080029-l893tjb5g3l59f048i4pjj5qlgle93v2.apps.googleusercontent.com">
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </GoogleOAuthProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,

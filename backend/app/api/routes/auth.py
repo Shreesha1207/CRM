@@ -21,6 +21,7 @@ from app.models.enums import Role, UserStatus
 from app.schemas import (
     ChangePasswordIn,
     ForgotPasswordIn,
+    GoogleAuthIn,
     LoginIn,
     MeOut,
     ProfileIn,
@@ -31,8 +32,13 @@ from app.schemas import (
 from app.services import audit
 from app.services.notifications import send_email
 
+from google.oauth2 import id_token
+from google.auth.transport import requests
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 log = logging.getLogger("auth")
+
+GOOGLE_CLIENT_ID = "958098080029-l893tjb5g3l59f048i4pjj5qlgle93v2.apps.googleusercontent.com"
 
 
 def me_out(user: User) -> MeOut:
@@ -117,6 +123,39 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
     if needs_rehash(user.password_hash):
         user.password_hash = hash_password(body.password)
     return _start_session(db, user, request, response)
+
+
+@router.post("/google", response_model=TokenOut)
+def google_auth(body: GoogleAuthIn, request: Request, response: Response, db: DB) -> TokenOut:
+    try:
+        idinfo = id_token.verify_oauth2_token(body.credential, requests.Request(), GOOGLE_CLIENT_ID)
+    except ValueError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid Google token")
+    
+    email = idinfo.get("email")
+    name = idinfo.get("name", "Unknown Google User")
+    if not email:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email not found in Google account")
+        
+    user = db.scalar(select(User).where(User.email == email.lower()))
+    if user:
+        if user.status != UserStatus.ACTIVE:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "This account is not active")
+    else:
+        role = body.role if body.role else Role.USER
+        user = User(
+            name=name,
+            email=email.lower(),
+            password_hash=hash_password(new_token()), # Random dummy password
+            role=role,
+            status=UserStatus.ACTIVE,
+        )
+        db.add(user)
+        db.flush()
+        audit.record(db, actor_id=user.id, action="USER_REGISTERED_GOOGLE", entity_type="user", entity_id=user.id)
+        
+    return _start_session(db, user, request, response)
+
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
