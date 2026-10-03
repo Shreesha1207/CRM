@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_JWT_SECRET = "change-me-in-production-please-use-a-long-random-value"
@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @field_validator("database_url")
+    @classmethod
+    def _use_psycopg(cls, url: str) -> str:
+        # Hosted databases (Railway, Render, Heroku...) hand out plain postgres:// URLs,
+        # which SQLAlchemy would open with psycopg2; the installed driver is psycopg 3.
+        scheme, sep, rest = url.partition("://")
+        if sep and scheme in ("postgres", "postgresql"):
+            return f"postgresql+psycopg://{rest}"
+        return url
 
     @model_validator(mode="after")
     def _safe_for_production(self) -> "Settings":
