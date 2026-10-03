@@ -19,16 +19,19 @@ Everything else is configuration: resources, services, schedules and booking rul
 ### Option A: Docker
 
 ```bash
+cp .env.example .env    # then set DATABASE_URL to your PostgreSQL database
 docker compose up --build
 docker compose exec backend python -m app.seed      # optional demo data
 open http://localhost:8080
 ```
 
+The stack has no database container. The API connects to the PostgreSQL database in `DATABASE_URL` (a hosted one such as Railway's works; plain `postgresql://` URLs are fine) and applies the migrations when it starts.
+
 ### Option B: Local development
 
 ```bash
 # 1. PostgreSQL: create a database and user named "booking" (password "booking"),
-#    or set DATABASE_URL (see backend/.env.example).
+#    or set DATABASE_URL in backend/.env (see backend/.env.example).
 
 # 2. Backend (http://localhost:8000, API docs at /api/docs)
 cd backend
@@ -228,7 +231,7 @@ The booking engine publishes domain events (`booking.created`, `.cancelled`, `.r
 
 ## Configuration
 
-**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`.
+**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`. `docker compose` takes `DATABASE_URL` and `JWT_SECRET` from `.env` in the repository root (see `.env.example`).
 
 **Booking rules** live in the `settings` table. Admins edit them live under Admin → Settings:
 

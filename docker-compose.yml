@@ -1,35 +1,18 @@
-# Local, production-like stack: PostgreSQL + API + static frontend behind nginx.
+# Local, production-like stack: API + static frontend behind nginx.
+# The database is external (e.g. hosted on Railway): put its URL in .env as
+# DATABASE_URL (see .env.example). The API applies migrations when it starts.
 #   docker compose up --build
 #   docker compose exec backend python -m app.seed   # optional demo data
 # Then open http://localhost:8080
 services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: booking
-      POSTGRES_PASSWORD: booking
-      POSTGRES_DB: booking
-    ports:
-      - "5432:5432"
-    volumes:
-      - db-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U booking"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   backend:
     build: ./backend
     environment:
-      DATABASE_URL: postgresql+psycopg://booking:booking@db:5432/booking
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env (see .env.example)}
       JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-me-0123456789}
       CORS_ORIGINS: '["http://localhost:8080"]'
       FRONTEND_URL: http://localhost:8080
       EMAIL_BACKEND: console
-    depends_on:
-      db:
-        condition: service_healthy
 
   frontend:
     build: ./frontend
@@ -37,6 +20,3 @@ services:
       - "8080:80"
     depends_on:
       - backend
-
-volumes:
-  db-data:

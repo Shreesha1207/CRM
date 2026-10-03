@@ -1,0 +1,2 @@
+# Holds the database password used by docker compose.
+.env
