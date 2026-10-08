@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { createContext, useCallback, useContext, useMemo } from "react";
+import type { Location } from "react-router-dom";
 import { Navigate, useLocation } from "react-router-dom";
 import { ApiError, api } from "../api/client";
 import type { Me } from "../api/types";
@@ -106,11 +107,30 @@ export function useAuth(): AuthState {
   return ctx;
 }
 
-export function RequireAuth({ children, staff }: { children: ReactNode; staff?: boolean }) {
+/** Where a staff member who opens a customer page is sent instead. */
+function adminCounterpart({ pathname, search }: Location): string {
+  const booking = pathname.match(/^\/bookings\/([^/]+)$/);
+  if (booking) return `/admin/bookings?open=${booking[1]}`;
+  if (pathname === "/profile") return "/admin/profile";
+  if (pathname === "/book") {
+    // "Book" links on the public pages become a booking made for a customer.
+    const params = new URLSearchParams(search);
+    params.set("new", "1");
+    return `/admin/bookings?${params}`;
+  }
+  return "/admin";
+}
+
+/**
+ * `staff` pages are the admin console; `customer` pages are the customer's own
+ * area, which staff don't use: they work in the console.
+ */
+export function RequireAuth({ children, staff, customer }: { children: ReactNode; staff?: boolean; customer?: boolean }) {
   const { user, loading, isStaff } = useAuth();
   const location = useLocation();
   if (loading) return <Loading />;
-  if (!user) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
+  if (!user) return <Navigate to={`${staff ? "/admin/login" : "/login"}?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   if (staff && !isStaff) return <Navigate to="/dashboard" replace />;
+  if (customer && isStaff) return <Navigate to={adminCounterpart(location)} replace />;
   return <>{children}</>;
 }

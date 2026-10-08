@@ -157,14 +157,14 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
   );
 }
 
-function CreateBookingModal({ onClose }: { onClose: () => void }) {
+function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial?: { serviceId?: string; resourceId?: string } }) {
   const queryClient = useQueryClient();
   const config = useConfig();
   const { services } = useCatalog();
   const [userQuery, setUserQuery] = useState("");
   const [userId, setUserId] = useState("");
-  const [serviceId, setServiceId] = useState("");
-  const [resourceId, setResourceId] = useState("");
+  const [serviceId, setServiceId] = useState(initial?.serviceId ?? "");
+  const [resourceId, setResourceId] = useState(initial?.resourceId ?? "");
   const [date, setDate] = useState(todayIn(config.data?.default_timezone ?? "UTC"));
   const [picked, setPicked] = useState<PickedSlot | null>(null);
   const [override, setOverride] = useState(false);
@@ -318,11 +318,28 @@ const LIMIT = 25;
 export function AdminBookingsPage() {
   const { resources, services, locations } = useCatalog();
   const { can } = useAuth();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const [filters, setFilters] = useState({ status: "", resource_id: "", service_id: "", location_id: "", start_date: "", end_date: "", q: "" });
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Booking | null>(null);
-  const [creating, setCreating] = useState(false);
+  // ?new=1 (optionally with service and resource) opens "New booking";
+  // ?open=<id> opens one booking, e.g. from a notification.
+  const [creating, setCreating] = useState(() => params.get("new") === "1");
+  const openId = params.get("open");
+  const opened = useQuery({
+    queryKey: ["admin", "booking", openId],
+    queryFn: () => api.get<Booking>(`/api/admin/bookings/${openId}`),
+    enabled: !!openId,
+  });
+  const shown = selected ?? (openId ? opened.data : null);
+  const dropParams = (...keys: string[]) =>
+    setParams(
+      (p) => {
+        keys.forEach((k) => p.delete(k));
+        return p;
+      },
+      { replace: true },
+    );
   const bookings = useQuery({
     queryKey: ["admin", "bookings", filters, offset],
     queryFn: () => api.get<Page<Booking>>("/api/admin/bookings", { ...filters, status: filters.status ? [filters.status] : [], limit: LIMIT, offset }),
@@ -418,8 +435,25 @@ export function AdminBookingsPage() {
           <Pagination total={bookings.data!.total} limit={LIMIT} offset={offset} onChange={setOffset} />
         </>
       )}
-      {selected && <AdminBookingModal booking={selected} onClose={() => setSelected(null)} />}
-      {creating && <CreateBookingModal onClose={() => setCreating(false)} />}
+      {shown && (
+        <AdminBookingModal
+          booking={shown}
+          onClose={() => {
+            setSelected(null);
+            dropParams("open");
+          }}
+        />
+      )}
+      {opened.error && <Alert>{errorMessage(opened.error)}</Alert>}
+      {creating && can("bookings:manage") && (
+        <CreateBookingModal
+          initial={{ serviceId: params.get("service") ?? undefined, resourceId: params.get("resource") ?? undefined }}
+          onClose={() => {
+            setCreating(false);
+            dropParams("new", "service", "resource");
+          }}
+        />
+      )}
     </>
   );
 }

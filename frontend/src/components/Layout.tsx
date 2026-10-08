@@ -12,7 +12,7 @@ export function useConfig() {
   return useQuery({ queryKey: ["config"], queryFn: () => api.get<PublicConfig>("/api/config"), staleTime: 5 * 60_000 });
 }
 
-const iconButton = "inline-flex h-9 w-9 items-center justify-center rounded-md text-muted hover:bg-subtle hover:text-fg";
+export const iconButton = "inline-flex h-9 w-9 items-center justify-center rounded-md text-muted hover:bg-subtle hover:text-fg";
 
 type NavVariant = "bar" | "menu" | "side";
 
@@ -42,7 +42,7 @@ function NavItem({ to, children, end, variant = "bar" }: { to: string; children:
   );
 }
 
-function ThemeToggle() {
+export function ThemeToggle() {
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "light");
   const next = theme === "dark" ? "light" : "dark";
   const toggle = () => {
@@ -61,7 +61,8 @@ function ThemeToggle() {
   );
 }
 
-function NotificationBell() {
+/** `bookingPath` says where a booking notification leads: the customer page or the admin console. */
+export function NotificationBell({ bookingPath }: { bookingPath: (id: string) => string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
@@ -129,7 +130,7 @@ function NotificationBell() {
             {list.data?.map((n) => (
               <Link
                 key={n.id}
-                to={n.booking_id ? `/bookings/${n.booking_id}` : "#"}
+                to={n.booking_id ? bookingPath(n.booking_id) : "#"}
                 onClick={() => setOpen(false)}
                 className="flex gap-3 border-b border-line px-4 py-3 last:border-b-0 hover:bg-subtle"
               >
@@ -157,14 +158,14 @@ export function Layout() {
   const links = [
     { to: "/services", label: "Services" },
     { to: "/resources", label: "Resources" },
-    ...(user
+    // Staff do their work in the admin console, not in the customer pages.
+    ...(user && !isStaff
       ? [
           { to: "/dashboard", label: "Dashboard" },
           { to: "/book", label: "Book" },
           { to: "/bookings", label: "My bookings" },
         ]
       : []),
-    ...(isStaff ? [{ to: "/admin", label: "Admin" }] : []),
   ];
   const signOut = async () => {
     setMenuOpen(false);
@@ -191,9 +192,18 @@ export function Layout() {
             <ThemeToggle />
             {/* Visibility sits on wrappers: `hidden` on the button itself would
                 lose to the button's own `inline-flex`. */}
-            {user ? (
+            {user && isStaff ? (
+              <div className="ml-2 hidden items-center gap-1 md:flex">
+                <Link to="/admin" className={buttonClass()}>
+                  Admin console
+                </Link>
+                <button className={buttonClass("ghost")} onClick={signOut}>
+                  Sign out
+                </button>
+              </div>
+            ) : user ? (
               <>
-                <NotificationBell />
+                <NotificationBell bookingPath={(id) => `/bookings/${id}`} />
                 <div className="ml-2 hidden items-center gap-1 md:flex">
                   <Link to="/profile" className="max-w-40 truncate text-sm text-muted hover:text-fg">
                     {user.name}
@@ -238,10 +248,15 @@ export function Layout() {
                   Create account
                 </NavItem>
               )}
+              {isStaff && (
+                <NavItem to="/admin" variant="menu">
+                  Admin console
+                </NavItem>
+              )}
             </nav>
             {user && (
               <div className="flex items-center justify-between gap-3 border-t border-line px-6 py-3">
-                <Link to="/profile" className="min-w-0" onClick={() => setMenuOpen(false)}>
+                <Link to={isStaff ? "/admin/profile" : "/profile"} className="min-w-0" onClick={() => setMenuOpen(false)}>
                   <span className="block truncate text-sm font-medium text-fg">{user.name}</span>
                   <span className="block truncate text-xs text-muted">{user.email}</span>
                 </Link>
@@ -256,43 +271,6 @@ export function Layout() {
       <main className="mx-auto max-w-6xl px-4 pb-16 pt-6 sm:px-6 sm:pt-10">
         <Outlet />
       </main>
-    </div>
-  );
-}
-
-const ADMIN_LINKS: { to: string; label: string; permission: string; end?: boolean }[] = [
-  { to: "/admin", label: "Overview", permission: "reports:view", end: true },
-  { to: "/admin/calendar", label: "Calendar", permission: "bookings:view_all" },
-  { to: "/admin/bookings", label: "Bookings", permission: "bookings:view_all" },
-  { to: "/admin/conflicts", label: "Conflicts", permission: "conflicts:manage" },
-  { to: "/admin/resources", label: "Resources", permission: "resources:manage" },
-  { to: "/admin/services", label: "Services", permission: "services:manage" },
-  { to: "/admin/schedules", label: "Schedules", permission: "schedules:manage" },
-  { to: "/admin/locations", label: "Locations", permission: "locations:manage" },
-  { to: "/admin/users", label: "Users", permission: "users:view" },
-  { to: "/admin/settings", label: "Settings", permission: "settings:manage" },
-  { to: "/admin/audit", label: "Audit log", permission: "audit:view" },
-];
-
-export function AdminLayout() {
-  const { can } = useAuth();
-  return (
-    <div className="grid gap-6 lg:grid-cols-[176px_1fr] lg:gap-10">
-      <aside className="min-w-0">
-        <nav
-          aria-label="Admin"
-          className="-mx-4 flex gap-5 overflow-x-auto border-b border-line px-4 sm:-mx-6 sm:px-6 lg:sticky lg:top-24 lg:mx-0 lg:flex-col lg:gap-0.5 lg:border-b-0 lg:px-0"
-        >
-          {ADMIN_LINKS.filter((l) => can(l.permission)).map((l) => (
-            <NavItem key={l.to} to={l.to} end={l.end} variant="side">
-              {l.label}
-            </NavItem>
-          ))}
-        </nav>
-      </aside>
-      <section className="min-w-0">
-        <Outlet />
-      </section>
     </div>
   );
 }

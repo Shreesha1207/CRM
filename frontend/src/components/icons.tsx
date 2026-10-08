@@ -89,6 +89,85 @@ export const ExternalLink = (p: IconProps) => (
   </Icon>
 );
 
+// Admin console sections.
+export const Grid = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3.5" y="3.5" width="5" height="5" rx="1" />
+    <rect x="11.5" y="3.5" width="5" height="5" rx="1" />
+    <rect x="3.5" y="11.5" width="5" height="5" rx="1" />
+    <rect x="11.5" y="11.5" width="5" height="5" rx="1" />
+  </Icon>
+);
+
+export const Calendar = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3" y="4.5" width="14" height="12" rx="2" />
+    <path d="M3 8.5h14M7 2.5v4M13 2.5v4" />
+  </Icon>
+);
+
+export const List = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M7.5 5.5h9M7.5 10h9M7.5 14.5h9M3.5 5.5h.01M3.5 10h.01M3.5 14.5h.01" />
+  </Icon>
+);
+
+export const Warning = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M10 3.5l7 12.5H3L10 3.5z" />
+    <path d="M10 8.5v3M10 14h.01" />
+  </Icon>
+);
+
+export const Person = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="10" cy="7" r="3" />
+    <path d="M4 16.5c1-3 3.3-4.5 6-4.5s5 1.5 6 4.5" />
+  </Icon>
+);
+
+export const People = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="7.5" cy="7" r="2.5" />
+    <path d="M2.5 16c.8-2.6 2.6-4 5-4s4.2 1.4 5 4M13 4.6a2.5 2.5 0 010 4.8M14.5 12.2c1.4.5 2.4 1.8 3 3.8" />
+  </Icon>
+);
+
+export const Tag = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3.5 3.5h6l7 7-6 6-7-7v-6z" />
+    <path d="M7 7h.01" />
+  </Icon>
+);
+
+export const Clock = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="10" cy="10" r="6.5" />
+    <path d="M10 6.5V10l2.5 1.5" />
+  </Icon>
+);
+
+export const Sliders = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 6h7M15 6h1M4 14h1M9 14h7" />
+    <circle cx="13" cy="6" r="2" />
+    <circle cx="7" cy="14" r="2" />
+  </Icon>
+);
+
+export const FileText = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M5.5 2.5h6l3.5 3.5v11.5h-9.5z" />
+    <path d="M11.5 2.5V6H15M8 10h4.5M8 13.5h4.5" />
+  </Icon>
+);
+
+export const SignOut = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M8 4.5H4.5v11H8M12 6.5l3.5 3.5-3.5 3.5M15.5 10H8" />
+  </Icon>
+);
+
 /** The app's mark: a calendar page with one slot taken. */
 export function Mark({ className = "h-5 w-5" }: IconProps) {
   return (

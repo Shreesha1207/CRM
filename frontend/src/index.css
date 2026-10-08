@@ -33,6 +33,16 @@
   --ok-text: #2c6538;
   --info-soft: #e3ecf5;
   --info-text: #28577f;
+
+  /* The admin console's sidebar is dark in both themes, so the back office
+     never looks like the customer site. */
+  --side: #1b1c19;
+  --side-line: #2e2f2a;
+  --side-hover: #262723;
+  --side-active: #31322d;
+  --side-fg: #ecebe5;
+  --side-muted: #a19e94;
+  --side-accent: #7cc4a6;
 }
 
 [data-theme="dark"] {
@@ -61,6 +71,11 @@
   --ok-text: #86c793;
   --info-soft: #172433;
   --info-text: #86b6e2;
+
+  --side: #0b0c0a;
+  --side-line: #23241f;
+  --side-hover: #171815;
+  --side-active: #22231f;
 }
 
 @theme inline {
@@ -86,6 +101,13 @@
   --color-ok-text: var(--ok-text);
   --color-info-soft: var(--info-soft);
   --color-info-text: var(--info-text);
+  --color-side: var(--side);
+  --color-side-line: var(--side-line);
+  --color-side-hover: var(--side-hover);
+  --color-side-active: var(--side-active);
+  --color-side-fg: var(--side-fg);
+  --color-side-muted: var(--side-muted);
+  --color-side-accent: var(--side-accent);
 }
 
 @layer base {
