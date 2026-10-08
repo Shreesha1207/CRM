@@ -172,6 +172,22 @@ class ResourceIn(BaseModel):
     location_id: uuid.UUID | None = None
     status: RecordStatus = RecordStatus.ACTIVE
 
+    @field_validator("metadata")
+    @classmethod
+    def _attributes_have_values(cls, metadata: dict[str, Any]) -> dict[str, Any]:
+        """Custom attributes need a name and a value: no blank entries."""
+        clean: dict[str, Any] = {}
+        for key, value in metadata.items():
+            name = key.strip()
+            if not name:
+                raise ValueError("Every custom attribute needs a name")
+            if name in clean:
+                raise ValueError(f"Custom attribute '{name}' is listed twice")
+            if value is None or value in ("", [], {}) or (isinstance(value, str) and not value.strip()):
+                raise ValueError(f"Custom attribute '{name}' needs a value")
+            clean[name] = value.strip() if isinstance(value, str) else value
+        return clean
+
 
 class ResourceOut(BaseModel):
     id: uuid.UUID

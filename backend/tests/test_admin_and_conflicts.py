@@ -289,3 +289,21 @@ def test_admin_user_management_guards(client, admin, admin_headers, user) -> Non
     assert suspended.json()["status"] == "SUSPENDED"
     login = client.post("/api/auth/login", json={"email": user.email, "password": "password123"})
     assert login.status_code == 403
+
+
+def test_custom_attributes_need_a_name_and_a_value(client, admin_headers) -> None:
+    def create(metadata):
+        return client.post("/api/admin/resources", headers=admin_headers, json={"name": "Room", "type": "ROOM", "metadata": metadata})
+
+    for metadata in ({"floor": ""}, {"floor": "   "}, {"floor": None}, {" ": "3"}, {"floor": 3, " floor": 4}):
+        r = create(metadata)
+        assert r.status_code == 422, metadata
+
+    r = create({" floor ": 3, "projector": True, "notes": " quiet "})
+    assert r.status_code == 201, r.text
+    resource = r.json()
+    assert resource["metadata"] == {"floor": 3, "projector": True, "notes": "quiet"}
+
+    # Editing can't blank one out either.
+    body = {"name": "Room", "type": "ROOM", "metadata": {"floor": ""}}
+    assert client.put(f"/api/admin/resources/{resource['id']}", headers=admin_headers, json=body).status_code == 422

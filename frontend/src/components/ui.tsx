@@ -125,7 +125,7 @@ export function Field({ label, hint, error, children }: { label: string; hint?: 
 }
 
 const inputClass =
-  "block h-9 rounded-md border border-line-strong bg-surface px-3 text-sm text-fg placeholder:text-faint focus:border-accent focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-0 disabled:bg-subtle disabled:text-muted";
+  "block h-9 rounded-md border border-line-strong bg-surface px-3 text-sm text-fg placeholder:text-faint focus:border-accent focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-0 disabled:bg-subtle disabled:text-muted aria-invalid:border-danger";
 
 /** Full width unless the caller sets its own width class. */
 function controlClass(extra?: string): string {

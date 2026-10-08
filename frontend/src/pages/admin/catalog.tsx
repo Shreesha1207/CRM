@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { api, errorMessage } from "../../api/client";
 import type { AvailabilityRule, Location, Offering, Resource, ResourceDetail, ScheduleChange, Service } from "../../api/types";
 import { RESOURCE_TYPES } from "../../api/types";
@@ -23,33 +23,81 @@ function toPairs(metadata: Record<string, unknown>): Pair[] {
 
 function fromPairs(pairs: Pair[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const { key, value } of pairs) {
-    if (!key.trim()) continue;
+  for (const pair of pairs) {
+    const key = pair.key.trim();
+    const value = pair.value.trim();
     // Numbers / booleans / JSON are kept typed; anything else is a string.
+    let parsed: unknown = value;
     try {
-      out[key.trim()] = JSON.parse(value);
+      parsed = JSON.parse(value);
     } catch {
-      out[key.trim()] = value;
+      // Plain text.
     }
+    // "null", "[]" and "{}" would read as no value at all, so they stay text.
+    const empty = parsed === null || (typeof parsed === "object" && Object.keys(parsed as object).length === 0);
+    out[key] = empty ? value : parsed;
   }
   return out;
 }
 
-function MetadataEditor({ pairs, onChange }: { pairs: Pair[]; onChange: (p: Pair[]) => void }) {
+/** Why an attribute can't be saved, if it can't: each needs a name and a value, and names are unique. */
+function attributeProblem(pair: Pair, pairs: Pair[]): string | null {
+  const key = pair.key.trim();
+  const value = pair.value.trim();
+  if (!key && !value) return "Enter a name and a value, or remove this attribute.";
+  if (!key) return "Enter a name for this attribute.";
+  if (!value) return `Enter a value for "${key}", or remove it.`;
+  if (pairs.filter((p) => p.key.trim() === key).length > 1) return `"${key}" is listed twice.`;
+  return null;
+}
+
+function MetadataEditor({ pairs, onChange, showProblems }: { pairs: Pair[]; onChange: (p: Pair[]) => void; showProblems: boolean }) {
+  const idPrefix = useId();
+  // One row at a time: finish (or remove) the open one before adding another.
+  const unfinished = pairs.some((p) => !p.key.trim() || !p.value.trim());
   return (
     <div className="space-y-2">
-      {pairs.map((p, i) => (
-        <div key={i} className="flex gap-2">
-          <Input placeholder="key (e.g. specialization)" value={p.key} onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
-          <Input placeholder="value (e.g. Strength, 8, true)" value={p.value} onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
-          <Button variant="ghost" onClick={() => onChange(pairs.filter((_, j) => j !== i))} aria-label="Remove">
-            <Close />
-          </Button>
-        </div>
-      ))}
-      <Button variant="secondary" size="sm" onClick={() => onChange([...pairs, { key: "", value: "" }])}>
-        Add attribute
-      </Button>
+      {pairs.map((p, i) => {
+        const problem = showProblems ? attributeProblem(p, pairs) : null;
+        const errorId = `${idPrefix}-${i}`;
+        const describedBy = problem ? errorId : undefined;
+        return (
+          <div key={i}>
+            <div className="flex gap-2">
+              <Input
+                aria-label="Attribute name"
+                placeholder="Name (e.g. specialization)"
+                value={p.key}
+                aria-invalid={!!problem && (!p.key.trim() || problem.endsWith("listed twice."))}
+                aria-describedby={describedBy}
+                onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))}
+              />
+              <Input
+                aria-label="Attribute value"
+                placeholder="Value (e.g. Strength, 8, true)"
+                value={p.value}
+                aria-invalid={!!problem && !p.value.trim()}
+                aria-describedby={describedBy}
+                onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+              />
+              <Button variant="ghost" onClick={() => onChange(pairs.filter((_, j) => j !== i))} aria-label="Remove attribute">
+                <Close />
+              </Button>
+            </div>
+            {problem && (
+              <p id={errorId} className="mt-1 text-xs text-danger-text">
+                {problem}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="secondary" size="sm" disabled={unfinished} onClick={() => onChange([...pairs, { key: "", value: "" }])}>
+          Add attribute
+        </Button>
+        {unfinished && !showProblems && <span className="text-xs text-muted">Give the attribute above a name and a value first.</span>}
+      </div>
     </div>
   );
 }
@@ -69,6 +117,7 @@ function ResourceDetailsForm({ resource, onSaved }: { resource: ResourceDetail |
     status: resource?.status ?? "ACTIVE",
   });
   const [pairs, setPairs] = useState<Pair[]>(toPairs(resource?.metadata ?? {}));
+  const [showAttributeProblems, setShowAttributeProblems] = useState(false);
   const body = () => ({
     ...form,
     description: strOrNull(form.description),
@@ -91,6 +140,10 @@ function ResourceDetailsForm({ resource, onSaved }: { resource: ResourceDetail |
       className="space-y-4"
       onSubmit={(e) => {
         e.preventDefault();
+        if (pairs.some((p) => attributeProblem(p, pairs))) {
+          setShowAttributeProblems(true);
+          return;
+        }
         if (resource) change.run((p) => api.put<ScheduleChange<ResourceDetail>>(`/api/admin/resources/${resource.id}`, body(), p));
         else create.mutate();
       }}
@@ -134,7 +187,7 @@ function ResourceDetailsForm({ resource, onSaved }: { resource: ResourceDetail |
       </Field>
       <div>
         <p className="mb-2 text-sm font-medium text-fg">Custom attributes</p>
-        <MetadataEditor pairs={pairs} onChange={setPairs} />
+        <MetadataEditor pairs={pairs} onChange={setPairs} showProblems={showAttributeProblems} />
       </div>
       <Button type="submit" loading={create.isPending || change.busy}>
         {resource ? "Save changes" : "Create resource"}
