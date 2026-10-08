@@ -2,6 +2,8 @@ import logging
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from google.auth.transport import requests
+from google.oauth2 import id_token
 from sqlalchemy import select, update
 
 from app.api.deps import ACCESS_COOKIE, CSRF_COOKIE, DB, CurrentUser, OptionalUser, rate_limit
@@ -31,9 +33,6 @@ from app.schemas import (
 )
 from app.services import audit
 from app.services.notifications import send_email
-
-from google.oauth2 import id_token
-from google.auth.transport import requests
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 log = logging.getLogger("auth")
@@ -130,24 +129,27 @@ def google_auth(body: GoogleAuthIn, request: Request, response: Response, db: DB
     try:
         idinfo = id_token.verify_oauth2_token(body.credential, requests.Request(), GOOGLE_CLIENT_ID)
     except ValueError:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid Google token")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid Google token") from None
     
     email = idinfo.get("email")
     name = idinfo.get("name", "Unknown Google User")
     if not email:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email not found in Google account")
-        
+    # The e-mail decides which account this is, so it must be one Google has verified.
+    if not idinfo.get("email_verified"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Verify this e-mail with Google first")
+
     user = db.scalar(select(User).where(User.email == email.lower()))
     if user:
         if user.status != UserStatus.ACTIVE:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "This account is not active")
     else:
-        role = body.role if body.role else Role.USER
+        # Like /register: new accounts are customers; an admin grants staff roles.
         user = User(
             name=name,
             email=email.lower(),
             password_hash=hash_password(new_token()), # Random dummy password
-            role=role,
+            role=Role.USER,
             status=UserStatus.ACTIVE,
         )
         db.add(user)

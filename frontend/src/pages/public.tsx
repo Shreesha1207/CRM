@@ -424,26 +424,15 @@ export function RegisterPage() {
   const { register, loginWithGoogle, user } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ name: "", email: "", phone: "", password: "" });
-  const [role, setRole] = useState("USER");
   const mutation = useMutation({ mutationFn: () => register({ ...form, phone: form.phone || undefined }), onSuccess: () => navigate("/dashboard") });
-  const googleMutation = useMutation({ mutationFn: (credential: string) => loginWithGoogle(credential, role), onSuccess: () => navigate(role === "ADMIN" ? "/admin" : "/dashboard") });
+  // New accounts are customers; an admin grants staff roles under Admin > Users.
+  const googleMutation = useMutation({ mutationFn: (credential: string) => loginWithGoogle(credential), onSuccess: () => navigate("/dashboard") });
   
   if (user) return <Navigate to="/dashboard" replace />;
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
   
   return (
     <AuthCard title="Create your account" footer={<>Already registered? <Link to="/login" className={linkClass}>Sign in</Link></>}>
-      <div className="mb-6 space-y-4">
-        <div className="flex gap-4">
-          <Button type="button" className="flex-1" variant={role === "USER" ? "primary" : "secondary"} onClick={() => setRole("USER")}>
-            Sign up for User
-          </Button>
-          <Button type="button" className="flex-1" variant={role === "ADMIN" ? "primary" : "secondary"} onClick={() => setRole("ADMIN")}>
-            Sign up for Admin
-          </Button>
-        </div>
-      </div>
-
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -456,7 +445,7 @@ export function RegisterPage() {
 
         <div className="flex justify-center">
           <GoogleLogin
-            text={role === "ADMIN" ? "signup_with" : "continue_with"}
+            text="continue_with"
             onSuccess={(credentialResponse) => {
               if (credentialResponse.credential) {
                 googleMutation.mutate(credentialResponse.credential);
@@ -490,7 +479,7 @@ export function RegisterPage() {
           <Input type="password" required minLength={8} autoComplete="new-password" value={form.password} onChange={set("password")} />
         </Field>
         <Button type="submit" className="w-full" loading={mutation.isPending || googleMutation.isPending}>
-          Create {role === "ADMIN" ? "admin " : ""}account
+          Create account
         </Button>
       </form>
     </AuthCard>

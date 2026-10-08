@@ -51,7 +51,6 @@ class LoginIn(BaseModel):
 
 class GoogleAuthIn(BaseModel):
     credential: str
-    role: Role | None = None
 
 
 class ForgotPasswordIn(BaseModel):

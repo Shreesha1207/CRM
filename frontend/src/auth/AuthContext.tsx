@@ -13,7 +13,7 @@ interface AuthState {
   can: (permission: string) => boolean;
   login: (email: string, password: string) => Promise<Me>;
   register: (data: { name: string; email: string; phone?: string; password: string }) => Promise<Me>;
-  loginWithGoogle: (credential: string, role?: string) => Promise<Me>;
+  loginWithGoogle: (credential: string) => Promise<Me>;
   logout: () => Promise<void>;
   refresh: () => Promise<unknown>;
 }
@@ -64,8 +64,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const loginWithGoogle = useCallback(
-    async (credential: string, role?: string) => {
-      const res = await api.post<{ user: Me }>("/api/auth/google", { credential, role });
+    async (credential: string) => {
+      const res = await api.post<{ user: Me }>("/api/auth/google", { credential });
       setUser(res.user);
       return res.user;
     },

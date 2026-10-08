@@ -165,3 +165,26 @@ def test_session_endpoint_is_anonymous_friendly(client, user) -> None:
     assert client.get("/api/auth/session").json() == {"user": None}
     headers = auth_headers(client, user.email)
     assert client.get("/api/auth/session", headers=headers).json()["user"]["email"] == user.email
+
+
+def google_says(monkeypatch, **claims) -> None:
+    """Stub Google's token check to return these claims."""
+    from app.api.routes import auth as auth_routes
+
+    claims = {"email": "gina@example.com", "name": "Gina", "email_verified": True, **claims}
+    monkeypatch.setattr(auth_routes.id_token, "verify_oauth2_token", lambda *args, **kwargs: claims)
+
+
+def test_google_sign_up_creates_a_customer_whatever_role_is_sent(client, monkeypatch) -> None:
+    google_says(monkeypatch)
+    r = client.post("/api/auth/google", json={"credential": "token", "role": "ADMIN"})
+    assert r.status_code == 200
+    assert r.json()["user"]["role"] == "USER"
+    assert client.get("/api/auth/me").json()["permissions"] == []
+
+
+def test_google_sign_in_needs_an_email_google_verified(client, admin, monkeypatch) -> None:
+    google_says(monkeypatch, email=admin.email, email_verified=False)
+    r = client.post("/api/auth/google", json={"credential": "token"})
+    assert r.status_code == 400
+    assert client.get("/api/auth/session").json()["user"] is None
