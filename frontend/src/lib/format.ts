@@ -6,15 +6,12 @@ export const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
 export const WEEKDAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export function formatDateTime(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    timeZone,
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(iso));
+  return `${formatDate(iso, timeZone)}, ${formatTime(iso, timeZone)}`;
+}
+
+/** A moment in the viewer's own timezone, e.g. when an audit entry was written. */
+export function formatStamp(iso: string): string {
+  return formatDateTime(iso, Intl.DateTimeFormat().resolvedOptions().timeZone);
 }
 
 export function formatDate(iso: string, timeZone: string): string {
@@ -27,8 +24,26 @@ export function formatDate(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
+const clocks = new Map<string, Intl.DateTimeFormat>();
+
+/** Times always read on a 12-hour clock with AM/PM ("9:30 AM"), whatever the browser's locale. */
 export function formatTime(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat(undefined, { timeZone, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+  let clock = clocks.get(timeZone);
+  if (!clock) {
+    clock = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", minute: "2-digit", hour12: true });
+    clocks.set(timeZone, clock);
+  }
+  // Newer ICU puts a narrow no-break space before AM/PM; keep one kind of space.
+  return clock.format(new Date(iso)).replace(/\u202f/g, " ");
+}
+
+/** A wall-clock time given as text ("14:30" or "14:30:00"), such as opening
+ * hours: "2:30 PM". `short` drops ":00" on the hour ("2 PM"), for axis labels. */
+export function formatClock(time: string, { short = false } = {}): string {
+  const [h, m] = time.split(":").map(Number);
+  const suffix = h < 12 ? "AM" : "PM";
+  const hour = h % 12 || 12;
+  return short && m === 0 ? `${hour} ${suffix}` : `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
 /** An end that falls on a later day (a booking past midnight) gets its own date. */
@@ -39,7 +54,7 @@ export function formatRange(startIso: string, endIso: string, timeZone: string):
   return `${formatDate(startIso, timeZone)} · ${formatTime(startIso, timeZone)} – ${end}`;
 }
 
-/** "Sat · 10:00 – 11:00", for rows that show the date separately. An end on a
+/** "Sat · 10:00 AM – 11:00 AM", for rows that show the date separately. An end on a
  * later day still gets its date. */
 export function formatDayTimes(startIso: string, endIso: string, timeZone: string): string {
   const weekday = new Intl.DateTimeFormat(undefined, { timeZone, weekday: "short" }).format(new Date(startIso));

@@ -5,7 +5,7 @@ import type { AvailabilityRule, Location, Offering, Resource, ResourceDetail, Sc
 import { RESOURCE_TYPES } from "../../api/types";
 import { useConfig } from "../../components/Layout";
 import { Close } from "../../components/icons";
-import { Alert, Badge, Button, Checkbox, EmptyState, Field, Input, Loading, MapLink, Modal, PageHeader, Select, StatusBadge, Table, Tabs, Td, Textarea } from "../../components/ui";
+import { Alert, Badge, Button, Checkbox, EmptyState, Field, Input, Loading, MapLink, Modal, PageHeader, Select, StatusBadge, Table, Tabs, Td, Textarea, TimeSelect } from "../../components/ui";
 import { WEEKDAYS, formatLengthRange, formatRate, hhmm, titleCase } from "../../lib/format";
 import { useCatalog } from "./bookings";
 import { useScheduleChange } from "./scheduleChange";
@@ -267,9 +267,9 @@ export function WeeklyRulesEditor<T extends { day_of_week: number; start_time: s
                 const update = (patch: Partial<T>) => onChange(rules.map((x, j) => (j === i ? { ...x, ...patch } : x)));
                 return (
                   <div key={i} className="flex flex-wrap items-center gap-2">
-                    <Input type="time" aria-label={`${day} start`} value={hhmm(r.start_time)} onChange={(e) => update({ start_time: e.target.value } as Partial<T>)} className="w-32" />
+                    <TimeSelect aria-label={`${day} start`} value={hhmm(r.start_time)} onChange={(v) => update({ start_time: v } as Partial<T>)} className="w-32" />
                     <span className="text-faint">–</span>
-                    <Input type="time" aria-label={`${day} end`} value={hhmm(r.end_time)} onChange={(e) => update({ end_time: e.target.value } as Partial<T>)} className="w-32" />
+                    <TimeSelect aria-label={`${day} end`} value={hhmm(r.end_time)} onChange={(v) => update({ end_time: v } as Partial<T>)} className="w-32" />
                     {extra?.(r, update)}
                     <Button variant="ghost" size="sm" onClick={() => onChange(rules.filter((_, j) => j !== i))} aria-label="Remove period">
                       <Close />

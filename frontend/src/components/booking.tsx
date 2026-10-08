@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { Alternative, Availability, Booking, Slot } from "../api/types";
-import { addDays, dayAndMonth, formatDateTime, formatDayTimes, formatMoney, formatRange, formatTime, longDate, titleCase } from "../lib/format";
+import { addDays, dayAndMonth, formatClock, formatDateTime, formatDayTimes, formatMoney, formatRange, formatTime, longDate, titleCase } from "../lib/format";
 import { ChevronLeft, ChevronRight } from "./icons";
 import { Alert, Input, Loading, StatusBadge, cx } from "./ui";
 
@@ -137,7 +137,7 @@ export function SlotPicker({
             return (
               <SlotButton
                 key={s.start}
-                label={s.start_time}
+                label={formatClock(s.start_time)}
                 sub={sub}
                 available={!current && (s.available || waitlistable(s))}
                 title={current ? "The booking's current time" : waitlistable(s) ? "This session is full: choose it to join the waitlist" : s.message}
@@ -163,7 +163,7 @@ export function SlotPicker({
         {slots.map((s) => (
           <SlotButton
             key={s.start}
-            label={s.start_time}
+            label={formatClock(s.start_time)}
             sub={s.available ? `${s.resource_ids.length} free` : "Taken"}
             available={s.available}
             selected={selected?.start === s.start}

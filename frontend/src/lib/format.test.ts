@@ -1,7 +1,7 @@
 // Unit tests for the booking length and price helpers: `npm test`.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { bookingPrice, formatDayTimes, formatDuration, formatLengthRange, formatRate, lengthOptions } from "./format.ts";
+import { bookingPrice, formatClock, formatDateTime, formatDayTimes, formatDuration, formatLengthRange, formatRate, formatTime, lengthOptions } from "./format.ts";
 
 describe("bookingPrice", () => {
   // Expected totals were computed with the server's formula (Decimal
@@ -84,11 +84,33 @@ describe("formatRate", () => {
 describe("formatDayTimes", () => {
   it("shows the weekday and times of a booking", () => {
     const text = formatDayTimes("2027-03-01T04:30:00Z", "2027-03-01T06:00:00Z", "Asia/Kolkata");
-    assert.match(text, /^Mon · 10:00( AM)? – 11:30( AM)?$/);
+    assert.equal(text, "Mon · 10:00 AM – 11:30 AM");
   });
 
   it("gives the end its own date when the booking runs past midnight", () => {
     const text = formatDayTimes("2027-03-01T23:30:00Z", "2027-03-02T00:30:00Z", "UTC");
-    assert.match(text, /^Mon · 11:30 PM – Tue, Mar 2, 2027 · 12:30 AM$|^Mon · 23:30 – .*2027.* · 00:30$/);
+    assert.equal(text, "Mon · 11:30 PM – Tue, Mar 2, 2027 · 12:30 AM");
   });
+});
+
+describe("12-hour times", () => {
+  it("shows a moment with AM/PM in the place's timezone", () => {
+    assert.equal(formatTime("2027-03-01T08:30:00Z", "Asia/Kolkata"), "2:00 PM");
+    assert.equal(formatTime("2027-03-01T00:05:00Z", "UTC"), "12:05 AM");
+    assert.equal(formatTime("2027-03-01T12:00:00Z", "UTC"), "12:00 PM");
+    assert.equal(formatDateTime("2027-03-01T13:45:00Z", "UTC"), "Mon, Mar 1, 2027, 1:45 PM");
+  });
+
+  for (const [time, expected, short] of [
+    ["00:00", "12:00 AM", "12 AM"],
+    ["09:30", "9:30 AM", "9:30 AM"],
+    ["12:00:00", "12:00 PM", "12 PM"],
+    ["13:05", "1:05 PM", "1:05 PM"],
+    ["23:59", "11:59 PM", "11:59 PM"],
+  ]) {
+    it(`reads "${time}" as ${expected}`, () => {
+      assert.equal(formatClock(time), expected);
+      assert.equal(formatClock(time, { short: true }), short);
+    });
+  }
 });

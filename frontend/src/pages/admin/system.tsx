@@ -5,7 +5,7 @@ import type { AuditLog, Page, Role, SettingDefinition, User, UserStatus } from "
 import { ROLES } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Button, Card, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td } from "../../components/ui";
-import { titleCase } from "../../lib/format";
+import { formatStamp, titleCase } from "../../lib/format";
 
 // ---------------------------------------------------------------- users
 
@@ -248,7 +248,7 @@ export function AdminAuditPage() {
           <Table head={["When", "Who", "Action", "Entity", "Details"]}>
             {logs.data?.items.map((l) => (
               <tr key={l.id}>
-                <Td className="whitespace-nowrap">{new Date(l.created_at).toLocaleString()}</Td>
+                <Td className="whitespace-nowrap">{formatStamp(l.created_at)}</Td>
                 <Td>{l.actor_name ?? "system"}</Td>
                 <Td className="font-medium">{titleCase(l.action)}</Td>
                 <Td>

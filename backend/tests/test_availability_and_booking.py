@@ -157,7 +157,14 @@ def test_booking_across_midnight(client, make, user_headers) -> None:
     assert r.json()["end_datetime"].startswith((MONDAY + timedelta(days=1)).isoformat())
     # Notifications and e-mails give the end its own date.
     [notification] = client.get("/api/notifications", headers=user_headers).json()
-    assert "Mon 01 Mar 2027, 23:30 – Tue 02 Mar 2027, 00:30 (UTC)" in notification["body"]
+    assert "Mon 01 Mar 2027, 11:30 PM – Tue 02 Mar 2027, 12:30 AM (UTC)" in notification["body"]
+
+
+def test_notifications_use_a_12_hour_clock(client, basic, user_headers) -> None:
+    service, resource = basic
+    assert book(client, user_headers, service, resource, at(MONDAY, 12, 30)).status_code == 201
+    [notification] = client.get("/api/notifications", headers=user_headers).json()
+    assert "Mon 01 Mar 2027, 12:30 PM – 1:30 PM (UTC)" in notification["body"]
 
 
 def test_inactive_resource_and_unoffered_service(client, make, basic, admin_headers, user_headers) -> None:

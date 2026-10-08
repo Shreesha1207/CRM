@@ -18,6 +18,7 @@ import {
   lengthOptions,
   titleCase,
   todayIn,
+  formatClock,
 } from "../lib/format";
 
 type Mode = "resource" | "time";
@@ -409,7 +410,7 @@ export function BookPage() {
               />
               {mode === "time" && picked && (
                 <div className="mt-5 border-t border-line pt-4">
-                  <p className="mb-2 text-sm font-medium text-fg">Free at {picked.slot?.start_time ?? formatDateTime(picked.start, picked.timezone)}:</p>
+                  <p className="mb-2 text-sm font-medium text-fg">Free at {picked.slot ? formatClock(picked.slot.start_time) : formatDateTime(picked.start, picked.timezone)}:</p>
                   <div className="flex flex-wrap gap-2">
                     {[{ resource_id: "", resource_name: "Any available" }, ...freeResources].map((r) => (
                       <button

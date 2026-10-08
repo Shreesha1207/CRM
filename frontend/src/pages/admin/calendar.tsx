@@ -20,6 +20,7 @@ import {
   todayIn,
   weekdayIndex,
   zonedParts,
+  formatClock,
 } from "../../lib/format";
 import { AdminBookingModal, useCatalog } from "./bookings";
 
@@ -137,7 +138,7 @@ function Timeline({
         <div className="relative" style={{ height: hours.length * HOUR_PX }}>
           {hours.map((h, i) => (
             <div key={h} className={cx("tabular absolute right-2 text-[11px] text-faint", i > 0 && "-translate-y-2")} style={{ top: i * HOUR_PX }}>
-              {String(h).padStart(2, "0")}:00
+              {formatClock(`${h}:00`, { short: true })}
             </div>
           ))}
         </div>

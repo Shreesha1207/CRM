@@ -2,7 +2,7 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAt
 import { Children, cloneElement, isValidElement, useEffect, useId } from "react";
 import { Link } from "react-router-dom";
 import type { BookingStatus } from "../api/types";
-import { titleCase } from "../lib/format";
+import { formatClock, titleCase } from "../lib/format";
 import { ArrowLeft, Close, MapPin } from "./icons";
 
 export function cx(...classes: (string | false | null | undefined)[]): string {
@@ -145,6 +145,33 @@ export function Select({ children, ...props }: SelectHTMLAttributes<HTMLSelectEl
     <select {...props} className={cx(controlClass(props.className), "pr-8")}>
       {children}
     </select>
+  );
+}
+
+/**
+ * A time of day shown on a 12-hour clock ("2:30 PM"); the value stays
+ * "HH:MM" for the API. The browser's own time input follows the computer's
+ * regional setting and may show a 24-hour clock, so it isn't used.
+ */
+export function TimeSelect({
+  value,
+  onChange,
+  step = 15,
+  ...props
+}: { value: string; onChange: (value: string) => void; step?: number } & Omit<SelectHTMLAttributes<HTMLSelectElement>, "value" | "onChange">) {
+  const current = value.slice(0, 5);
+  const times: string[] = [];
+  for (let m = 0; m < 24 * 60; m += step) times.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+  // Keep a saved time that is off the steps (say 09:10) selectable.
+  if (current && !times.includes(current)) times.push(current), times.sort();
+  return (
+    <Select {...props} value={current} onChange={(e) => onChange(e.target.value)}>
+      {times.map((t) => (
+        <option key={t} value={t}>
+          {formatClock(t)}
+        </option>
+      ))}
+    </Select>
   );
 }
 

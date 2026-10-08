@@ -7,9 +7,9 @@ import { BOOKING_STATUSES } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { BookingSummary, DateNav, SlotPicker, type PickedSlot } from "../../components/booking";
 import { useConfig } from "../../components/Layout";
-import { Alert, Button, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td, Textarea } from "../../components/ui";
+import { Alert, Button, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td, Textarea, TimeSelect } from "../../components/ui";
 import { CancelModal, RescheduleModal } from "../account";
-import { formatDateTime, formatDuration, formatMoney, formatTime, lengthOptions, sameDay, titleCase, todayIn } from "../../lib/format";
+import { formatDateTime, formatDuration, formatStamp, formatMoney, formatTime, lengthOptions, sameDay, titleCase, todayIn } from "../../lib/format";
 
 export function useCatalog() {
   const resources = useQuery({ queryKey: ["admin", "resources"], queryFn: () => api.get<Resource[]>("/api/admin/resources") });
@@ -26,7 +26,7 @@ function History({ bookingId }: { bookingId: string }) {
       {history.data?.map((h) => (
         <li key={h.id}>
           <span className="font-medium">{titleCase(h.action)}</span>
-          <span className="text-muted"> · {h.actor_name ?? "system"} · {new Date(h.created_at).toLocaleString()}</span>
+          <span className="text-muted"> · {h.actor_name ?? "system"} · {formatStamp(h.created_at)}</span>
           {h.new_value?.reason ? <div className="text-xs text-muted">{String(h.new_value.reason)}</div> : null}
         </li>
       ))}
@@ -289,7 +289,7 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
             <Checkbox label="Override booking rules (outside hours, notice, blocks — audited; clashes are still prevented)" checked={override} onChange={(e) => setOverride(e.target.checked)} />
             {override ? (
               <Field label="Start time (resource's local time)">
-                <Input type="time" value={manualTime} onChange={(e) => setManualTime(e.target.value)} className="w-40" />
+                <TimeSelect step={5} value={manualTime} onChange={setManualTime} className="w-40" />
               </Field>
             ) : (
               <SlotPicker

@@ -9,7 +9,7 @@ import { useAuth } from "../auth/AuthContext";
 import { useConfig } from "../components/Layout";
 import { ChevronRight, Mark } from "../components/icons";
 import { Alert, BackLink, Badge, Button, Card, EmptyState, Field, Input, Loading, MapLink, PageHeader, Select, buttonClass, linkClass } from "../components/ui";
-import { WEEKDAYS, formatLengthRange, formatRate, hhmm, titleCase } from "../lib/format";
+import { WEEKDAYS, formatClock, formatLengthRange, formatRate, titleCase } from "../lib/format";
 import { GoogleLogin } from "@react-oauth/google";
 
 export function HomePage() {
@@ -327,7 +327,7 @@ export function ResourceDetailPage() {
                   <li key={d} className="flex justify-between gap-4">
                     <span className="text-muted">{WEEKDAYS[d]}</span>
                     <span className="tabular text-right text-fg">
-                      {rules.length === 0 ? <span className="text-faint">Unavailable</span> : rules.map((x) => `${hhmm(x.start_time)}–${hhmm(x.end_time)}`).join(", ")}
+                      {rules.length === 0 ? <span className="text-faint">Unavailable</span> : rules.map((x) => `${formatClock(x.start_time)} – ${formatClock(x.end_time)}`).join(", ")}
                     </span>
                   </li>
                 ))}

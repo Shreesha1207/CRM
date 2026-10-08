@@ -35,14 +35,19 @@ log = logging.getLogger("notifications")
 DEFAULT_CHANNELS = (NotificationChannel.IN_APP, NotificationChannel.EMAIL)
 
 
+def _clock(moment: datetime) -> str:
+    """12-hour time with AM/PM, as everywhere in the app: "9:30 AM"."""
+    return f"{moment.hour % 12 or 12}:{moment:%M} {'AM' if moment.hour < 12 else 'PM'}"
+
+
 def _when(db: Session, booking: Booking) -> str:
     rules = settings_service.get_rules(db)
     tz = resource_timezone(booking.primary_resource, rules)
     start = booking.start_datetime.astimezone(tz)
     end = booking.end_datetime.astimezone(tz)
     if end.date() != start.date():  # past midnight: the end gets its own date
-        return f"{start:%a %d %b %Y, %H:%M} – {end:%a %d %b %Y, %H:%M} ({tz.key})"
-    return f"{start:%a %d %b %Y, %H:%M}–{end:%H:%M} ({tz.key})"
+        return f"{start:%a %d %b %Y}, {_clock(start)} – {end:%a %d %b %Y}, {_clock(end)} ({tz.key})"
+    return f"{start:%a %d %b %Y}, {_clock(start)} – {_clock(end)} ({tz.key})"
 
 
 def notify(
