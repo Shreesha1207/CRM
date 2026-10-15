@@ -108,6 +108,8 @@ class InvitationStatus(StrEnum):
     DECLINED = "DECLINED"
     # The customer registered, but the time was no longer free.
     FAILED = "FAILED"
+    # Replaced by a newer invitation (the booking was moved), so its link is dead.
+    WITHDRAWN = "WITHDRAWN"
 
 
 class RecurrenceFrequency(StrEnum):

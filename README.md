@@ -84,11 +84,20 @@ When an admin books for a customer:
 
 - **who already has an account** is booked straight away and gets a booking confirmation e-mail (it says who booked it for them);
 - **with a new e-mail address** is booked straight away too, as *pending*, so the time is held and shows on the calendar. The person is e-mailed a link to create their account and confirm it, which also sends their confirmation e-mail. If they decline, the booking is cancelled and comes off the calendar. If they never answer, it stays pending; the link works for `INVITATION_TTL_DAYS` days (default 7).
+  Only the customer can confirm such a booking: the admin sees *Awaiting customer* with a **Resend invitation** button instead of Confirm. If the admin reschedules it, the old time is cancelled, the old link stops working and the customer is e-mailed a new link for the new time (to the admin it stays awaiting the customer). If an invitation expires, the booking stays pending: resend the invitation, reschedule it, or cancel it.
+
+Booking e-mails (confirmed, moved, cancelled, reminders) are HTML with a plain-text version and say what was booked, when (with the time zone), where (with a Google Maps link), who booked it, and a link to the booking. Confirmed and moved bookings also carry a calendar invitation (`booking.ics`, plus a *Add to Google Calendar* button) that works in Gmail, Outlook and Apple Calendar:
+
+- the first confirmation adds the booking to the customer's calendar;
+- if the booking is rescheduled or reassigned, the customer gets a "Booking moved" e-mail showing the new and the old time, and the same calendar entry is updated, so the old time disappears;
+- if it is cancelled, a cancellation is sent that removes the entry.
+
+A moved booking is a new booking row internally; all rows of one reschedule chain share the calendar entry's id (the first booking's id) and each move raises its revision.
 
 ### Tests
 
 ```bash
-cd backend && pytest            # 137 tests, against a real PostgreSQL database
+cd backend && pytest            # 158 tests, against a real PostgreSQL database
 cd frontend && npm test         # unit tests for prices and booking lengths
 cd frontend && npm run build    # type-check + production build
 ```

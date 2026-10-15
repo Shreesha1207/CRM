@@ -29,10 +29,11 @@ from sqlalchemy.orm import Session
 from app.core.errors import BookingRejected, Forbidden, NotFound
 from app.core.permissions import Permission, has_permission
 from app.core.timeutils import ensure_aware, localize, utcnow
-from app.models import Booking, BookingResource, RecurringSeries, Resource, Service, User
+from app.models import Booking, BookingInvitation, BookingResource, RecurringSeries, Resource, Service, User
 from app.models.enums import (
     BookingStatus,
     BookingType,
+    InvitationStatus,
     RecordStatus,
     RecurrenceFrequency,
     UserStatus,
@@ -659,6 +660,7 @@ class BookingEngine:
             status=new_status,
             rescheduled_from_id=booking.id,
             series_id=booking.recurring_series_id,
+            hold=released,  # what held its time before still does, e.g. a booking waiting for its customer
         )
         self._flush()
 
@@ -686,6 +688,7 @@ class BookingEngine:
             booking=replacement,
             previous=booking,
             resource_changed=target.id != old_resource.id,
+            actor_id=self.actor.id,
         )
         if released and service.booking_type == BookingType.CAPACITY:
             self._promote_waitlist(old_resource, service, old_start)
@@ -711,8 +714,19 @@ class BookingEngine:
         if not self.can_manage:
             raise Forbidden()
 
-    def confirm(self, booking_id: uuid.UUID) -> Booking:
+    def confirm(self, booking_id: uuid.UUID, *, customer_accepted: bool = False) -> Booking:
         self._require_manage()
+        waiting = self.db.scalar(
+            select(BookingInvitation.id).where(
+                BookingInvitation.booking_id == booking_id, BookingInvitation.status == InvitationStatus.PENDING
+            )
+        )
+        if waiting is not None and not customer_accepted:
+            raise BookingRejected(
+                "AWAITING_CUSTOMER",
+                "This booking is waiting for the customer to confirm it. Resend the invitation if they need the link again",
+                status_code=409,
+            )
         booking = self._locked(self.get_visible_booking(booking_id))
         old = booking.status
         if booking.status == S.WAITLISTED:

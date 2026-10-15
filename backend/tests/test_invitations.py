@@ -353,3 +353,149 @@ def test_an_admin_cannot_hand_out_the_invited_status(client, db, basic, admin_he
     assert client.put(f"/api/admin/users/{ok['id']}", headers=admin_headers, json={"status": "INVITED"}).status_code == 422
     made = client.post("/api/admin/users", headers=admin_headers, json={"name": "B", "email": "b@example.com", "password": "password123", "status": "INVITED"})
     assert made.status_code == 422
+
+
+# ------------------------------------------------------------------ a booking waiting for its customer is moved
+
+
+def tokens(caplog) -> list[str]:
+    return re.findall(r"/invitation\?token=(\S+)", caplog.text)
+
+
+def test_moving_a_booking_that_waits_for_its_customer_sends_them_a_new_link(client, db, basic, admin_headers, user_headers, caplog) -> None:
+    service, resource = basic
+    with caplog.at_level(logging.INFO, logger="notifications"):
+        invite(client, admin_headers, service, resource, start=at(MONDAY, 10))
+        old_token = tokens(caplog)[0]
+        old_booking = db.scalar(select(Booking))
+        moved = client.post(f"/api/admin/bookings/{old_booking.id}/reschedule", headers=admin_headers, json={"start": at(MONDAY, 14)})
+    assert moved.status_code == 200, moved.text
+    new = moved.json()
+
+    # Still waiting for the customer, so the admin has nothing to confirm; the old time is off the calendar.
+    assert new["status"] == "PENDING" and new["awaiting_customer"] is True
+    db.expire_all()
+    assert db.get(Booking, old_booking.id).status == BookingStatus.RESCHEDULED
+    assert on_calendar(client, admin_headers) == [new["id"]]
+    # The customer was sent a new link for the new time, and the old one is dead.
+    links = tokens(caplog)
+    assert len(links) == 2 and links[1] != old_token
+    assert "has moved your booking" in caplog.text and "Was:" in caplog.text
+    assert "2:00 PM" in client.get(f"/api/invitations/{links[1]}").json()["when"]
+    assert client.get(f"/api/invitations/{old_token}").json()["status"] == "WITHDRAWN"
+    old_answer = client.post(f"/api/invitations/{old_token}/accept", json={"name": "G", "password": "password123"})
+    assert old_answer.status_code == 410 and "newer" in old_answer.json()["detail"]
+    # The new time is held for them and the old one is free again.
+    assert book_slot(client, user_headers, service, resource, at(MONDAY, 14)).status_code == 409
+    assert book_slot(client, user_headers, service, resource, at(MONDAY, 10)).status_code == 201
+
+    accepted = client.post(f"/api/invitations/{links[1]}/accept", json={"name": "Gus Guest", "password": "password123"})
+    assert accepted.status_code == 200 and accepted.json()["booking_id"] == new["id"]
+    assert db.get(Booking, new["id"]).status == BookingStatus.CONFIRMED
+    assert db.scalar(select(User.status).where(User.email == GUEST)) == UserStatus.ACTIVE
+
+
+def test_the_held_time_survives_a_move_even_if_pending_bookings_normally_hold_nothing(client, db, basic, admin_headers, user_headers) -> None:
+    service, resource = basic
+    client.put("/api/admin/settings", headers=admin_headers, json={"values": {"pending_consumes_capacity": False}})
+    invite(client, admin_headers, service, resource, start=at(MONDAY, 10))
+    booking_id = db.scalar(select(Booking.id))
+    assert client.post(f"/api/admin/bookings/{booking_id}/reschedule", headers=admin_headers, json={"start": at(MONDAY, 14)}).status_code == 200
+    assert book_slot(client, user_headers, service, resource, at(MONDAY, 14)).status_code == 409
+
+
+def test_the_admin_cannot_confirm_for_a_customer_who_has_not_answered(client, db, basic, admin_headers, caplog) -> None:
+    service, resource = basic
+    with caplog.at_level(logging.INFO, logger="notifications"):
+        invite(client, admin_headers, service, resource)
+    booking_id = db.scalar(select(Booking.id))
+
+    refused = client.post(f"/api/admin/bookings/{booking_id}/confirm", headers=admin_headers)
+    assert refused.status_code == 409 and refused.json()["code"] == "AWAITING_CUSTOMER"
+    assert db.scalar(select(Booking.status)) == BookingStatus.PENDING
+    assert [b["awaiting_customer"] for b in client.get("/api/admin/bookings", headers=admin_headers).json()["items"]] == [True]
+
+    client.post(f"/api/invitations/{tokens(caplog)[0]}/accept", json={"name": "Gus Guest", "password": "password123"})
+    one = client.get(f"/api/admin/bookings/{booking_id}", headers=admin_headers).json()
+    assert one["status"] == "CONFIRMED" and one["awaiting_customer"] is False
+
+
+def test_changing_the_resource_also_goes_back_to_the_customer(client, db, make, basic, admin_headers, caplog) -> None:
+    from datetime import time
+
+    service, resource = basic
+    other = make.resource("Resource B", services=[service], hours=make.weekdays(time(9), time(17)))
+    with caplog.at_level(logging.INFO, logger="notifications"):
+        invite(client, admin_headers, service, resource)
+        booking_id = db.scalar(select(Booking.id))
+        r = client.post(f"/api/admin/bookings/{booking_id}/reassign", headers=admin_headers, json={"resource_id": str(other.id)})
+    assert r.status_code == 200, r.text
+    assert r.json()["resource"]["name"] == "Resource B" and r.json()["awaiting_customer"] is True
+    assert len(tokens(caplog)) == 2 and "Resource B" in caplog.text
+    assert [i.status for i in db.scalars(select(BookingInvitation).order_by(BookingInvitation.created_at))] == [
+        InvitationStatus.WITHDRAWN, InvitationStatus.PENDING,
+    ]
+
+
+def test_if_the_new_link_cannot_be_sent_the_move_stands_and_the_admin_can_resend(client, db, basic, admin_headers, caplog, monkeypatch) -> None:
+    service, resource = basic
+    with caplog.at_level(logging.INFO, logger="notifications"):
+        invite(client, admin_headers, service, resource, start=at(MONDAY, 10))
+    booking_id = db.scalar(select(Booking.id))
+
+    def broken(*args, **kwargs):
+        raise OSError("mail server down")
+
+    monkeypatch.setattr("app.services.invitations.send_email", broken)
+    moved = client.post(f"/api/admin/bookings/{booking_id}/reschedule", headers=admin_headers, json={"start": at(MONDAY, 14)})
+    assert moved.status_code == 502 and moved.json()["code"] == "EMAIL_FAILED" and "Resend invitation" in moved.json()["detail"]
+    db.expire_all()
+    waiting = db.scalars(select(Booking).where(Booking.status == BookingStatus.PENDING)).one()
+    assert waiting.start_datetime.hour == 14  # the booking did move
+    # The e-mail comes back: resending reaches the customer.
+    monkeypatch.undo()
+    with caplog.at_level(logging.INFO, logger="notifications"):
+        caplog.clear()
+        assert client.post(f"/api/admin/bookings/{waiting.id}/resend-invitation", headers=admin_headers).status_code == 200
+    assert len(tokens(caplog)) == 1
+
+
+def test_resending_gives_a_fresh_link_and_the_old_one_stops_working(client, db, basic, admin_headers, caplog) -> None:
+    service, resource = basic
+    with caplog.at_level(logging.INFO, logger="notifications"):
+        invite(client, admin_headers, service, resource)
+    old = tokens(caplog)[0]
+    booking_id = db.scalar(select(Booking.id))
+    # Even once the link has run out, a new one can be sent.
+    db.execute(BookingInvitation.__table__.update().values(expires_at=BookingInvitation.created_at))
+    db.commit()
+    assert client.get(f"/api/invitations/{old}").json()["status"] == "EXPIRED"
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="notifications"):
+        resent = client.post(f"/api/admin/bookings/{booking_id}/resend-invitation", headers=admin_headers)
+    assert resent.status_code == 200, resent.text
+    fresh = tokens(caplog)[0]
+    assert fresh != old and client.get(f"/api/invitations/{old}").status_code == 404
+    assert client.get(f"/api/invitations/{fresh}").json()["status"] == "PENDING"
+    assert client.post(f"/api/invitations/{fresh}/accept", json={"name": "Gus Guest", "password": "password123"}).status_code == 200
+    # Nothing left to resend once they answered, and it needs the right permission.
+    again = client.post(f"/api/admin/bookings/{booking_id}/resend-invitation", headers=admin_headers)
+    assert again.status_code == 409 and again.json()["code"] == "NOT_AWAITING_CUSTOMER"
+
+
+def test_only_staff_can_resend(client, db, basic, admin_headers, user_headers) -> None:
+    service, resource = basic
+    invite(client, admin_headers, service, resource)
+    booking_id = db.scalar(select(Booking.id))
+    assert client.post(f"/api/admin/bookings/{booking_id}/resend-invitation", headers=user_headers).status_code == 403
+
+
+def test_an_ordinary_pending_booking_can_still_be_moved_and_confirmed_by_the_admin(client, db, basic, user, admin_headers, user_headers) -> None:
+    service, resource = basic
+    client.put("/api/admin/settings", headers=admin_headers, json={"values": {"require_admin_confirmation": True}})
+    booking = book_slot(client, user_headers, service, resource, at(MONDAY, 10)).json()
+    moved = client.post(f"/api/admin/bookings/{booking['id']}/reschedule", headers=admin_headers, json={"start": at(MONDAY, 14)})
+    assert moved.status_code == 200 and moved.json()["awaiting_customer"] is False
+    assert client.post(f"/api/admin/bookings/{moved.json()['id']}/confirm", headers=admin_headers).status_code == 200
+    assert db.scalars(select(BookingInvitation)).all() == []

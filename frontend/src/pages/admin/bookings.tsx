@@ -102,6 +102,11 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
     mutationFn: () => api.put<Booking>(`/api/admin/bookings/${b.id}`, { notes }),
     onSuccess: () => queryClient.invalidateQueries(),
   });
+  // A booking made for someone who has not accepted yet: the admin can only send the link again.
+  const resend = useMutation({
+    mutationFn: () => api.post<Invitation>(`/api/admin/bookings/${b.id}/resend-invitation`),
+    onSuccess: () => queryClient.invalidateQueries(),
+  });
   const manage = can("bookings:manage");
   const open = ["PENDING", "CONFIRMED", "CONFLICTED"].includes(b.status);
   const started = new Date(b.start_datetime) <= new Date();
@@ -120,9 +125,22 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
           </div>
           {b.conflict_reason && <Alert tone="warning">Conflict: {b.conflict_reason}</Alert>}
           {action.error && <Alert>{errorMessage(action.error)}</Alert>}
+          {b.awaiting_customer && (
+            <Alert tone="info">
+              Waiting for {b.user.email} to confirm. They were e-mailed a link; only they can confirm it, and if they decline it is cancelled. If you
+              move it, they get a new link for the new time.
+            </Alert>
+          )}
+          {resend.error && <Alert>{errorMessage(resend.error)}</Alert>}
+          {resend.isSuccess && <Alert tone="success">A new link was sent to {b.user.email}. The old one no longer works.</Alert>}
           {manage && (
             <div className="flex flex-wrap gap-2">
-              {b.status === "PENDING" && <Button size="sm" onClick={() => action.mutate("confirm")}>Confirm</Button>}
+              {b.status === "PENDING" && !b.awaiting_customer && <Button size="sm" onClick={() => action.mutate("confirm")}>Confirm</Button>}
+              {b.awaiting_customer && (
+                <Button size="sm" variant="secondary" loading={resend.isPending} onClick={() => resend.mutate()}>
+                  Resend invitation
+                </Button>
+              )}
               {b.status === "CONFIRMED" && started && (
                 <>
                   <Button size="sm" onClick={() => action.mutate("complete")}>Mark completed</Button>
@@ -581,7 +599,7 @@ export function AdminBookingsPage() {
                 </Td>
                 <Td>{b.resource.name}</Td>
                 <Td>
-                  <StatusBadge status={b.status} />
+                  <StatusBadge status={b.awaiting_customer ? "AWAITING_CUSTOMER" : b.status} />
                 </Td>
                 <Td className="text-right">
                   <Button size="sm" variant="secondary" onClick={() => setSelected(b)}>

@@ -47,7 +47,10 @@ def _state(invitation: BookingInvitation) -> str:
 def _require_open(invitation: BookingInvitation) -> None:
     state = _state(invitation)
     if state != "PENDING":
-        message = "This invitation has expired" if state == "EXPIRED" else "This invitation has already been answered"
+        message = {
+            "EXPIRED": "This invitation has expired",
+            "WITHDRAWN": "This invitation was replaced by a newer one because the booking changed: use the link in the latest e-mail",
+        }.get(state, "This invitation has already been answered")
         raise AppError("INVITATION_CLOSED", message, status_code=status.HTTP_410_GONE)
 
 
@@ -153,7 +156,7 @@ def accept_invitation(
             if booking is None or booking.status == BookingStatus.CANCELLED:
                 raise BookingRejected("BOOKING_CANCELLED", "This booking was cancelled", status_code=409)
             if booking.status == BookingStatus.PENDING:
-                engine.confirm(booking.id)  # sends the customer their confirmation
+                engine.confirm(booking.id, customer_accepted=True)  # sends the customer their confirmation
         else:
             booking = create_with_auto_assign(
                 engine, invitations.request_of(invitation), user_id=user.id,

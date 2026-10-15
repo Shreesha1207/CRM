@@ -579,6 +579,8 @@ class BookingOut(BaseModel):
     waitlist_position: int | None
     can_cancel: bool
     can_reschedule: bool
+    # Made for a customer who has not confirmed it yet: only they can, the admin cannot.
+    awaiting_customer: bool = False
 
 
 class RecurringCreatedOut(BaseModel):

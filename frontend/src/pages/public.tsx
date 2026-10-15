@@ -545,7 +545,12 @@ export function InvitationPage() {
       </div>
     );
   } else if (d.status !== "PENDING") {
-    const why = { EXPIRED: "This invitation has expired.", DECLINED: "You declined this invitation.", ACCEPTED: "This invitation was accepted." }[d.status];
+    const why = {
+      EXPIRED: "This invitation has expired.",
+      DECLINED: "You declined this invitation.",
+      ACCEPTED: "This invitation was accepted.",
+      WITHDRAWN: "This invitation was replaced by a newer one because the booking changed. Please use the link in the latest e-mail.",
+    }[d.status];
     body = <Alert tone="info">{why ?? "This invitation can no longer be used."}</Alert>;
   } else {
     const signedInAsInvitee = user?.email === d.email;

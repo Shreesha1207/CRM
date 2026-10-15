@@ -221,6 +221,8 @@ export interface Booking {
   waitlist_position: number | null;
   can_cancel: boolean;
   can_reschedule: boolean;
+  /** Made for a customer who has not confirmed it yet: only they can, the admin cannot. */
+  awaiting_customer: boolean;
 }
 
 export interface Occurrence {

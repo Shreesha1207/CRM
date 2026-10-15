@@ -6,23 +6,35 @@ booking; declining cancels it, which takes it off the calendar. If the invitee
 never answers, it stays as it is. The admin who sent the invitation is told how
 it was answered.
 
+If an admin moves a booking that is still waiting for its customer, the old
+time is cancelled and the customer gets a new link for the new time: only they
+can confirm it, never the admin.
+
 Invitations made before bookings were held (no booking_id) still work the old
 way: the booking is only made when the invitee accepts.
 """
 
+import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.errors import AppError
+from app.core.security import hash_token, new_token
 from app.core.timeutils import get_zone, utcnow
 from app.models import Booking, BookingInvitation, Resource, Service, User
 from app.models.enums import InvitationStatus, NotificationType
 from app.schemas import BookingCreateIn
-from app.services import settings_service
+from app.services import audit, events, settings_service
 from app.services.availability import resource_timezone
 from app.services.booking_engine import BookingEngine
 from app.services.notifications import _clock, notify, send_email
+
+log = logging.getLogger("bookings")
+# Links to send once the request that made them has committed (kept on the database session).
+MAIL_QUEUE = "invitation_emails"
 
 
 def expiry() -> datetime:
@@ -38,18 +50,20 @@ def describe(db: Session, invitation: BookingInvitation) -> dict[str, str | None
 
     Read from the booking itself when there is one, so a time an admin changed
     afterwards is what the customer sees."""
-    rules = settings_service.get_rules(db)
     booking = db.get(Booking, invitation.booking_id) if invitation.booking_id else None
     if booking is not None:
-        service, resource = booking.service, booking.primary_resource
-        zone = resource_timezone(resource, rules)
-        start = booking.start_datetime.astimezone(zone)
-    else:
-        body = request_of(invitation)
-        service = db.get(Service, body.service_id)
-        resource = db.get(Resource, body.resource_id) if body.resource_id else None
-        zone = resource_timezone(resource, rules) if resource else get_zone(rules.default_timezone)
-        start = body.start.astimezone(zone) if body.start.tzinfo else body.start
+        return {
+            "service_name": booking.service.name,
+            "resource_name": booking.primary_resource.name,
+            "when": booking_when(db, booking),
+        }
+    # An invitation from before bookings were held: only the request exists.
+    rules = settings_service.get_rules(db)
+    body = request_of(invitation)
+    service = db.get(Service, body.service_id)
+    resource = db.get(Resource, body.resource_id) if body.resource_id else None
+    zone = resource_timezone(resource, rules) if resource else get_zone(rules.default_timezone)
+    start = body.start.astimezone(zone) if body.start.tzinfo else body.start
     when = f"{start:%a %d %b %Y}, {_clock(start)}"
     return {
         "service_name": service.name if service else "a service",
@@ -58,25 +72,40 @@ def describe(db: Session, invitation: BookingInvitation) -> dict[str, str | None
     }
 
 
+def booking_when(db: Session, booking: Booking) -> str:
+    """"Fri 16 Oct 2026, 2:00 PM (Asia/Kolkata)" for a booking's start."""
+    zone = resource_timezone(booking.primary_resource, settings_service.get_rules(db))
+    start = booking.start_datetime.astimezone(zone)
+    return f"{start:%a %d %b %Y}, {_clock(start)} ({zone.key})"
+
+
 def link(token: str) -> str:
     return f"{get_settings().frontend_url}/invitation?token={token}"
 
 
-def send_invitation(db: Session, invitation: BookingInvitation, inviter: User, token: str) -> None:
+def send_invitation(db: Session, invitation: BookingInvitation, inviter: User, token: str, was: str | None = None) -> None:
+    """E-mail the link. `was` is the time the booking had before, when it has just been moved."""
     details = describe(db, invitation)
     held = invitation.booking_id is not None
+    action = "has moved your booking. It is now" if was else ("has booked" if held else "asked to book")
     lines = [
-        f"Hi,\n\n{inviter.name} has {'booked' if held else 'asked to book'} the following for you:\n",
+        f"Hi,\n\n{inviter.name} {action if was else action + ' the following for you'}:\n",
         f"  Service: {details['service_name']}",
         f"  With: {details['resource_name'] or 'the first available'}",
         f"  When: {details['when']}",
+        *([f"  Was: {was}"] if was else []),
         ("\nIt is on the calendar for you now. " if held else "\n")
         + "You don't have an account yet. Create one to confirm the booking, or decline it, here "
         f"(valid until {invitation.expires_at:%a %d %b %Y}):",
         link(token),
         "\nIf this is not for you, please decline it" + (" so the time is released." if held else " or ignore this e-mail."),
     ]
-    subject = f"{inviter.name} has booked {details['service_name']} for you" if held else f"{inviter.name} would like to book {details['service_name']} for you"
+    if was:
+        subject = f"{inviter.name} has moved {details['service_name']}: please confirm the new time"
+    elif held:
+        subject = f"{inviter.name} has booked {details['service_name']} for you"
+    else:
+        subject = f"{inviter.name} would like to book {details['service_name']} for you"
     send_email(invitation.email, subject, "\n".join(lines))
 
 
@@ -92,6 +121,97 @@ def withdraw(db: Session, invitation: BookingInvitation, actor: User, reason: st
     invitation.responded_at = utcnow()
     invitation.failure_reason = reason
     db.commit()
+
+
+def _on_rescheduled(db: Session, event: events.DomainEvent) -> None:
+    """A booking that waits for its customer was moved: the old link dies, a new one is made."""
+    previous: Booking = event.payload["previous"]
+    booking: Booking = event.payload["booking"]
+    old = db.scalar(
+        select(BookingInvitation).where(
+            BookingInvitation.booking_id == previous.id, BookingInvitation.status == InvitationStatus.PENDING
+        )
+    )
+    if old is None:
+        return
+    actor_id = event.payload.get("actor_id") or old.invited_by_id
+    token = new_token()
+    old.status = InvitationStatus.WITHDRAWN
+    old.responded_at = utcnow()
+    fresh = BookingInvitation(
+        email=old.email,
+        token_hash=hash_token(token),
+        invited_by_id=actor_id,
+        request=old.request,
+        booking_id=booking.id,
+        expires_at=expiry(),
+    )
+    db.add(fresh)
+    db.flush()
+    audit.record(
+        db, actor_id=actor_id, action="BOOKING_INVITATION_SENT", entity_type="booking_invitation", entity_id=fresh.id,
+        new={"email": old.email, "booking_id": booking.id, "reason": "booking moved"},
+    )
+    # The e-mail goes out once the move has been committed (see send_queued).
+    db.info.setdefault(MAIL_QUEUE, []).append((fresh.id, token, booking_when(db, previous)))
+
+
+def register_handlers() -> None:
+    events.subscribe("booking.rescheduled", _on_rescheduled)
+
+
+def send_queued(db: Session) -> None:
+    """E-mail the new links made while a booking was moved. Call after the move has committed.
+
+    The move stands even if the e-mail fails; the error tells the admin to resend."""
+    failed = []
+    for invitation_id, token, was in db.info.pop(MAIL_QUEUE, []):
+        invitation = db.get(BookingInvitation, invitation_id)
+        try:
+            send_invitation(db, invitation, db.get(User, invitation.invited_by_id), token, was=was)
+        except Exception:
+            log.exception("Could not send the moved-booking invitation to %s", invitation.email)
+            failed.append(invitation.email)
+    if failed:
+        raise AppError(
+            "EMAIL_FAILED",
+            f"The booking was moved, but the e-mail to {', '.join(failed)} could not be sent. Open the booking and press Resend invitation.",
+            status_code=502,
+        )
+
+
+def reissue(db: Session, invitation: BookingInvitation, actor: User) -> BookingInvitation:
+    """A fresh link for an invitation that is still open (also when its time ran out). The old link stops working."""
+    token = new_token()
+    invitation.token_hash = hash_token(token)
+    invitation.expires_at = expiry()
+    invitation.invited_by_id = actor.id
+    db.flush()
+    try:
+        send_invitation(db, invitation, actor, token)
+    except Exception:
+        log.exception("Could not resend the booking invitation to %s", invitation.email)
+        db.rollback()  # the old link keeps working
+        raise AppError("EMAIL_FAILED", f"The invitation e-mail to {invitation.email} could not be sent", status_code=502) from None
+    audit.record(
+        db, actor_id=actor.id, action="BOOKING_INVITATION_RESENT", entity_type="booking_invitation",
+        entity_id=invitation.id, new={"email": invitation.email},
+    )
+    db.commit()
+    return invitation
+
+
+def awaiting_customer(db: Session, booking_ids: list) -> set:
+    """Which of these bookings are waiting for their customer to confirm."""
+    if not booking_ids:
+        return set()
+    return set(
+        db.scalars(
+            select(BookingInvitation.booking_id).where(
+                BookingInvitation.booking_id.in_(booking_ids), BookingInvitation.status == InvitationStatus.PENDING
+            )
+        )
+    )
 
 
 def tell_inviter(

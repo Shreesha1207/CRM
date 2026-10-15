@@ -21,6 +21,7 @@ from app.api.routes import (
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.jobs import runner
+from app.services import invitations as invitation_service
 from app.services.notifications import register_handlers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -29,6 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     register_handlers()
+    invitation_service.register_handlers()
     task = asyncio.create_task(runner.run_forever()) if get_settings().run_background_jobs else None
     yield
     if task:
@@ -40,6 +42,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     settings = get_settings()
     register_handlers()
+    invitation_service.register_handlers()
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",

@@ -26,7 +26,7 @@ from app.models import (
     Service,
     User,
 )
-from app.models.enums import BookingStatus, RecordStatus, Role, UserStatus
+from app.models.enums import BookingStatus, InvitationStatus, RecordStatus, Role, UserStatus
 from app.schemas import (
     AdminBookingCreateIn,
     AdminBookingUpdateIn,
@@ -181,6 +181,19 @@ def invite_customer(body: BookingInviteIn, db: DB, actor: User = Manage) -> Book
     return invitation
 
 
+@router.post("/bookings/{booking_id}/resend-invitation", response_model=InvitationOut)
+def resend_invitation(booking_id: uuid.UUID, db: DB, actor: User = Manage) -> BookingInvitation:
+    """A fresh link for a booking that is waiting for its customer; the old link stops working."""
+    invitation = db.scalar(
+        select(BookingInvitation)
+        .where(BookingInvitation.booking_id == booking_id, BookingInvitation.status == InvitationStatus.PENDING)
+        .with_for_update()
+    )
+    if invitation is None:
+        raise AppError("NOT_AWAITING_CUSTOMER", "This booking is not waiting for a customer to confirm it", status_code=409)
+    return invitations.reissue(db, invitation, actor)
+
+
 @router.get("/bookings/{booking_id}", response_model=BookingOut)
 def admin_get_booking(booking_id: uuid.UUID, db: DB, actor: User = ViewAll) -> BookingOut:
     engine = BookingEngine(db, actor)
@@ -242,6 +255,7 @@ def admin_reschedule(booking_id: uuid.UUID, body: AdminRescheduleIn, db: DB, bac
         override_rules=body.override_rules, reason=body.reason,
     )
     background.add_task(dispatch_notifications)
+    invitations.send_queued(db)  # a booking waiting for its customer: they get a link for the new time
     return booking_out(db, booking, actor, engine.rules, engine.now)
 
 
@@ -250,6 +264,7 @@ def admin_reassign(booking_id: uuid.UUID, body: ReassignIn, db: DB, background: 
     engine = BookingEngine(db, actor)
     booking = engine.reassign(booking_id, body.resource_id, override_rules=body.override_rules, reason=body.reason)
     background.add_task(dispatch_notifications)
+    invitations.send_queued(db)
     return booking_out(db, booking, actor, engine.rules, engine.now)
 
 
@@ -337,6 +352,7 @@ def resolve_conflict(
         )
         db.commit()
     background.add_task(dispatch_notifications)
+    invitations.send_queued(db)
     return booking_out(db, result, actor, engine.rules, engine.now)
 
 

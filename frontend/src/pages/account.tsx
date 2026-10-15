@@ -208,6 +208,8 @@ export function RescheduleModal({
       onClose();
       navigate(admin ? `/admin/bookings?focus=${b.id}` : `/bookings/${b.id}`, { state: { rescheduled: true } });
     },
+    // The booking can have moved even though the e-mail to the customer failed.
+    onError: () => queryClient.invalidateQueries(),
   });
   return (
     <Modal

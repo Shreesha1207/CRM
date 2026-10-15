@@ -21,6 +21,7 @@ from app.schemas import (
     ServiceRef,
     UserRef,
 )
+from app.services import invitations
 from app.services.availability import resource_timezone
 from app.services.booking_engine import OPEN_STATUSES
 from app.services.settings_service import BookingRules
@@ -137,6 +138,7 @@ def bookings_out(
                 or 0
             )
 
+    waiting = invitations.awaiting_customer(db, ids)
     out = []
     for b in bookings:
         resource = b.primary_resource
@@ -180,6 +182,7 @@ def bookings_out(
                 waitlist_position=positions.get(b.id),
                 can_cancel=can_cancel,
                 can_reschedule=can_reschedule,
+                awaiting_customer=b.id in waiting and b.status == BookingStatus.PENDING,
             )
         )
     return out
