@@ -3,6 +3,12 @@
 Calendar programs match entries by UID. Sending the same UID again with a higher
 SEQUENCE (METHOD:REQUEST) replaces the entry, which is how a moved booking
 replaces its old time; METHOD:CANCEL removes it.
+
+Shaped like the invitations Google Calendar sends, because that is what Gmail
+recognises: the customer is a guest asked to reply (NEEDS-ACTION, RSVP), so Gmail
+shows the invitation with Yes / No / Maybe, and answering Yes puts it in their
+calendar (Google only adds invitations from unknown senders by itself if the
+customer allows it in their Calendar settings).
 """
 
 from datetime import UTC, datetime
@@ -50,6 +56,7 @@ def build(
     url: str,
     organizer: tuple[str, str],
     attendee: tuple[str, str],
+    created: datetime | None = None,
 ) -> str:
     """One event. `method` is REQUEST (add or update) or CANCEL (remove); (name, e-mail) pairs for the people."""
     cancelled = method == "CANCEL"
@@ -63,6 +70,8 @@ def build(
         f"UID:{uid}",
         f"SEQUENCE:{sequence}",
         f"DTSTAMP:{_utc(stamp)}",
+        f"CREATED:{_utc(created or stamp)}",
+        f"LAST-MODIFIED:{_utc(stamp)}",
         f"DTSTART:{_utc(start)}",
         f"DTEND:{_utc(end)}",
         f"SUMMARY:{_escape(summary)}",
@@ -72,7 +81,7 @@ def build(
         f"STATUS:{'CANCELLED' if cancelled else 'CONFIRMED'}",
         "TRANSP:OPAQUE",
         f"ORGANIZER;CN={_name(organizer[0])}:mailto:{organizer[1]}",
-        f"ATTENDEE;CN={_name(attendee[0])};ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=FALSE:mailto:{attendee[1]}",
+        f"ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN={_name(attendee[0])};X-NUM-GUESTS=0:mailto:{attendee[1]}",
         "END:VEVENT",
         "END:VCALENDAR",
     ]

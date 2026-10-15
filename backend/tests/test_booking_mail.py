@@ -35,7 +35,7 @@ def test_an_entry_is_standard_ical() -> None:
     assert "DTSTART:20270301T100000Z" in lines and "DTEND:20270301T110000Z" in lines and "DTSTAMP:20270226T080000Z" in lines
     assert "LOCATION:HQ\\, 1 Main St" in lines  # commas are escaped
     assert 'ORGANIZER;CN="Acme":mailto:bookings@example.com' in lines
-    assert any(line.startswith('ATTENDEE;CN="Test User"') and line.endswith("mailto:user@test.io") for line in lines)
+    assert any(line.startswith("ATTENDEE;") and 'CN="Test User"' in line and line.endswith("mailto:user@test.io") for line in lines)
 
 
 def test_times_are_written_in_utc_whatever_zone_they_come_in() -> None:
@@ -104,6 +104,11 @@ def mailbox(monkeypatch):
     get_settings.cache_clear()
 
 
+def visible(html: str) -> str:
+    """The text a reader sees: tags (and so link addresses) removed."""
+    return re.sub(r"<[^>]+>", " ", html)
+
+
 def mails_for(mailbox, address) -> list:
     return [m for m in mailbox.sent if m["To"] == address]
 
@@ -141,12 +146,16 @@ def test_a_confirmation_says_what_when_and_where_and_links_to_the_booking(client
     assert set(body) == {"text/plain", "text/html", "text/calendar", "application/ics"}
     text = body["text/plain"].get_content()
     assert "Strength training with John Carter" in text and "Mon 01 Mar 2027, 10:00 AM – 11:00 AM (UTC)" in text
-    assert "Downtown, 12 MG Road, Bengaluru" in text and "google.com/maps" in text
-    assert f"/bookings/{booking['id']}" in text and "Add to Google Calendar" in text
+    assert "Downtown, 12 MG Road, Bengaluru" in text and f"/bookings/{booking['id']}" in text
+    assert "answer Yes" in text
     html = body["text/html"].get_content()
-    assert "Your booking is confirmed" in html and "Open in Google Maps" in html and f"/bookings/{booking['id']}" in html
-    assert "View booking" in html and "Add to Google Calendar" in html
-    assert body["application/ics"].get_filename() == "booking.ics"
+    assert "Your booking is confirmed" in html and f"/bookings/{booking['id']}" in html and "View booking" in html
+    # The map is a button: its address is behind it, never shown as text.
+    assert re.search(r'<a href="https://www\.google\.com/maps/[^"]+"[^>]*>Open in Google Maps</a>', html)
+    assert "google.com/maps" not in visible(html) and "google.com/maps" not in text
+    # No one-off "add to calendar" copy that would not move or go away with the booking.
+    assert "Add to Google Calendar" not in html
+    assert body["application/ics"].get_filename() == "invite.ics"
 
 
 def test_the_calendar_entry_matches_the_booking(client, basic, user, user_headers, mailbox) -> None:
@@ -160,7 +169,11 @@ def test_the_calendar_entry_matches_the_booking(client, basic, user, user_header
     assert "DTSTART:20270301T100000Z" in entry and "DTEND:20270301T110000Z" in entry
     assert f"SUMMARY:{service.name} with {resource.name}" in entry
     assert f"/bookings/{booking['id']}" in line(entry, "URL:")
-    assert line(entry, "ATTENDEE").endswith(f"mailto:{user.email}")
+    # Like Google Calendar's own invitations: the customer is a guest asked to answer,
+    # which is what makes Gmail show it as an invitation with Yes / No / Maybe.
+    attendee = line(entry, "ATTENDEE")
+    assert attendee.endswith(f"mailto:{user.email}") and "PARTSTAT=NEEDS-ACTION" in attendee and "RSVP=TRUE" in attendee
+    assert line(entry, "ORGANIZER").endswith("mailto:bookings@example.com")
 
 
 def test_moving_a_booking_updates_the_calendar_entry_instead_of_adding_another(client, basic, user, user_headers, mailbox) -> None:
@@ -207,7 +220,7 @@ def test_cancelling_removes_the_booking_from_the_calendar(client, basic, user, u
     assert line(entry, "UID:").startswith(f"UID:{first['id']}@")  # the entry added by the first e-mail
     assert "SEQUENCE:2" in entry  # later than the last update, so it wins
     text = parts(message)["text/plain"].get_content()
-    assert "removed from your calendar" in text and "Plans changed" in text
+    assert "comes off your calendar" in text and "Plans changed" in text
     assert "Add to Google Calendar" not in text
 
 
@@ -220,7 +233,8 @@ def test_a_reminder_has_the_details_but_no_second_calendar_entry(client, db, bas
     notifications.dispatch_pending(db)
 
     [message] = mails_for(mailbox, user.email)
-    assert message["Subject"] == "Reminder: your booking starts in 24 hours"
+    # Each reminder has its own subject, so Gmail never folds one into another.
+    assert message["Subject"] == f"Reminder: {service.name}, Mon 01 Mar, 10:00 AM (in 24 hours)"
     assert set(parts(message)) == {"text/plain", "text/html"}
     text = parts(message)["text/plain"].get_content()
     assert "Mon 01 Mar 2027, 10:00 AM" in text and f"/bookings/{booking['id']}" in text
@@ -260,3 +274,51 @@ def test_a_booking_made_for_someone_says_who_made_it(client, admin, user, basic,
     [message] = mails_for(mailbox, user.email)
     assert "Booked for you by Admin" in parts(message)["text/plain"].get_content()
     assert "Booked for you by Admin" in parts(message)["text/html"].get_content()
+
+
+def test_every_message_stands_alone_so_gmail_does_not_fold_it_away(client, basic, user, user_headers, mailbox) -> None:
+    service, resource = basic
+    first = book(client, user_headers, service, resource, at(MONDAY, 10))
+    client.post(f"/api/bookings/{first['id']}/cancel", headers=user_headers, json={})
+    book(client, user_headers, service, resource, at(MONDAY, 10))  # the same booking again: the same subject
+    messages = mails_for(mailbox, user.email)
+    assert len(messages) == 3
+    for header in ("Message-ID", "X-Entity-Ref-ID"):
+        values = [m[header] for m in messages]
+        assert all(values) and len(set(values)) == 3, header
+    assert all(m["Message-ID"].endswith("@example.com>") and m["Date"] for m in messages)
+
+
+def test_a_pending_booking_that_is_cancelled_sends_no_calendar_cancellation(client, basic, user, admin_headers, user_headers, mailbox) -> None:
+    service, resource = basic
+    client.put("/api/admin/settings", headers=admin_headers, json={"values": {"require_admin_confirmation": True}})
+    booking = book(client, user_headers, service, resource)
+    mailbox.sent.clear()
+    assert client.post(f"/api/bookings/{booking['id']}/cancel", headers=user_headers, json={}).status_code == 200
+    [message] = mails_for(mailbox, user.email)
+    assert message["Subject"].startswith("Booking cancelled: ")
+    assert "text/calendar" not in parts(message)  # it was never put in their calendar
+    assert "calendar" not in parts(message)["text/plain"].get_content()
+
+
+def test_the_invitation_to_a_new_customer_is_a_proper_e_mail_with_buttons(client, make, admin_headers, mailbox) -> None:
+    service = make.service(name="Strength training")
+    place = make.location(name="Downtown")
+    place.address = "12 MG Road, Bengaluru"
+    make.db.commit()
+    resource = make.resource("John Carter", services=[service], location=place, hours=make.weekdays(dtime(9), dtime(17)))
+    r = client.post(
+        "/api/admin/bookings/invite", headers=admin_headers,
+        json={"service_id": str(service.id), "resource_id": str(resource.id), "start": at(MONDAY, 10), "customer_email": "new@test.io"},
+    )
+    assert r.status_code == 201, r.text
+    [message] = mails_for(mailbox, "new@test.io")
+    assert message["Subject"] == "Admin has booked Strength training for you: Mon 01 Mar, 10:00 AM"
+    body = parts(message)
+    assert set(body) == {"text/plain", "text/html"}  # no calendar entry until they confirm it
+    html = body["text/html"].get_content()
+    link = re.search(r'<a href="([^"]+/invitation\?token=[^"]+)"[^>]*>Confirm booking</a>', html)
+    assert link and re.search(r'>Decline</a>', html) and re.search(r'>Open in Google Maps</a>', html)
+    assert "google.com/maps" not in visible(html) and "/invitation?token=" not in visible(html)
+    text = body["text/plain"].get_content()
+    assert link.group(1).replace("&amp;", "&") in text and "Downtown, 12 MG Road, Bengaluru" in text

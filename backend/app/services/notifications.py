@@ -8,9 +8,10 @@ transaction, and a background dispatcher delivers queued messages later.
 import logging
 import smtplib
 import ssl
+import uuid
 from datetime import datetime, timedelta
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, formatdate, make_msgid
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -219,13 +220,20 @@ def send_email(
         message["From"] = formataddr((from_name, settings.smtp_from)) if from_name else settings.smtp_from
         message["To"] = to
         message["Subject"] = subject
+        message["Date"] = formatdate(usegmt=True)
+        message["Message-ID"] = make_msgid(domain=settings.smtp_from.rpartition("@")[2] or None)
+        # Every message stands alone: without this Gmail threads look-alike booking
+        # e-mails together and hides what they have in common as quoted text.
+        message["X-Entity-Ref-ID"] = uuid.uuid4().hex
         message.set_content(body)
         if html:
             message.add_alternative(html, subtype="html")
         if calendar:
             entry, method = calendar
             message.add_alternative(entry, subtype="calendar", params={"method": method})
-            message.add_attachment(entry.encode("utf-8"), maintype="application", subtype="ics", filename="booking.ics")
+            message.add_attachment(
+                entry.encode("utf-8"), maintype="application", subtype="ics", filename="invite.ics", params={"name": "invite.ics"}
+            )
         # Port 465 is TLS from the first byte; every other port starts plain and upgrades.
         # The certificate is checked, so a password is never handed to an impostor.
         implicit_tls = settings.smtp_port == 465

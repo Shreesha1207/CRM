@@ -27,7 +27,7 @@ from app.core.timeutils import get_zone, utcnow
 from app.models import Booking, BookingInvitation, Resource, Service, User
 from app.models.enums import InvitationStatus, NotificationType
 from app.schemas import BookingCreateIn
-from app.services import audit, events, settings_service
+from app.services import audit, booking_mail, events, settings_service
 from app.services.availability import resource_timezone
 from app.services.booking_engine import BookingEngine
 from app.services.notifications import _clock, notify, send_email
@@ -83,30 +83,26 @@ def link(token: str) -> str:
     return f"{get_settings().frontend_url}/invitation?token={token}"
 
 
-def send_invitation(db: Session, invitation: BookingInvitation, inviter: User, token: str, was: str | None = None) -> None:
-    """E-mail the link. `was` is the time the booking had before, when it has just been moved."""
+def send_invitation(db: Session, invitation: BookingInvitation, inviter: User, token: str, was: Booking | None = None) -> None:
+    """E-mail the link. `was` is the booking it replaces, when it has just been moved."""
+    mail = booking_mail.invitation_mail(db, invitation, inviter, link(token), was)
+    if mail is not None:
+        business = settings_service.get_rules(db).business_name
+        send_email(invitation.email, mail.subject, mail.text, html=mail.html, from_name=business)
+        return
+    # An invitation from before bookings were held: nothing is booked until they accept.
     details = describe(db, invitation)
-    held = invitation.booking_id is not None
-    action = "has moved your booking. It is now" if was else ("has booked" if held else "asked to book")
     lines = [
-        f"Hi,\n\n{inviter.name} {action if was else action + ' the following for you'}:\n",
+        f"Hi,\n\n{inviter.name} asked to book the following for you:\n",
         f"  Service: {details['service_name']}",
         f"  With: {details['resource_name'] or 'the first available'}",
         f"  When: {details['when']}",
-        *([f"  Was: {was}"] if was else []),
-        ("\nIt is on the calendar for you now. " if held else "\n")
-        + "You don't have an account yet. Create one to confirm the booking, or decline it, here "
+        "\nYou don't have an account yet. Create one to confirm the booking, or decline it, here "
         f"(valid until {invitation.expires_at:%a %d %b %Y}):",
         link(token),
-        "\nIf this is not for you, please decline it" + (" so the time is released." if held else " or ignore this e-mail."),
+        "\nIf this is not for you, please decline it or ignore this e-mail.",
     ]
-    if was:
-        subject = f"{inviter.name} has moved {details['service_name']}: please confirm the new time"
-    elif held:
-        subject = f"{inviter.name} has booked {details['service_name']} for you"
-    else:
-        subject = f"{inviter.name} would like to book {details['service_name']} for you"
-    send_email(invitation.email, subject, "\n".join(lines))
+    send_email(invitation.email, f"{inviter.name} would like to book {details['service_name']} for you", "\n".join(lines))
 
 
 def withdraw(db: Session, invitation: BookingInvitation, actor: User, reason: str) -> None:
@@ -153,7 +149,7 @@ def _on_rescheduled(db: Session, event: events.DomainEvent) -> None:
         new={"email": old.email, "booking_id": booking.id, "reason": "booking moved"},
     )
     # The e-mail goes out once the move has been committed (see send_queued).
-    db.info.setdefault(MAIL_QUEUE, []).append((fresh.id, token, booking_when(db, previous)))
+    db.info.setdefault(MAIL_QUEUE, []).append((fresh.id, token, previous.id))
 
 
 def register_handlers() -> None:
@@ -165,10 +161,10 @@ def send_queued(db: Session) -> None:
 
     The move stands even if the e-mail fails; the error tells the admin to resend."""
     failed = []
-    for invitation_id, token, was in db.info.pop(MAIL_QUEUE, []):
+    for invitation_id, token, previous_id in db.info.pop(MAIL_QUEUE, []):
         invitation = db.get(BookingInvitation, invitation_id)
         try:
-            send_invitation(db, invitation, db.get(User, invitation.invited_by_id), token, was=was)
+            send_invitation(db, invitation, db.get(User, invitation.invited_by_id), token, was=db.get(Booking, previous_id))
         except Exception:
             log.exception("Could not send the moved-booking invitation to %s", invitation.email)
             failed.append(invitation.email)

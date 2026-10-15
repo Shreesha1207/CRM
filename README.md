@@ -86,18 +86,22 @@ When an admin books for a customer:
 - **with a new e-mail address** is booked straight away too, as *pending*, so the time is held and shows on the calendar. The person is e-mailed a link to create their account and confirm it, which also sends their confirmation e-mail. If they decline, the booking is cancelled and comes off the calendar. If they never answer, it stays pending; the link works for `INVITATION_TTL_DAYS` days (default 7).
   Only the customer can confirm such a booking: the admin sees *Awaiting customer* with a **Resend invitation** button instead of Confirm. If the admin reschedules it, the old time is cancelled, the old link stops working and the customer is e-mailed a new link for the new time (to the admin it stays awaiting the customer). If an invitation expires, the booking stays pending: resend the invitation, reschedule it, or cancel it.
 
-Booking e-mails (confirmed, moved, cancelled, reminders) are HTML with a plain-text version and say what was booked, when (with the time zone), where (with a Google Maps link), who booked it, and a link to the booking. Confirmed and moved bookings also carry a calendar invitation (`booking.ics`, plus a *Add to Google Calendar* button) that works in Gmail, Outlook and Apple Calendar:
+Booking e-mails (confirmed, moved, cancelled, reminders, and the invitation to a new customer) are HTML with a plain-text version. They say what was booked, when (with the time zone) and where, with an **Open in Google Maps** button, who booked it, and a **View booking** button. Each one is a separate conversation in Gmail (its own `Message-ID` and `X-Entity-Ref-ID`, and its own subject), so Gmail does not fold one into another as quoted text.
 
-- the first confirmation adds the booking to the customer's calendar;
-- if the booking is rescheduled or reassigned, the customer gets a "Booking moved" e-mail showing the new and the old time, and the same calendar entry is updated, so the old time disappears;
-- if it is cancelled, a cancellation is sent that removes the entry.
+Confirmed and moved bookings are also a calendar invitation (a `text/calendar` part plus `invite.ics`), shaped like the ones Google Calendar sends, so Gmail, Outlook and Apple Mail show them with Yes / No / Maybe:
 
-A moved booking is a new booking row internally; all rows of one reschedule chain share the calendar entry's id (the first booking's id) and each move raises its revision.
+- the customer answers **Yes** and the booking is in their calendar. Google Calendar adds invitations by itself only from senders the customer knows (its default since December 2025, under *Settings → Event settings → Add invitations to my calendar*); otherwise it shows them in Gmail to answer;
+- if the booking is rescheduled or reassigned, the customer gets a "Booking moved" e-mail showing the new and the old time, and the same calendar entry moves, so the old time disappears;
+- if it is cancelled, a cancellation is sent that takes the entry out of their calendar.
+
+Answering the invitation does not change the booking (the answer is e-mailed to `SMTP_FROM`); customers change or cancel it with View booking. A moved booking is a new booking row internally; all rows of one reschedule chain share the calendar entry's id (the first booking's id) and each move raises its revision.
+
+To try it with Gmail, book for an address other than `SMTP_FROM`: Gmail may show no invitation for an event you organise yourself.
 
 ### Tests
 
 ```bash
-cd backend && pytest            # 158 tests, against a real PostgreSQL database
+cd backend && pytest            # 161 tests, against a real PostgreSQL database
 cd frontend && npm test         # unit tests for prices and booking lengths
 cd frontend && npm run build    # type-check + production build
 ```

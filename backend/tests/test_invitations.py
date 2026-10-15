@@ -55,7 +55,7 @@ def test_inviting_a_new_email_puts_the_booking_on_the_calendar_and_sends_a_link(
     assert response.status_code == 201, response.text
     assert response.json()["email"] == GUEST
     assert f"EMAIL to={GUEST}" in caplog.text and "/invitation?token=" in caplog.text
-    assert "It is on the calendar for you now" in caplog.text
+    assert "It is held for you" in caplog.text
 
     # The booking is there at once, pending, under a placeholder account.
     booking = db.scalars(select(Booking)).one()
