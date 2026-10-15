@@ -10,6 +10,7 @@ import smtplib
 import ssl
 from datetime import datetime, timedelta
 from email.message import EmailMessage
+from email.utils import formataddr
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -201,14 +202,30 @@ def register_handlers() -> None:
 # --------------------------------------------------------------------------
 
 
-def send_email(to: str, subject: str, body: str) -> None:
+def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    *,
+    html: str | None = None,
+    calendar: tuple[str, str] | None = None,
+    from_name: str | None = None,
+) -> None:
+    """Send an e-mail. `html` is the styled version; `calendar` is (an iCalendar entry, its METHOD),
+    attached the way calendar programs expect so that it can be added, updated or removed."""
     settings = get_settings()
     if settings.email_backend == "smtp":
         message = EmailMessage()
-        message["From"] = settings.smtp_from
+        message["From"] = formataddr((from_name, settings.smtp_from)) if from_name else settings.smtp_from
         message["To"] = to
         message["Subject"] = subject
         message.set_content(body)
+        if html:
+            message.add_alternative(html, subtype="html")
+        if calendar:
+            entry, method = calendar
+            message.add_alternative(entry, subtype="calendar", params={"method": method})
+            message.add_attachment(entry.encode("utf-8"), maintype="application", subtype="ics", filename="booking.ics")
         # Port 465 is TLS from the first byte; every other port starts plain and upgrades.
         # The certificate is checked, so a password is never handed to an impostor.
         implicit_tls = settings.smtp_port == 465
@@ -225,6 +242,8 @@ def send_email(to: str, subject: str, body: str) -> None:
             smtp.send_message(message)
     else:
         log.info("EMAIL to=%s subject=%r\n%s", to, subject, body)
+        if calendar:
+            log.info("EMAIL calendar entry (%s):\n%s", calendar[1], calendar[0])
 
 
 def dispatch_pending(db: Session, limit: int = 100) -> int:
@@ -239,11 +258,18 @@ def dispatch_pending(db: Session, limit: int = 100) -> int:
         .limit(limit)
         .with_for_update(skip_locked=True)
     ).all()
+    from app.services import booking_mail  # imported late: it uses this module's helpers
+
     for notification in rows:
         user = db.get(User, notification.user_id)
         try:
             if notification.channel == NotificationChannel.EMAIL and user is not None:
-                send_email(user.email, notification.title, notification.body)
+                rich = booking_mail.render(db, notification)
+                if rich is not None:
+                    business = settings_service.get_rules(db).business_name
+                    send_email(user.email, rich.subject, rich.text, html=rich.html, calendar=rich.calendar, from_name=business)
+                else:
+                    send_email(user.email, notification.title, notification.body)
                 notification.status = NotificationStatus.SENT
                 notification.sent_at = utcnow()
             else:
