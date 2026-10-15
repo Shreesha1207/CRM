@@ -4,20 +4,23 @@ import uuid
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 
 from app.api.deps import DB
 from app.api.deps import require as require_permission
 from app.core.errors import AppError
-from app.core.permissions import Permission, can_assign_role
+from app.core.permissions import Permission, can_assign_role, has_permission, is_staff
 from app.core.security import hash_password
 from app.core.timeutils import day_bounds, get_zone, utcnow
-from app.models import AuditLog, AuthSession, User
-from app.models.enums import Role, UserStatus
+from app.models import AuditLog, AuthSession, Booking, User
+from app.models.enums import BookingStatus, Role, UserStatus
 from app.schemas import AuditLogOut, Page, SettingsIn, SettingsOut, UserCreateIn, UserOut, UserUpdateIn
 from app.services import audit, reports, settings_service
 
 router = APIRouter(prefix="/api/admin", tags=["admin: system"])
+
+# Bookings that still hold someone's time.
+UPCOMING_STATUSES = (BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.WAITLISTED, BookingStatus.CONFLICTED)
 
 
 @router.get("/dashboard")
@@ -86,6 +89,9 @@ def update_user(
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     changes = body.model_dump(exclude_unset=True)
+    # An admin's account (password, status...) is the super admin's to change, not a fellow admin's.
+    if user.id != actor.id and is_staff(user.role) and not has_permission(actor.role, Permission.ADMINS_MANAGE):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only a super admin can change admin accounts")
     if "role" in changes and changes["role"] != user.role:
         if user.id == actor.id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot change your own role")
@@ -109,6 +115,37 @@ def update_user(
     )
     db.commit()
     return user
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(user_id: uuid.UUID, db: DB, actor: User = Depends(require_permission(Permission.USERS_DELETE))) -> None:
+    """Delete an account (customer or admin) and its past bookings for good.
+
+    Refused while the account still has upcoming bookings, so nobody's time is
+    freed without the waitlist and notifications that a cancellation brings."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if user.id == actor.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot delete your own account")
+    upcoming = db.scalar(
+        select(func.count())
+        .select_from(Booking)
+        .where(Booking.user_id == user.id, Booking.status.in_(UPCOMING_STATUSES), Booking.end_datetime > utcnow())
+    )
+    if upcoming:
+        raise AppError(
+            "HAS_UPCOMING_BOOKINGS",
+            f"{user.name} has {upcoming} upcoming booking{'s' if upcoming != 1 else ''}. Cancel them first, or deactivate the account instead.",
+            status_code=409,
+        )
+    removed = db.execute(delete(Booking).where(Booking.user_id == user.id)).rowcount
+    audit.record(
+        db, actor_id=actor.id, action="USER_DELETED", entity_type="user", entity_id=user.id,
+        old={**audit.snapshot(user, "name", "email", "role", "status"), "bookings_deleted": removed},
+    )
+    db.delete(user)
+    db.commit()
 
 
 # ---------------------------------------------------------------- settings

@@ -23,9 +23,14 @@ class Permission(StrEnum):
     SETTINGS_MANAGE = "settings:manage"
     REPORTS_VIEW = "reports:view"
     AUDIT_VIEW = "audit:view"
+    # Super admin only: grant or take away admin-console roles, change admin accounts.
+    ADMINS_MANAGE = "admins:manage"
+    # Super admin only: delete accounts outright.
+    USERS_DELETE = "users:delete"
 
 
 _ALL = frozenset(Permission)
+_SUPER_ONLY = frozenset({Permission.ADMINS_MANAGE, Permission.USERS_DELETE})
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.USER: frozenset(),
@@ -34,14 +39,10 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.STAFF: frozenset(
         {Permission.BOOKINGS_VIEW_ALL, Permission.BOOKINGS_MANAGE, Permission.REPORTS_VIEW}
     ),
-    Role.MANAGER: _ALL - {Permission.SETTINGS_MANAGE, Permission.USERS_MANAGE},
-    Role.ADMIN: _ALL,
+    Role.MANAGER: _ALL - _SUPER_ONLY - {Permission.SETTINGS_MANAGE, Permission.USERS_MANAGE},
+    Role.ADMIN: _ALL - _SUPER_ONLY,
+    # Everything an admin can do, plus deciding who the admins are.
     Role.SUPER_ADMIN: _ALL,
-}
-
-# Roles that may assign each role; only a SUPER_ADMIN can create another one.
-ROLE_ASSIGNERS: dict[Role, frozenset[Role]] = {
-    Role.SUPER_ADMIN: frozenset({Role.SUPER_ADMIN}),
 }
 
 
@@ -53,13 +54,15 @@ def has_permission(role: Role, permission: Permission) -> bool:
     return permission in permissions_for(role)
 
 
-def can_assign_role(actor_role: Role, target_role: Role) -> bool:
-    allowed = ROLE_ASSIGNERS.get(target_role)
-    if allowed is None:
-        return has_permission(actor_role, Permission.USERS_MANAGE)
-    return actor_role in allowed
-
-
 def is_staff(role: Role) -> bool:
     """Any role that can see the admin area."""
     return bool(permissions_for(role))
+
+
+def can_assign_role(actor_role: Role, target_role: Role) -> bool:
+    """Customers can be made by anyone who manages users; every role that opens
+    the admin console (admin, staff, super admin...) only by a super admin."""
+    if is_staff(target_role):
+        return has_permission(actor_role, Permission.ADMINS_MANAGE)
+    return has_permission(actor_role, Permission.USERS_MANAGE)
+

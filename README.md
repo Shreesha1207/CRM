@@ -51,15 +51,18 @@ Demo accounts created by the seed:
 
 | Role  | E-mail              | Password     |
 | ----- | ------------------- | ------------ |
+| Super admin | `superadmin@example.com` | `superadmin123` |
 | Admin | `admin@example.com` | `admin12345` |
 | User  | `user@example.com`  | `user12345`  |
+
+Only a super admin can make someone an admin (or give any other admin-console role), change or delete admin accounts, and delete accounts at all. Admins keep everything else. On a database seeded before the super admin existed, create one with `SUPER_ADMIN_PASSWORD=... python -m app.create_super_admin --email you@example.com` (it promotes the account if the e-mail is already registered).
 
 The seed builds a small catalogue spanning several industries: a strength coach with a lunch break, a consultant who is off on Wednesdays, a meeting room, a tennis court at another location, and a 12-seat yoga class.
 
 ### Tests
 
 ```bash
-cd backend && pytest            # 88 tests, against a real PostgreSQL database
+cd backend && pytest            # 113 tests, against a real PostgreSQL database
 cd frontend && npm test         # unit tests for prices and booking lengths
 cd frontend && npm run build    # type-check + production build
 ```
@@ -267,7 +270,7 @@ Interactive docs: `http://localhost:8000/api/docs` (development only).
 | Admin: conflicts | `GET /api/admin/conflicts[/:id]`, `POST /api/admin/conflicts/:id/resolve` |
 | Admin: catalogue | `…/resources`, `…/resources/:id/services`, `…/resources/:id/availability`, `…/services`, `…/locations` |
 | Admin: schedules | `GET/PUT /api/admin/operating-hours`, `GET/POST/DELETE /api/admin/exceptions` |
-| Admin: system | `GET /api/admin/dashboard · calendar · reports/utilization · audit-logs`, `GET/POST/PUT /api/admin/users`, `GET/PUT /api/admin/settings` |
+| Admin: system | `GET /api/admin/dashboard · calendar · reports/utilization · audit-logs`, `GET/POST/PUT /api/admin/users`, `DELETE /api/admin/users/:id` (super admin), `GET/PUT /api/admin/settings` |
 
 Schedule-changing admin endpoints accept `?dry_run=true&conflict_action=keep|mark_conflicted|cancel`.
 

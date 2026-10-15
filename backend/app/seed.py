@@ -1,6 +1,6 @@
 """Demo data: `python -m app.seed`.
 
-Creates an admin, a demo user and a small multi-industry catalogue (a
+Creates a super admin, an admin, a demo user and a small multi-industry catalogue (a
 trainer, a consultant, a meeting room, a tennis court and a group class) to
 show that one engine handles all of them. Safe to run twice.
 """
@@ -27,6 +27,8 @@ from app.services import settings_service
 
 ADMIN_EMAIL = os.getenv("SEED_ADMIN_EMAIL", "admin@example.com")
 ADMIN_PASSWORD = os.getenv("SEED_ADMIN_PASSWORD", "admin12345")
+SUPER_ADMIN_EMAIL = os.getenv("SEED_SUPER_ADMIN_EMAIL", "superadmin@example.com")
+SUPER_ADMIN_PASSWORD = os.getenv("SEED_SUPER_ADMIN_PASSWORD", "superadmin123")
 USER_EMAIL = "user@example.com"
 USER_PASSWORD = "user12345"
 
@@ -48,6 +50,7 @@ def run() -> None:
 
         db.add_all(
             [
+                User(name="Super Admin", email=SUPER_ADMIN_EMAIL, password_hash=hash_password(SUPER_ADMIN_PASSWORD), role=Role.SUPER_ADMIN),
                 User(name="Admin", email=ADMIN_EMAIL, password_hash=hash_password(ADMIN_PASSWORD), role=Role.ADMIN),
                 User(name="Demo User", email=USER_EMAIL, password_hash=hash_password(USER_PASSWORD), role=Role.USER),
             ]

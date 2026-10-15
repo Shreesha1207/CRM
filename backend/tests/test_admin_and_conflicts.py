@@ -273,10 +273,16 @@ def test_admin_user_management_guards(client, admin, admin_headers, user) -> Non
     r = client.post(
         "/api/admin/users",
         headers=admin_headers,
-        json={"name": "Staff", "email": "staff@test.io", "password": "password123", "role": "STAFF"},
+        json={"name": "Customer", "email": "customer@test.io", "password": "password123", "role": "USER"},
     )
     assert r.status_code == 201
-    # Only a SUPER_ADMIN may create another SUPER_ADMIN.
+    # Only a SUPER_ADMIN may hand out admin-console roles, a super admin's included.
+    r = client.post(
+        "/api/admin/users",
+        headers=admin_headers,
+        json={"name": "Staff", "email": "staff@test.io", "password": "password123", "role": "STAFF"},
+    )
+    assert r.status_code == 403
     r = client.post(
         "/api/admin/users",
         headers=admin_headers,

@@ -11,6 +11,8 @@ import { formatStamp, titleCase } from "../../lib/format";
 
 function UserForm({ user, onClose }: { user: User | null; onClose: () => void }) {
   const queryClient = useQueryClient();
+  // Only a super admin decides who gets into the admin console.
+  const grantsRoles = useAuth().can("admins:manage");
   const [form, setForm] = useState({
     name: user?.name ?? "",
     email: user?.email ?? "",
@@ -59,9 +61,9 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
           <Input value={form.phone} onChange={set("phone")} />
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Role">
-            <Select value={form.role} onChange={set("role")}>
-              {ROLES.map((r) => (
+          <Field label="Role" hint={grantsRoles ? undefined : "Only a super admin can give admin roles."}>
+            <Select value={form.role} onChange={set("role")} disabled={!grantsRoles}>
+              {(grantsRoles ? ROLES : [form.role]).map((r) => (
                 <option key={r} value={r}>
                   {titleCase(r)}
                 </option>
@@ -84,17 +86,57 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
   );
 }
 
+function DeleteUserModal({ user, onClose }: { user: User; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const remove = useMutation({
+    mutationFn: () => api.del(`/api/admin/users/${user.id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      onClose();
+    },
+  });
+  return (
+    <Modal
+      open
+      title={`Delete ${user.name}?`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="danger" loading={remove.isPending} onClick={() => remove.mutate()}>
+            Delete for good
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4 text-sm">
+        {remove.error && <Alert>{errorMessage(remove.error)}</Alert>}
+        <p>
+          This deletes <span className="font-medium">{user.email}</span> ({titleCase(user.role)}) and their past bookings. It cannot be undone.
+        </p>
+        <p className="text-muted">To keep their history, set the account to Inactive instead.</p>
+      </div>
+    </Modal>
+  );
+}
+
 export function AdminUsersPage() {
   const { can, user: me } = useAuth();
   const [q, setQ] = useState("");
   const [role, setRole] = useState("");
   const [offset, setOffset] = useState(0);
   const [editing, setEditing] = useState<User | null | undefined>(undefined);
+  const [deleting, setDeleting] = useState<User | null>(null);
   const users = useQuery({
     queryKey: ["admin", "users", q, role, offset],
     queryFn: () => api.get<Page<User>>("/api/admin/users", { q, role, limit: 25, offset }),
   });
   const manage = can("users:manage");
+  const superAdmin = can("admins:manage");
+  // Admin accounts are the super admin's to change; everyone can edit their own.
+  const canEdit = (u: User) => manage && (superAdmin || u.role === "USER" || u.id === me?.id);
   return (
     <>
       <PageHeader title="Users" actions={manage && <Button onClick={() => setEditing(null)}>New user</Button>} />
@@ -126,10 +168,15 @@ export function AdminUsersPage() {
                   <StatusBadge status={u.status} />
                 </Td>
                 <Td>{new Date(u.created_at).toLocaleDateString()}</Td>
-                <Td className="text-right">
-                  {manage && (
+                <Td className="space-x-2 whitespace-nowrap text-right">
+                  {canEdit(u) && (
                     <Button size="sm" variant="secondary" onClick={() => setEditing(u)}>
                       Edit
+                    </Button>
+                  )}
+                  {can("users:delete") && u.id !== me?.id && (
+                    <Button size="sm" variant="danger" onClick={() => setDeleting(u)}>
+                      Delete
                     </Button>
                   )}
                 </Td>
@@ -140,6 +187,7 @@ export function AdminUsersPage() {
         </>
       )}
       {editing !== undefined && <UserForm user={editing} onClose={() => setEditing(undefined)} />}
+      {deleting && <DeleteUserModal user={deleting} onClose={() => setDeleting(null)} />}
     </>
   );
 }
