@@ -7,6 +7,7 @@ transaction, and a background dispatcher delivers queued messages later.
 
 import logging
 import smtplib
+import ssl
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 
@@ -201,9 +202,17 @@ def send_email(to: str, subject: str, body: str) -> None:
         message["To"] = to
         message["Subject"] = subject
         message.set_content(body)
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
+        # The certificate is checked, so a password is never handed to an impostor.
+        implicit_tls = settings.smtp_port == 465
+        tls = ssl.create_default_context()
+        if implicit_tls:
+            connection = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=10, context=tls)
+        else:
+            connection = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10)
+        with connection as smtp:
             if settings.smtp_username:
-                smtp.starttls()
+                if not implicit_tls:
+                    smtp.starttls(context=tls)
                 smtp.login(settings.smtp_username, settings.smtp_password or "")
             smtp.send_message(message)
     else:
