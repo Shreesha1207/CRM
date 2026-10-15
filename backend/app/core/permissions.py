@@ -60,8 +60,21 @@ def is_staff(role: Role) -> bool:
 
 
 def can_assign_role(actor_role: Role, target_role: Role) -> bool:
-    """Customers can be made by anyone who manages users; every role that opens
-    the admin console (admin, staff, super admin...) only by a super admin."""
+    """The hierarchy: an admin makes customers; a super admin makes customers and
+    every admin-console role below their own. Nobody makes a super admin in the
+    app: that is only done on the server, with `python -m app.create_super_admin`."""
+    if target_role == Role.SUPER_ADMIN:
+        return False
+    if is_staff(target_role):
+        return has_permission(actor_role, Permission.ADMINS_MANAGE)
+    return has_permission(actor_role, Permission.USERS_MANAGE)
+
+
+def can_manage_account(actor_role: Role, target_role: Role) -> bool:
+    """Whether someone may change or delete another person's account: only the
+    accounts below them. A super admin's account is left to its owner."""
+    if target_role == Role.SUPER_ADMIN:
+        return False
     if is_staff(target_role):
         return has_permission(actor_role, Permission.ADMINS_MANAGE)
     return has_permission(actor_role, Permission.USERS_MANAGE)

@@ -55,14 +55,14 @@ Demo accounts created by the seed:
 | Admin | `admin@example.com` | `admin12345` |
 | User  | `user@example.com`  | `user12345`  |
 
-Only a super admin can make someone an admin (or give any other admin-console role), change or delete admin accounts, and delete accounts at all. Admins keep everything else. On a database seeded before the super admin existed, create one with `SUPER_ADMIN_PASSWORD=... python -m app.create_super_admin --email you@example.com` (it promotes the account if the e-mail is already registered).
+Roles follow a hierarchy. An admin can create and edit customers (role User). A super admin can also give any other role (admin, manager, staff, resource owner), change or delete admin accounts, and delete accounts at all; admins keep everything else. Nobody can make someone a super admin in the app, and a super admin's account can only be changed by its owner. On a database seeded before the super admin existed, create one with `SUPER_ADMIN_PASSWORD=... python -m app.create_super_admin --email you@example.com` (it promotes the account if the e-mail is already registered).
 
 The seed builds a small catalogue spanning several industries: a strength coach with a lunch break, a consultant who is off on Wednesdays, a meeting room, a tennis court at another location, and a 12-seat yoga class.
 
 ### Tests
 
 ```bash
-cd backend && pytest            # 113 tests, against a real PostgreSQL database
+cd backend && pytest            # 116 tests, against a real PostgreSQL database
 cd frontend && npm test         # unit tests for prices and booking lengths
 cd frontend && npm run build    # type-check + production build
 ```

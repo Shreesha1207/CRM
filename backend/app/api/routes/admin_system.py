@@ -9,7 +9,7 @@ from sqlalchemy import delete, func, or_, select, update
 from app.api.deps import DB
 from app.api.deps import require as require_permission
 from app.core.errors import AppError
-from app.core.permissions import Permission, can_assign_role, has_permission, is_staff
+from app.core.permissions import Permission, can_assign_role, can_manage_account
 from app.core.security import hash_password
 from app.core.timeutils import day_bounds, get_zone, utcnow
 from app.models import AuditLog, AuthSession, Booking, User
@@ -41,6 +41,18 @@ def utilization(
 # ---------------------------------------------------------------- users
 
 
+def _cannot_give(role: Role) -> str:
+    if role == Role.SUPER_ADMIN:
+        return "Nobody can be made a super admin from the app"
+    return f"Only a super admin can give the {role.value.replace('_', ' ').lower()} role"
+
+
+def _not_yours(user: User) -> str:
+    if user.role == Role.SUPER_ADMIN:
+        return "A super admin's account can only be changed by its owner"
+    return "Only a super admin can change admin accounts"
+
+
 @router.get("/users", response_model=Page[UserOut])
 def list_users(
     db: DB,
@@ -66,7 +78,7 @@ def list_users(
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def create_user(body: UserCreateIn, db: DB, actor: User = Depends(require_permission(Permission.USERS_MANAGE))) -> User:
     if not can_assign_role(actor.role, body.role):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, f"You cannot create {body.role.value} accounts")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _cannot_give(body.role))
     email = body.email.lower()
     if db.scalar(select(User.id).where(User.email == email)):
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this e-mail already exists")
@@ -89,14 +101,14 @@ def update_user(
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     changes = body.model_dump(exclude_unset=True)
-    # An admin's account (password, status...) is the super admin's to change, not a fellow admin's.
-    if user.id != actor.id and is_staff(user.role) and not has_permission(actor.role, Permission.ADMINS_MANAGE):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only a super admin can change admin accounts")
+    # Only accounts below you in the hierarchy are yours to change (your own aside).
+    if user.id != actor.id and not can_manage_account(actor.role, user.role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _not_yours(user))
     if "role" in changes and changes["role"] != user.role:
         if user.id == actor.id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot change your own role")
-        if not can_assign_role(actor.role, changes["role"]) or not can_assign_role(actor.role, user.role):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot assign that role")
+        if not can_assign_role(actor.role, changes["role"]):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, _cannot_give(changes["role"]))
     if "status" in changes and changes["status"] != UserStatus.ACTIVE and user.id == actor.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot deactivate your own account")
 
@@ -128,6 +140,8 @@ def delete_user(user_id: uuid.UUID, db: DB, actor: User = Depends(require_permis
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     if user.id == actor.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot delete your own account")
+    if not can_manage_account(actor.role, user.role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _not_yours(user))
     upcoming = db.scalar(
         select(func.count())
         .select_from(Booking)

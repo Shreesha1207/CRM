@@ -13,6 +13,10 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
   const queryClient = useQueryClient();
   // Only a super admin decides who gets into the admin console.
   const grantsRoles = useAuth().can("admins:manage");
+  // The roles this person may hand out: a super admin every one below their own, an admin only "User".
+  // Nobody is made a super admin from here.
+  const assignable = grantsRoles ? ROLES.filter((r) => r !== "SUPER_ADMIN") : (["USER"] as Role[]);
+  const roleLocked = !assignable.includes(user?.role ?? "USER");
   const [form, setForm] = useState({
     name: user?.name ?? "",
     email: user?.email ?? "",
@@ -61,9 +65,12 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
           <Input value={form.phone} onChange={set("phone")} />
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Role" hint={grantsRoles ? undefined : "Only a super admin can give admin roles."}>
-            <Select value={form.role} onChange={set("role")} disabled={!grantsRoles}>
-              {(grantsRoles ? ROLES : [form.role]).map((r) => (
+          <Field
+            label="Role"
+            hint={roleLocked ? "You cannot change this role." : grantsRoles ? undefined : "Only a super admin can give admin roles."}
+          >
+            <Select value={form.role} onChange={set("role")} disabled={roleLocked || assignable.length < 2}>
+              {(roleLocked ? [form.role] : assignable).map((r) => (
                 <option key={r} value={r}>
                   {titleCase(r)}
                 </option>
@@ -136,7 +143,9 @@ export function AdminUsersPage() {
   const manage = can("users:manage");
   const superAdmin = can("admins:manage");
   // Admin accounts are the super admin's to change; everyone can edit their own.
-  const canEdit = (u: User) => manage && (superAdmin || u.role === "USER" || u.id === me?.id);
+  // The hierarchy: only accounts below you, and a super admin's only by its owner.
+  const below = (u: User) => u.role !== "SUPER_ADMIN" && (superAdmin || u.role === "USER");
+  const canEdit = (u: User) => manage && (u.id === me?.id || below(u));
   return (
     <>
       <PageHeader title="Users" actions={manage && <Button onClick={() => setEditing(null)}>New user</Button>} />
@@ -174,7 +183,7 @@ export function AdminUsersPage() {
                       Edit
                     </Button>
                   )}
-                  {can("users:delete") && u.id !== me?.id && (
+                  {can("users:delete") && u.id !== me?.id && below(u) && (
                     <Button size="sm" variant="danger" onClick={() => setDeleting(u)}>
                       Delete
                     </Button>
