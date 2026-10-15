@@ -95,7 +95,13 @@ def _start_session(db: DB, user: User, request: Request, response: Response) -> 
 )
 def register(body: RegisterIn, request: Request, response: Response, db: DB) -> TokenOut:
     email = body.email.lower()
-    if db.scalar(select(User.id).where(User.email == email)):
+    existing = db.scalar(select(User).where(User.email == email))
+    if existing is not None:
+        if existing.status == UserStatus.INVITED:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "A booking is waiting for this e-mail address: open the link in the invitation e-mail to set up your account",
+            )
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this e-mail already exists")
     # Self-registration always yields a plain USER; roles are granted by admins.
     user = User(

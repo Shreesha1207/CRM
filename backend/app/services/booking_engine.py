@@ -90,6 +90,9 @@ class BookingRequest:
     override_rules: bool = False
     # A customer-chosen length for services that allow it; None = the service's.
     duration_minutes: int | None = None
+    # Made for an invited customer who has not answered yet: held as PENDING on the
+    # calendar, whatever the settings say, until they accept (or decline, which cancels it).
+    awaiting_customer: bool = False
 
 
 @dataclass
@@ -351,7 +354,7 @@ class BookingEngine:
         user = self.db.get(User, req.user_id)
         if user is None:
             raise NotFound("User")
-        if user.status != UserStatus.ACTIVE:
+        if user.status != UserStatus.ACTIVE and not (req.awaiting_customer and user.status == UserStatus.INVITED):
             raise BookingRejected("USER_INACTIVE", "This user account is not active", status_code=422)
 
         service = self._service(req.service_id)
@@ -380,6 +383,7 @@ class BookingEngine:
         status: BookingStatus,
         rescheduled_from_id: uuid.UUID | None = None,
         series_id: uuid.UUID | None = None,
+        hold: bool = False,
     ) -> Booking:
         booking_id = uuid.uuid4()
         end = start + offering.duration
@@ -401,7 +405,7 @@ class BookingEngine:
             recurring_series_id=series_id,
         )
         if status != S.WAITLISTED:
-            self._allocate(booking, offering, extras, active=self._consumes(status))
+            self._allocate(booking, offering, extras, active=hold or self._consumes(status))
         self.db.add(booking)
         return booking
 
@@ -440,7 +444,7 @@ class BookingEngine:
         self._lock_resources([offering.resource.id, *(e.id for e in extras)])
         waitlist = self._evaluate(offering, extras, start, **check_kwargs)
 
-        status = S.WAITLISTED if waitlist else self._initial_status()
+        status = S.WAITLISTED if waitlist else (S.PENDING if req.awaiting_customer else self._initial_status())
         booking = self._insert(
             user_id=user.id,
             offering=offering,
@@ -449,6 +453,7 @@ class BookingEngine:
             quantity=req.quantity,
             notes=req.notes,
             status=status,
+            hold=req.awaiting_customer,
         )
         self._flush()
         audit.record(

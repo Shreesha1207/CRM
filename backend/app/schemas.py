@@ -98,6 +98,13 @@ class UserCreateIn(RegisterIn):
     role: Role = Role.USER
     status: UserStatus = UserStatus.ACTIVE
 
+    @field_validator("status")
+    @classmethod
+    def _not_invited(cls, status: UserStatus) -> UserStatus:
+        if status == UserStatus.INVITED:
+            raise ValueError("Accounts are only invited by booking for an e-mail address")
+        return status
+
 
 class UserUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
@@ -461,6 +468,8 @@ class InvitationPublicOut(BaseModel):
     when: str
     expires_at: datetime
     has_account: bool
+    # True when the booking is already on the calendar (declining cancels it).
+    booked: bool = False
 
 
 class InvitationAcceptIn(BaseModel):

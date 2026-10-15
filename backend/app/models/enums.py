@@ -13,6 +13,9 @@ class Role(StrEnum):
 
 class UserStatus(StrEnum):
     ACTIVE = "ACTIVE"
+    # Made by an admin's booking invitation: has no usable password and cannot
+    # sign in until the person accepts the invitation and sets one.
+    INVITED = "INVITED"
     INACTIVE = "INACTIVE"
     SUSPENDED = "SUSPENDED"
 

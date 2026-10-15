@@ -24,6 +24,7 @@ from app.models.enums import (
     NotificationChannel,
     NotificationStatus,
     NotificationType,
+    UserStatus,
 )
 from app.services import events, settings_service
 from app.services.availability import resource_timezone
@@ -63,6 +64,10 @@ def notify(
     channels=DEFAULT_CHANNELS,
     email_body: str | None = None,
 ) -> None:
+    recipient = db.get(User, user_id)
+    if recipient is not None and recipient.status == UserStatus.INVITED:
+        # An account nobody has claimed yet: the invitation e-mail is the only message they get.
+        return
     now = utcnow()
     for channel in channels:
         values = dict(
@@ -109,9 +114,11 @@ def _on_created(db: Session, event: DomainEvent) -> None:
         BookingStatus.WAITLISTED: (NotificationType.BOOKING_CREATED, "You are on the waitlist"),
     }
     type_, title = titles.get(booking.status, (NotificationType.BOOKING_CREATED, "Booking created"))
-    notify(
-        db, user_id=booking.user_id, booking_id=booking.id, type=type_, title=title, **_with_place(booking, _booking_line(db, booking))
-    )
+    body = _booking_line(db, booking)
+    maker = db.get(User, booking.created_by) if booking.created_by and booking.created_by != booking.user_id else None
+    if maker is not None:  # an admin booked it for them: say so
+        body += f"\nBooked for you by {maker.name}."
+    notify(db, user_id=booking.user_id, booking_id=booking.id, type=type_, title=title, **_with_place(booking, body))
 
 
 def _on_confirmed(db: Session, event: DomainEvent) -> None:
@@ -202,6 +209,7 @@ def send_email(to: str, subject: str, body: str) -> None:
         message["To"] = to
         message["Subject"] = subject
         message.set_content(body)
+        # Port 465 is TLS from the first byte; every other port starts plain and upgrades.
         # The certificate is checked, so a password is never handed to an impostor.
         implicit_tls = settings.smtp_port == 465
         tls = ssl.create_default_context()

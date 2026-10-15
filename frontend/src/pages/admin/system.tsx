@@ -82,6 +82,8 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
               <option value="ACTIVE">Active</option>
               <option value="INACTIVE">Inactive</option>
               <option value="SUSPENDED">Suspended</option>
+              {/* Only made by a booking invitation; shown so the current value reads right, never offered. */}
+              {form.status === "INVITED" && <option value="INVITED">Invited (not registered yet)</option>}
             </Select>
           </Field>
         </div>

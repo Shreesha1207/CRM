@@ -1,5 +1,11 @@
 """The invitee's side of a booking invitation. The token in the e-mailed link is
-the credential, so these routes need no sign-in (except for an existing account)."""
+the credential, so these routes need no sign-in (except for an existing account).
+
+The invited booking is already on the calendar, held as pending. Accepting
+claims the account and confirms it; declining cancels it.
+"""
+
+import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
@@ -7,12 +13,12 @@ from sqlalchemy import select
 from app.api.deps import DB, OptionalUser, rate_limit
 from app.api.routes.auth import _start_session
 from app.api.routes.bookings import create_with_auto_assign
-from app.core.errors import AppError, NotFound
+from app.core.errors import AppError, BookingRejected, NotFound
 from app.core.security import hash_password, hash_token
 from app.core.timeutils import utcnow
 from app.jobs.runner import dispatch_notifications
-from app.models import BookingInvitation, User
-from app.models.enums import InvitationStatus, NotificationType, Role, UserStatus
+from app.models import Booking, BookingInvitation, User
+from app.models.enums import BookingStatus, InvitationStatus, NotificationType, Role, UserStatus
 from app.schemas import InvitationAcceptIn, InvitationAcceptOut, InvitationPublicOut
 from app.services import audit, invitations
 from app.services.booking_engine import BookingEngine
@@ -26,6 +32,10 @@ def _load(db: DB, token: str, *, lock: bool = False) -> BookingInvitation:
     if invitation is None:
         raise NotFound("Invitation")
     return invitation
+
+
+def _load_by_id(db: DB, invitation_id: uuid.UUID) -> BookingInvitation:
+    return db.scalars(select(BookingInvitation).where(BookingInvitation.id == invitation_id).with_for_update()).one()
 
 
 def _state(invitation: BookingInvitation) -> str:
@@ -46,6 +56,7 @@ def get_invitation(token: str, db: DB) -> InvitationPublicOut:
     invitation = _load(db, token)
     inviter = db.get(User, invitation.invited_by_id)
     details = invitations.describe(db, invitation)
+    account = db.scalar(select(User).where(User.email == invitation.email))
     return InvitationPublicOut(
         email=invitation.email,
         status=_state(invitation),
@@ -54,7 +65,9 @@ def get_invitation(token: str, db: DB) -> InvitationPublicOut:
         resource_name=details["resource_name"],
         when=details["when"],
         expires_at=invitation.expires_at,
-        has_account=db.scalar(select(User.id).where(User.email == invitation.email)) is not None,
+        # A placeholder made by the invitation is not an account yet.
+        has_account=account is not None and account.status != UserStatus.INVITED,
+        booked=invitation.booking_id is not None,
     )
 
 
@@ -62,7 +75,16 @@ def get_invitation(token: str, db: DB) -> InvitationPublicOut:
 def decline_invitation(token: str, db: DB, background: BackgroundTasks) -> dict:
     invitation = _load(db, token, lock=True)
     _require_open(invitation)
+    inviter = db.get(User, invitation.invited_by_id)
     details = invitations.describe(db, invitation)
+    invitation_id = invitation.id
+    if invitation.booking_id:
+        try:
+            # Off the calendar, and the time is free for someone else.
+            BookingEngine(db, inviter).cancel(invitation.booking_id, reason="Declined by the customer")
+        except AppError:
+            db.rollback()  # already cancelled (or finished): there is nothing left to remove
+        invitation = _load_by_id(db, invitation_id)
     invitation.status = InvitationStatus.DECLINED
     invitation.responded_at = utcnow()
     invitations.tell_inviter(
@@ -70,9 +92,10 @@ def decline_invitation(token: str, db: DB, background: BackgroundTasks) -> dict:
         invitation,
         type=NotificationType.INVITATION_DECLINED,
         title="Booking rejected",
-        body=f"{invitation.email} declined the booking for {details['service_name']} on {details['when']}.",
+        body=f"{invitation.email} declined the booking for {details['service_name']} on {details['when']}."
+        + (" It was removed from the calendar." if invitation.booking_id else ""),
     )
-    audit.record(db, actor_id=None, action="BOOKING_INVITATION_DECLINED", entity_type="booking_invitation", entity_id=invitation.id)
+    audit.record(db, actor_id=None, action="BOOKING_INVITATION_DECLINED", entity_type="booking_invitation", entity_id=invitation_id)
     db.commit()
     background.add_task(dispatch_notifications)
     return {"message": "You declined the booking. We have let them know."}
@@ -92,24 +115,22 @@ def accept_invitation(
     _require_open(invitation)
     user = db.scalar(select(User).where(User.email == invitation.email))
     signed_in = False
-    if user is None:
+    if user is None or user.status == UserStatus.INVITED:
         if not body.name or not body.password:
             raise AppError("DETAILS_REQUIRED", "Enter your name and choose a password", status_code=422)
-        user = User(
-            name=body.name.strip(),
-            email=invitation.email,
-            phone=body.phone,
-            password_hash=hash_password(body.password),
-            role=Role.USER,
-            status=UserStatus.ACTIVE,
-        )
-        db.add(user)
+        if user is None:  # an invitation from before bookings were held
+            user = User(email=invitation.email, role=Role.USER)
+            db.add(user)
+        user.name = body.name.strip()
+        user.phone = body.phone
+        user.password_hash = hash_password(body.password)
+        user.status = UserStatus.ACTIVE
         db.flush()
         audit.record(
             db, actor_id=user.id, action="USER_REGISTERED", entity_type="user", entity_id=user.id,
             new={"via": "booking invitation"},
         )
-        # The account is kept (and the customer signed in) whether or not the booking still works.
+        # The account is kept (and the customer signed in) whatever happens to the booking.
         _start_session(db, user, request, response)
         signed_in = True
     elif user.status != UserStatus.ACTIVE:
@@ -118,21 +139,29 @@ def accept_invitation(
         raise AppError("SIGN_IN_REQUIRED", f"Sign in as {invitation.email} to accept this booking", status_code=401)
 
     # Creating the account committed, which released the row lock: take it again so a
-    # double click cannot book twice.
-    invitation = _load(db, token, lock=True)
+    # double click cannot confirm twice.
+    invitation_id = invitation.id
+    invitation = _load_by_id(db, invitation_id)
     _require_open(invitation)
     inviter = db.get(User, invitation.invited_by_id)
     details = invitations.describe(db, invitation)
     what = f"{details['service_name']} on {details['when']}"
-    wants = invitations.request_of(invitation)
     try:
         engine = BookingEngine(db, inviter)
-        booking = create_with_auto_assign(
-            engine, wants, user_id=user.id, override_rules=bool(invitation.request.get("override_rules"))
-        )
+        if invitation.booking_id:
+            booking = db.get(Booking, invitation.booking_id)
+            if booking is None or booking.status == BookingStatus.CANCELLED:
+                raise BookingRejected("BOOKING_CANCELLED", "This booking was cancelled", status_code=409)
+            if booking.status == BookingStatus.PENDING:
+                engine.confirm(booking.id)  # sends the customer their confirmation
+        else:
+            booking = create_with_auto_assign(
+                engine, invitations.request_of(invitation), user_id=user.id,
+                override_rules=bool(invitation.request.get("override_rules")),
+            )
     except AppError as exc:
         db.rollback()
-        invitation = _load(db, token, lock=True)
+        invitation = _load_by_id(db, invitation_id)
         invitation.status = InvitationStatus.FAILED
         invitation.responded_at = utcnow()
         invitation.failure_reason = exc.message
@@ -141,12 +170,13 @@ def accept_invitation(
             invitation,
             type=NotificationType.INVITATION_ACCEPTED,
             title="Invitation accepted, but the booking failed",
-            body=f"{invitation.email} registered, but {what} could not be booked: {exc.message}.",
+            body=f"{invitation.email} registered, but {what} could not be confirmed: {exc.message}.",
         )
         db.commit()
         background.add_task(dispatch_notifications)
         return InvitationAcceptOut(booking_id=None, error=exc.message, signed_in=signed_in)
 
+    invitation = _load_by_id(db, invitation_id)
     invitation.status = InvitationStatus.ACCEPTED
     invitation.responded_at = utcnow()
     invitation.booking_id = booking.id

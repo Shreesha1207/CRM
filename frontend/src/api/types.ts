@@ -1,5 +1,6 @@
 export type Role = "USER" | "ADMIN" | "STAFF" | "RESOURCE_OWNER" | "MANAGER" | "SUPER_ADMIN";
-export type UserStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED";
+/** INVITED: made by a booking invitation; the person has not set up their account yet. */
+export type UserStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED" | "INVITED";
 export type RecordStatus = "ACTIVE" | "INACTIVE";
 export type ResourceType = "PERSON" | "ROOM" | "FACILITY" | "EQUIPMENT" | "VEHICLE" | "DESK" | "COURT" | "CUSTOM";
 export type BookingType = "INDIVIDUAL" | "CAPACITY";
@@ -306,6 +307,8 @@ export interface InvitationDetails {
   when: string;
   expires_at: string;
   has_account: boolean;
+  /** The booking is already on the calendar; declining cancels it. */
+  booked: boolean;
 }
 
 export interface InvitationAnswer {

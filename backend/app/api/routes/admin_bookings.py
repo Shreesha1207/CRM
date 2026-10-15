@@ -13,7 +13,7 @@ from app.api.routes.bookings import create_with_auto_assign
 from app.api.serializers import booking_out, bookings_out, resource_out
 from app.core.errors import AppError, NotFound
 from app.core.permissions import Permission
-from app.core.security import hash_token, new_token
+from app.core.security import hash_password, hash_token, new_token
 from app.core.timeutils import day_bounds, get_zone, utcnow
 from app.jobs.runner import dispatch_notifications
 from app.models import (
@@ -26,7 +26,7 @@ from app.models import (
     Service,
     User,
 )
-from app.models.enums import BookingStatus, RecordStatus
+from app.models.enums import BookingStatus, RecordStatus, Role, UserStatus
 from app.schemas import (
     AdminBookingCreateIn,
     AdminBookingUpdateIn,
@@ -106,6 +106,12 @@ def list_bookings(
 
 @router.post("/bookings", response_model=BookingOut, status_code=status.HTTP_201_CREATED)
 def admin_create_booking(body: AdminBookingCreateIn, db: DB, background: BackgroundTasks, actor: User = Manage) -> BookingOut:
+    """Book for a customer who has an account. They are e-mailed a booking confirmation."""
+    customer = db.get(User, body.user_id)
+    if customer is not None and customer.status == UserStatus.INVITED:
+        raise AppError(
+            "NOT_REGISTERED", "That customer has not created their account yet: send them an invitation instead", status_code=409
+        )
     engine = BookingEngine(db, actor)
     booking = create_with_auto_assign(engine, body, user_id=body.user_id, override_rules=body.override_rules)
     background.add_task(dispatch_notifications)
@@ -114,38 +120,64 @@ def admin_create_booking(body: AdminBookingCreateIn, db: DB, background: Backgro
 
 @router.post("/bookings/invite", response_model=InvitationOut, status_code=status.HTTP_201_CREATED)
 def invite_customer(body: BookingInviteIn, db: DB, actor: User = Manage) -> BookingInvitation:
-    """Book for an e-mail address with no account: invite them to register.
+    """Book for an e-mail address with no account yet.
 
-    Nothing is booked yet; it is made if they register and accept, and the admin
-    is told if they decline."""
+    The booking goes on the calendar at once, held as pending, and the customer
+    is e-mailed a link to create their account and confirm it. If they decline,
+    the booking is cancelled and the admin is told."""
     email = body.customer_email.lower()
-    if db.scalar(select(User.id).where(User.email == email)):
+    guest = db.scalar(select(User).where(User.email == email))
+    if guest is not None and guest.status != UserStatus.INVITED:
         raise AppError("ALREADY_REGISTERED", "That e-mail already has an account: choose them from the list", status_code=409)
     if db.get(Service, body.service_id) is None:
         raise NotFound("Service")
     if body.resource_id and db.get(Resource, body.resource_id) is None:
         raise NotFound("Resource")
+
+    created = guest is None
+    if guest is None:
+        # The booking needs an owner, so the invited person gets a placeholder account.
+        # It cannot sign in (nobody knows its password) until they accept the invitation.
+        guest = User(name=email, email=email, password_hash=hash_password(new_token()), role=Role.USER, status=UserStatus.INVITED)
+        db.add(guest)
+        db.flush()
+        audit.record(db, actor_id=actor.id, action="USER_INVITED", entity_type="user", entity_id=guest.id, new={"email": email})
+        db.commit()  # booking attempts roll back when a resource is taken: keep the placeholder across them
+    guest_id = guest.id
+    try:
+        booking = create_with_auto_assign(
+            BookingEngine(db, actor), body, user_id=guest_id, override_rules=body.override_rules, awaiting_customer=True
+        )
+    except AppError:
+        db.rollback()
+        if created:  # nothing was booked: don't leave the placeholder behind
+            db.delete(db.get(User, guest_id))
+            db.commit()
+        raise
+
     token = new_token()
     invitation = BookingInvitation(
         email=email,
         token_hash=hash_token(token),
         invited_by_id=actor.id,
         request=body.model_dump(mode="json", exclude={"customer_email"}),
+        booking_id=booking.id,
         expires_at=invitations.expiry(),
     )
     db.add(invitation)
     db.flush()
     audit.record(
         db, actor_id=actor.id, action="BOOKING_INVITATION_SENT", entity_type="booking_invitation",
-        entity_id=invitation.id, new={"email": email},
+        entity_id=invitation.id, new={"email": email, "booking_id": booking.id},
     )
+    db.commit()
     try:
         invitations.send_invitation(db, invitation, actor, token)
     except Exception:
         log.exception("Could not send the booking invitation to %s", email)
-        db.rollback()
+        # Nobody was told about it, so don't leave a booking on the calendar for them.
+        invitations.withdraw(db, invitation, actor, "The invitation e-mail could not be sent")
         raise AppError("EMAIL_FAILED", f"The invitation e-mail to {email} could not be sent", status_code=502) from None
-    db.commit()
     return invitation
 
 

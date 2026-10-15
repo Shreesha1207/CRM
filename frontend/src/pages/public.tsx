@@ -521,7 +521,11 @@ export function InvitationPage() {
   } else if (!d) {
     body = <Loading />;
   } else if (declined) {
-    body = <Alert tone="success">You declined the booking. We have let {d.invited_by} know.</Alert>;
+    body = (
+      <Alert tone="success">
+        You declined the booking{d.booked ? ", so it has been cancelled" : ""}. We have let {d.invited_by} know.
+      </Alert>
+    );
   } else if (answer) {
     body = answer.booking_id ? (
       <div className="space-y-4">
@@ -548,7 +552,7 @@ export function InvitationPage() {
     body = (
       <div className="space-y-5">
         <div className="space-y-1 text-sm">
-          <p className="text-muted">{d.invited_by} would like to book this for you:</p>
+          <p className="text-muted">{d.invited_by} {d.booked ? "has booked this for you" : "would like to book this for you"}:</p>
           <p className="font-medium text-fg">{d.service_name}</p>
           <p className="text-muted">With {d.resource_name ?? "the first available"}</p>
           <p className="text-muted">{d.when}</p>
@@ -569,7 +573,9 @@ export function InvitationPage() {
           >
             {!d.has_account && (
               <>
-                <p className="text-sm text-muted">You don't have an account yet. Create one for {d.email} to accept.</p>
+                <p className="text-sm text-muted">
+                  You don't have an account yet. Create one for {d.email} to confirm the booking. If it isn't for you, decline it and it will be cancelled.
+                </p>
                 <Field label="Name">
                   <Input required autoComplete="name" value={form.name} onChange={set("name")} />
                 </Field>
@@ -582,12 +588,12 @@ export function InvitationPage() {
               </>
             )}
             <Button type="submit" className="w-full" loading={accept.isPending} disabled={decline.isPending}>
-              {d.has_account ? "Accept booking" : "Create account & accept"}
+              {d.has_account ? "Confirm booking" : "Create account & confirm"}
             </Button>
           </form>
         )}
         <Button variant="secondary" className="w-full" loading={decline.isPending} disabled={accept.isPending} onClick={() => decline.mutate()}>
-          Decline
+          {d.booked ? "Decline and cancel the booking" : "Decline"}
         </Button>
       </div>
     );

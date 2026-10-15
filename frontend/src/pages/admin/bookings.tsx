@@ -157,7 +157,8 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
   );
 }
 
-type Customer = { kind: "user"; user: User } | { kind: "invite"; email: string };
+/** `again`: this e-mail was invited before but has not registered, so it is invited again, not booked directly. */
+type Customer = { kind: "user"; user: User } | { kind: "invite"; email: string; again?: boolean };
 
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -197,7 +198,7 @@ function CustomerPicker({ id, value, onChange }: { id?: string; value: Customer 
   const settled = query === text.trim() && !users.isFetching;
   const inviteEmail = settled && EMAIL_SHAPE.test(typed) && !found.some((u) => u.email.toLowerCase() === typed) ? typed : null;
   const options: Customer[] = [
-    ...found.map((user): Customer => ({ kind: "user", user })),
+    ...found.map((user): Customer => (user.status === "INVITED" ? { kind: "invite", email: user.email, again: true } : { kind: "user", user })),
     ...(inviteEmail ? [{ kind: "invite", email: inviteEmail } as Customer] : []),
   ];
 
@@ -231,7 +232,7 @@ function CustomerPicker({ id, value, onChange }: { id?: string; value: Customer 
             </>
           ) : (
             <>
-              <span className="font-medium text-fg">{value.email}</span> <span className="text-muted">· not registered, will be invited</span>
+              <span className="font-medium text-fg">{value.email}</span> <span className="text-muted">· not registered yet, will be invited</span>
             </>
           )}
         </span>
@@ -265,7 +266,7 @@ function CustomerPicker({ id, value, onChange }: { id?: string; value: Customer 
         <ul id={listId} role="listbox" className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-line bg-surface py-1 shadow-lg">
           {options.map((o, i) => (
             <li
-              key={o.kind === "user" ? o.user.id : "invite"}
+              key={o.kind === "user" ? o.user.id : `invite-${o.email}`}
               id={`${listId}-${i}`}
               role="option"
               aria-selected={i === active}
@@ -280,7 +281,8 @@ function CustomerPicker({ id, value, onChange }: { id?: string; value: Customer 
                 </>
               ) : (
                 <>
-                  Invite <span className="font-medium text-fg">{o.email}</span> <span className="text-muted">to register</span>
+                  Invite <span className="font-medium text-fg">{o.email}</span>{" "}
+                  <span className="text-muted">{o.again ? "again · invited before, not registered yet" : "to register"}</span>
                 </>
               )}
             </li>
@@ -302,6 +304,7 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
   const { services } = useCatalog();
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [invitedEmail, setInvitedEmail] = useState<string | null>(null);
+  const [bookedFor, setBookedFor] = useState<User | null>(null);
   const [serviceId, setServiceId] = useState(initial?.serviceId ?? "");
   const [resourceId, setResourceId] = useState(initial?.resourceId ?? "");
   const [date, setDate] = useState(todayIn(config.data?.default_timezone ?? "UTC"));
@@ -334,12 +337,13 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
   });
   const book = useMutation({
     mutationFn: (user: User) => api.post<Booking>("/api/admin/bookings", { ...details(), user_id: user.id }),
-    onSuccess: () => {
+    onSuccess: (_booking, user) => {
       queryClient.invalidateQueries();
-      onClose();
+      setBookedFor(user);
     },
   });
-  // Someone with no account yet: they are e-mailed a link to register and accept.
+  // Someone with no account yet: the booking goes on the calendar now, and they are
+  // e-mailed a link to create their account and confirm it (or decline, which cancels it).
   const invite = useMutation({
     mutationFn: (email: string) => api.post<Invitation>("/api/admin/bookings/invite", { ...details(), customer_email: email }),
     onSuccess: (sent) => {
@@ -357,7 +361,7 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
       title="New booking"
       onClose={onClose}
       footer={
-        invitedEmail ? (
+        invitedEmail || bookedFor ? (
           <Button onClick={onClose}>Done</Button>
         ) : (
           <>
@@ -365,16 +369,20 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
               Cancel
             </Button>
             <Button disabled={!customer || !serviceId || (!override && !picked)} loading={mutation.isPending} onClick={submit}>
-              {customer?.kind === "invite" ? "Send invitation" : "Create booking"}
+              {customer?.kind === "invite" ? "Book and send invitation" : "Create booking"}
             </Button>
           </>
         )
       }
     >
-      {invitedEmail ? (
+      {bookedFor ? (
         <Alert tone="success">
-          Invitation sent to {invitedEmail}. The booking is made when they register and accept. If they decline, you will get a "Booking rejected"
-          notice here. The time is not held for them in the meantime.
+          Booked for {bookedFor.name}. A confirmation e-mail is on its way to {bookedFor.email}.
+        </Alert>
+      ) : invitedEmail ? (
+        <Alert tone="success">
+          Booked for {invitedEmail}: it is on the calendar now, as pending. We e-mailed them a link to create an account and confirm it. If they
+          decline, it is taken off the calendar and you will get a "Booking rejected" notice here.
         </Alert>
       ) : (
       <div className="space-y-4">
@@ -385,7 +393,13 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
               <CustomerPicker value={customer} onChange={setCustomer} />
             </Field>
             {customer?.kind === "invite" && (
-              <Alert tone="info">No account uses this e-mail. We will e-mail an invitation to register; the booking is made once they accept.</Alert>
+              <Alert tone="info">
+                No account uses this e-mail. The booking goes on the calendar now, and we e-mail them a link to create an account and confirm it. If
+                they decline, it is removed.
+              </Alert>
+            )}
+            {customer?.kind === "user" && (
+              <Alert tone="info">They will be e-mailed a confirmation of this booking.</Alert>
             )}
           </div>
           <div className="space-y-4">
