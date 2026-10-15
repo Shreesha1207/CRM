@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 60 * 12
     password_reset_ttl_minutes: int = 30
+    # How long an invited customer has to register and accept a booking.
+    invitation_ttl_days: int = 7
 
     # Cookie auth is used by the browser client; bearer tokens by API clients.
     cookie_secure: bool = False

@@ -1,10 +1,48 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { api } from "../api/client";
+import type { NotificationItem } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { titleCase } from "../lib/format";
 import { Calendar, Clock, ExternalLink, FileText, Grid, List, MapPin, Mark, Menu, People, Person, SignOut, Sliders, Tag, Warning } from "./icons";
 import { NotificationBell, ThemeToggle, iconButton, useConfig } from "./Layout";
-import { cx } from "./ui";
+import { Button, Modal, cx } from "./ui";
+
+/** A pop-up when someone declines a booking the admin invited them to, until it is dismissed. */
+function DeclinedInvitations() {
+  const queryClient = useQueryClient();
+  const declined = useQuery({
+    queryKey: ["notifications", "declined-invitations"],
+    queryFn: () => api.get<NotificationItem[]>("/api/notifications", { type: "INVITATION_DECLINED", unread_only: true, limit: 20 }),
+    refetchInterval: 30_000,
+  });
+  const dismiss = useMutation({
+    mutationFn: (items: NotificationItem[]) => Promise.all(items.map((n) => api.post(`/api/notifications/${n.id}/read`))),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }),
+  });
+  const items = declined.data ?? [];
+  if (items.length === 0) return null;
+  const close = () => dismiss.mutate(items);
+  return (
+    <Modal
+      open
+      title="Booking rejected"
+      onClose={close}
+      footer={
+        <Button loading={dismiss.isPending} onClick={close}>
+          Dismiss
+        </Button>
+      }
+    >
+      <ul className="space-y-3 text-sm">
+        {items.map((n) => (
+          <li key={n.id}>{n.body}</li>
+        ))}
+      </ul>
+    </Modal>
+  );
+}
 
 type AdminLink = { to: string; label: string; permission: string; icon: (p: { className?: string }) => React.ReactNode; end?: boolean };
 
@@ -167,6 +205,7 @@ export function AdminShell() {
         <main className="mx-auto max-w-7xl px-4 pb-16 pt-6 sm:px-6 sm:pt-8 lg:px-8">
           <Outlet />
         </main>
+        <DeclinedInvitations />
       </div>
     </div>
   );

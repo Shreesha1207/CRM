@@ -436,6 +436,47 @@ class AdminBookingCreateIn(BookingCreateIn):
     override_rules: bool = False
 
 
+class BookingInviteIn(BookingCreateIn):
+    """A booking for an e-mail address that has no account yet."""
+
+    customer_email: EmailStr
+    override_rules: bool = False
+
+
+class InvitationOut(ORM):
+    id: uuid.UUID
+    email: str
+    expires_at: datetime
+
+
+class InvitationPublicOut(BaseModel):
+    """What the invitee sees before answering; the token in the link is the credential."""
+
+    email: str
+    # PENDING / ACCEPTED / DECLINED / FAILED, or EXPIRED for a pending one past its date.
+    status: str
+    invited_by: str
+    service_name: str
+    resource_name: str | None
+    when: str
+    expires_at: datetime
+    has_account: bool
+
+
+class InvitationAcceptIn(BaseModel):
+    # Only needed when the e-mail has no account yet.
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    phone: str | None = Field(default=None, max_length=50)
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class InvitationAcceptOut(BaseModel):
+    booking_id: uuid.UUID | None
+    # Why the booking could not be made (the account exists regardless).
+    error: str | None = None
+    signed_in: bool
+
+
 class CancelIn(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
 

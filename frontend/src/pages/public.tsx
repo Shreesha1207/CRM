@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 import { useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, errorMessage } from "../api/client";
-import type { Location, Resource, ResourceDetail, Service, ServiceDetail } from "../api/types";
+import type { InvitationAnswer, InvitationDetails, Location, Resource, ResourceDetail, Service, ServiceDetail } from "../api/types";
 import { RESOURCE_TYPES } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { useConfig } from "../components/Layout";
@@ -484,6 +484,115 @@ export function RegisterPage() {
       </form>
     </AuthCard>
   );
+}
+
+/** Where the link in a booking invitation e-mail lands: register and accept, or decline. */
+export function InvitationPage() {
+  const token = useSearchParams()[0].get("token") ?? "";
+  const { user, refresh } = useAuth();
+  const [form, setForm] = useState({ name: "", phone: "", password: "" });
+  const [declined, setDeclined] = useState(false);
+  const details = useQuery({
+    queryKey: ["invitation", token],
+    queryFn: () => api.get<InvitationDetails>(`/api/invitations/${token}`),
+    enabled: !!token,
+    retry: false,
+  });
+  const accept = useMutation({
+    mutationFn: () =>
+      api.post<InvitationAnswer>(`/api/invitations/${token}/accept`, {
+        name: form.name || undefined,
+        phone: form.phone || undefined,
+        password: form.password || undefined,
+      }),
+    onSuccess: () => refresh(),
+  });
+  const decline = useMutation({
+    mutationFn: () => api.post(`/api/invitations/${token}/decline`),
+    onSuccess: () => setDeclined(true),
+  });
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
+
+  const d = details.data;
+  const answer = accept.data;
+  let body: React.ReactNode;
+  if (!token || details.error) {
+    body = <Alert>{token ? errorMessage(details.error) : "This invitation link is incomplete."}</Alert>;
+  } else if (!d) {
+    body = <Loading />;
+  } else if (declined) {
+    body = <Alert tone="success">You declined the booking. We have let {d.invited_by} know.</Alert>;
+  } else if (answer) {
+    body = answer.booking_id ? (
+      <div className="space-y-4">
+        <Alert tone="success">You're booked. A confirmation is on its way to {d.email}.</Alert>
+        <Link to={`/bookings/${answer.booking_id}`} className={buttonClass("primary", "md", "w-full")}>
+          View your booking
+        </Link>
+      </div>
+    ) : (
+      <div className="space-y-4">
+        <Alert tone="warning">
+          {answer.signed_in ? "Your account is ready, but " : ""}that time could not be booked: {answer.error}. {d.invited_by} has been told.
+        </Alert>
+        <Link to="/book" className={buttonClass("primary", "md", "w-full")}>
+          Choose another time
+        </Link>
+      </div>
+    );
+  } else if (d.status !== "PENDING") {
+    const why = { EXPIRED: "This invitation has expired.", DECLINED: "You declined this invitation.", ACCEPTED: "This invitation was accepted." }[d.status];
+    body = <Alert tone="info">{why ?? "This invitation can no longer be used."}</Alert>;
+  } else {
+    const signedInAsInvitee = user?.email === d.email;
+    body = (
+      <div className="space-y-5">
+        <div className="space-y-1 text-sm">
+          <p className="text-muted">{d.invited_by} would like to book this for you:</p>
+          <p className="font-medium text-fg">{d.service_name}</p>
+          <p className="text-muted">With {d.resource_name ?? "the first available"}</p>
+          <p className="text-muted">{d.when}</p>
+        </div>
+        {accept.error && <Alert>{errorMessage(accept.error)}</Alert>}
+        {decline.error && <Alert>{errorMessage(decline.error)}</Alert>}
+        {d.has_account && !signedInAsInvitee ? (
+          <Link to={`/login?next=${encodeURIComponent(`/invitation?token=${token}`)}`} className={buttonClass("primary", "md", "w-full")}>
+            Sign in as {d.email} to accept
+          </Link>
+        ) : (
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              accept.mutate();
+            }}
+          >
+            {!d.has_account && (
+              <>
+                <p className="text-sm text-muted">You don't have an account yet. Create one for {d.email} to accept.</p>
+                <Field label="Name">
+                  <Input required autoComplete="name" value={form.name} onChange={set("name")} />
+                </Field>
+                <Field label="Phone (optional)">
+                  <Input type="tel" autoComplete="tel" value={form.phone} onChange={set("phone")} />
+                </Field>
+                <Field label="Password" hint="At least 8 characters.">
+                  <Input type="password" required minLength={8} autoComplete="new-password" value={form.password} onChange={set("password")} />
+                </Field>
+              </>
+            )}
+            <Button type="submit" className="w-full" loading={accept.isPending} disabled={decline.isPending}>
+              {d.has_account ? "Accept booking" : "Create account & accept"}
+            </Button>
+          </form>
+        )}
+        <Button variant="secondary" className="w-full" loading={decline.isPending} disabled={accept.isPending} onClick={() => decline.mutate()}>
+          Decline
+        </Button>
+      </div>
+    );
+  }
+  return <AuthCard title="Booking invitation">{body}</AuthCard>;
 }
 
 export function ForgotPasswordPage() {

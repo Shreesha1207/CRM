@@ -289,6 +289,31 @@ export interface NotificationItem {
   created_at: string;
 }
 
+export interface Invitation {
+  id: string;
+  email: string;
+  expires_at: string;
+}
+
+/** What someone sees when they open the link in a booking invitation e-mail. */
+export interface InvitationDetails {
+  email: string;
+  /** PENDING, ACCEPTED, DECLINED, FAILED, or EXPIRED. */
+  status: string;
+  invited_by: string;
+  service_name: string;
+  resource_name: string | null;
+  when: string;
+  expires_at: string;
+  has_account: boolean;
+}
+
+export interface InvitationAnswer {
+  booking_id: string | null;
+  error: string | null;
+  signed_in: boolean;
+}
+
 export interface AuditLog {
   id: string;
   actor_id: string | null;

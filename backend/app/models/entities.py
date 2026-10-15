@@ -27,6 +27,7 @@ from app.models.enums import (
     BookingStatus,
     BookingType,
     ExceptionType,
+    InvitationStatus,
     NotificationChannel,
     NotificationStatus,
     NotificationType,
@@ -344,6 +345,28 @@ class Notification(UUIDPk, Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BookingInvitation(UUIDPk, Base):
+    """An admin's booking for someone who has no account yet.
+
+    Nothing is booked until the invitee registers and accepts, so the requested
+    booking is kept as data and made through the booking engine at that point.
+    """
+
+    __tablename__ = "booking_invitations"
+
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True)
+    invited_by_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # The BookingCreateIn fields plus override_rules, as JSON.
+    request: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    status: Mapped[InvitationStatus] = mapped_column(_enum(InvitationStatus), default=InvitationStatus.PENDING)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    booking_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("bookings.id", ondelete="SET NULL"))
+    failure_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

@@ -1,13 +1,13 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, errorMessage } from "../../api/client";
-import type { AuditLog, Booking, Location, Page, Resource, Service, ServiceDetail, User } from "../../api/types";
+import type { AuditLog, Booking, Invitation, Location, Page, Resource, Service, ServiceDetail, User } from "../../api/types";
 import { BOOKING_STATUSES } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { BookingSummary, DateNav, SlotPicker, type PickedSlot } from "../../components/booking";
 import { useConfig } from "../../components/Layout";
-import { Alert, Button, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td, Textarea, TimeSelect } from "../../components/ui";
+import { Alert, Button, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td, Textarea, TimeSelect, cx } from "../../components/ui";
 import { CancelModal, RescheduleModal } from "../account";
 import { formatDateTime, formatDuration, formatStamp, formatMoney, formatTime, lengthOptions, sameDay, titleCase, todayIn } from "../../lib/format";
 
@@ -157,12 +157,151 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
   );
 }
 
+type Customer = { kind: "user"; user: User } | { kind: "invite"; email: string };
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * One box for choosing who a booking is for: type a name or e-mail to find a
+ * customer, or type an e-mail nobody has registered to invite them instead.
+ */
+function CustomerPicker({ id, value, onChange }: { id?: string; value: Customer | null; onChange: (customer: Customer | null) => void }) {
+  const listId = useId();
+  const box = useRef<HTMLDivElement>(null);
+  const [text, setText] = useState("");
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+
+  // Search as they type, but not on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(text.trim()), 250);
+    return () => clearTimeout(t);
+  }, [text]);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [open]);
+
+  const users = useQuery({
+    queryKey: ["admin", "users", query],
+    queryFn: () => api.get<Page<User>>("/api/admin/users", { q: query, limit: 8 }),
+    enabled: open && !value,
+    placeholderData: keepPreviousData,
+  });
+  const found = users.data?.items ?? [];
+  const typed = text.trim().toLowerCase();
+  // Only offer an invitation once the search for this exact text has come back without them.
+  const settled = query === text.trim() && !users.isFetching;
+  const inviteEmail = settled && EMAIL_SHAPE.test(typed) && !found.some((u) => u.email.toLowerCase() === typed) ? typed : null;
+  const options: Customer[] = [
+    ...found.map((user): Customer => ({ kind: "user", user })),
+    ...(inviteEmail ? [{ kind: "invite", email: inviteEmail } as Customer] : []),
+  ];
+
+  const choose = (customer: Customer) => {
+    onChange(customer);
+    setOpen(false);
+    setText("");
+    setQuery("");
+  };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      setOpen(true);
+      setActive((a) => (options.length ? (a + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length : 0));
+    } else if (e.key === "Enter" && open && options[active]) {
+      e.preventDefault();
+      choose(options[active]);
+    } else if (e.key === "Escape" && open) {
+      e.stopPropagation(); // close the list, not the whole dialog
+      setOpen(false);
+    }
+  };
+
+  if (value) {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-md border border-line-strong bg-surface px-3 py-2 text-sm">
+        <span className="min-w-0 truncate">
+          {value.kind === "user" ? (
+            <>
+              <span className="font-medium text-fg">{value.user.name}</span> <span className="text-muted">({value.user.email})</span>
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-fg">{value.email}</span> <span className="text-muted">· not registered, will be invited</span>
+            </>
+          )}
+        </span>
+        <button type="button" className="shrink-0 text-xs font-medium text-accent-text hover:underline" onClick={() => onChange(null)}>
+          Change
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="relative" ref={box}>
+      <Input
+        id={id}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={open && options[active] ? `${listId}-${active}` : undefined}
+        autoComplete="off"
+        placeholder="Search by name or e-mail, or type a new e-mail…"
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          setActive(0);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
+      />
+      {open && (
+        <ul id={listId} role="listbox" className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-line bg-surface py-1 shadow-lg">
+          {options.map((o, i) => (
+            <li
+              key={o.kind === "user" ? o.user.id : "invite"}
+              id={`${listId}-${i}`}
+              role="option"
+              aria-selected={i === active}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => choose(o)}
+              onMouseEnter={() => setActive(i)}
+              className={cx("cursor-pointer px-3 py-2 text-sm", i === active && "bg-subtle")}
+            >
+              {o.kind === "user" ? (
+                <>
+                  <span className="font-medium text-fg">{o.user.name}</span> <span className="text-muted">{o.user.email}</span>
+                </>
+              ) : (
+                <>
+                  Invite <span className="font-medium text-fg">{o.email}</span> <span className="text-muted">to register</span>
+                </>
+              )}
+            </li>
+          ))}
+          {options.length === 0 && (
+            <li className="px-3 py-2 text-sm text-muted">
+              {!settled ? "Searching…" : EMAIL_SHAPE.test(typed) ? "No match" : text.trim() ? "No customer found. Type a full e-mail to invite someone new." : "Type a name or e-mail."}
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial?: { serviceId?: string; resourceId?: string } }) {
   const queryClient = useQueryClient();
   const config = useConfig();
   const { services } = useCatalog();
-  const [userQuery, setUserQuery] = useState("");
-  const [userId, setUserId] = useState("");
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [invitedEmail, setInvitedEmail] = useState<string | null>(null);
   const [serviceId, setServiceId] = useState(initial?.serviceId ?? "");
   const [resourceId, setResourceId] = useState(initial?.resourceId ?? "");
   const [date, setDate] = useState(todayIn(config.data?.default_timezone ?? "UTC"));
@@ -173,10 +312,6 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
   const [quantity, setQuantity] = useState(1);
   const [duration, setDuration] = useState<number | null>(null); // null = the default length
 
-  const users = useQuery({
-    queryKey: ["admin", "users", userQuery],
-    queryFn: () => api.get<Page<User>>("/api/admin/users", { q: userQuery, limit: 10 }),
-  });
   const service = useQuery({
     queryKey: ["service", serviceId],
     queryFn: () => api.get<ServiceDetail>(`/api/services/${serviceId}`),
@@ -187,24 +322,33 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
   const baseLength = offering?.duration_minutes ?? service.data?.duration_minutes ?? 0;
   const lengths = baseLength ? lengthOptions(baseLength, offering?.max_duration_minutes ?? service.data?.max_duration_minutes) : [];
   const customLength = duration && duration !== baseLength && lengths.includes(duration) ? duration : undefined;
-  const mutation = useMutation({
-    mutationFn: () =>
-      api.post<Booking>("/api/admin/bookings", {
-        user_id: userId,
-        service_id: serviceId,
-        resource_id: resourceId || null,
-        // With an override the admin may type any wall-clock time at the resource.
-        start: override ? `${date}T${manualTime}` : picked!.start,
-        quantity,
-        duration_minutes: customLength,
-        notes: notes || null,
-        override_rules: override,
-      }),
+  const details = () => ({
+    service_id: serviceId,
+    resource_id: resourceId || null,
+    // With an override the admin may type any wall-clock time at the resource.
+    start: override ? `${date}T${manualTime}` : picked!.start,
+    quantity,
+    duration_minutes: customLength,
+    notes: notes || null,
+    override_rules: override,
+  });
+  const book = useMutation({
+    mutationFn: (user: User) => api.post<Booking>("/api/admin/bookings", { ...details(), user_id: user.id }),
     onSuccess: () => {
       queryClient.invalidateQueries();
       onClose();
     },
   });
+  // Someone with no account yet: they are e-mailed a link to register and accept.
+  const invite = useMutation({
+    mutationFn: (email: string) => api.post<Invitation>("/api/admin/bookings/invite", { ...details(), customer_email: email }),
+    onSuccess: (sent) => {
+      queryClient.invalidateQueries();
+      setInvitedEmail(sent.email);
+    },
+  });
+  const mutation = customer?.kind === "invite" ? invite : book;
+  const submit = () => (customer?.kind === "invite" ? invite.mutate(customer.email) : customer && book.mutate(customer.user));
 
   return (
     <Modal
@@ -213,30 +357,37 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
       title="New booking"
       onClose={onClose}
       footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button disabled={!userId || !serviceId || (!override && !picked)} loading={mutation.isPending} onClick={() => mutation.mutate()}>
-            Create booking
-          </Button>
-        </>
+        invitedEmail ? (
+          <Button onClick={onClose}>Done</Button>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button disabled={!customer || !serviceId || (!override && !picked)} loading={mutation.isPending} onClick={submit}>
+              {customer?.kind === "invite" ? "Send invitation" : "Create booking"}
+            </Button>
+          </>
+        )
       }
     >
+      {invitedEmail ? (
+        <Alert tone="success">
+          Invitation sent to {invitedEmail}. The booking is made when they register and accept. If they decline, you will get a "Booking rejected"
+          notice here. The time is not held for them in the meantime.
+        </Alert>
+      ) : (
       <div className="space-y-4">
         {mutation.error && <Alert>{errorMessage(mutation.error)}</Alert>}
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Customer">
-            <Input placeholder="Search name or e-mail…" value={userQuery} onChange={(e) => setUserQuery(e.target.value)} />
-            <Select className="mt-2" value={userId} onChange={(e) => setUserId(e.target.value)}>
-              <option value="">Choose…</option>
-              {users.data?.items.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name} ({u.email})
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <div className="space-y-2">
+            <Field label="Customer">
+              <CustomerPicker value={customer} onChange={setCustomer} />
+            </Field>
+            {customer?.kind === "invite" && (
+              <Alert tone="info">No account uses this e-mail. We will e-mail an invitation to register; the booking is made once they accept.</Alert>
+            )}
+          </div>
           <div className="space-y-4">
             <Field label="Service">
               <Select value={serviceId} onChange={(e) => { setServiceId(e.target.value); setResourceId(""); setPicked(null); setDuration(null); }}>
@@ -309,6 +460,7 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
           <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
       </div>
+      )}
     </Modal>
   );
 }

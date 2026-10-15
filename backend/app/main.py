@@ -15,6 +15,7 @@ from app.api.routes import (
     auth,
     bookings,
     catalog,
+    invitations,
     notifications,
 )
 from app.core.config import get_settings
@@ -82,7 +83,7 @@ def create_app() -> FastAPI:
     def health() -> dict:
         return {"status": "ok"}
 
-    for module in (auth, catalog, bookings, notifications, admin_catalog, admin_schedules, admin_bookings, admin_system):
+    for module in (auth, catalog, bookings, invitations, notifications, admin_catalog, admin_schedules, admin_bookings, admin_system):
         app.include_router(module.router)
     return app
 

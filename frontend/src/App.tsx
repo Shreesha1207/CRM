@@ -15,6 +15,7 @@ import { BookPage } from "./pages/book";
 import {
   ForgotPasswordPage,
   HomePage,
+  InvitationPage,
   LoginPage,
   RegisterPage,
   ResetPasswordPage,
@@ -65,6 +66,7 @@ export function App() {
         <Route path="register" element={<RegisterPage />} />
         <Route path="forgot-password" element={<ForgotPasswordPage />} />
         <Route path="reset-password" element={<ResetPasswordPage />} />
+        <Route path="invitation" element={<InvitationPage />} />
         <Route path="services" element={<ServicesPage />} />
         <Route path="services/:id" element={<ServiceDetailPage />} />
         <Route path="resources" element={<ResourcesPage />} />

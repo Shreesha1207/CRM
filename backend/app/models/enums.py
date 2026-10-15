@@ -95,6 +95,16 @@ class NotificationType(StrEnum):
     RESOURCE_CHANGED = "RESOURCE_CHANGED"
     BOOKING_CONFLICTED = "BOOKING_CONFLICTED"
     PASSWORD_RESET = "PASSWORD_RESET"
+    INVITATION_ACCEPTED = "INVITATION_ACCEPTED"
+    INVITATION_DECLINED = "INVITATION_DECLINED"
+
+
+class InvitationStatus(StrEnum):
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    DECLINED = "DECLINED"
+    # The customer registered, but the time was no longer free.
+    FAILED = "FAILED"
 
 
 class RecurrenceFrequency(StrEnum):

@@ -1,5 +1,6 @@
 """Admin booking management, conflict resolution and the calendar feed."""
 
+import logging
 import uuid
 from datetime import date, datetime, timedelta
 
@@ -12,9 +13,19 @@ from app.api.routes.bookings import create_with_auto_assign
 from app.api.serializers import booking_out, bookings_out, resource_out
 from app.core.errors import AppError, NotFound
 from app.core.permissions import Permission
+from app.core.security import hash_token, new_token
 from app.core.timeutils import day_bounds, get_zone, utcnow
 from app.jobs.runner import dispatch_notifications
-from app.models import AuditLog, AvailabilityException, Booking, BookingResource, Resource, User
+from app.models import (
+    AuditLog,
+    AvailabilityException,
+    Booking,
+    BookingInvitation,
+    BookingResource,
+    Resource,
+    Service,
+    User,
+)
 from app.models.enums import BookingStatus, RecordStatus
 from app.schemas import (
     AdminBookingCreateIn,
@@ -22,17 +33,20 @@ from app.schemas import (
     AdminRescheduleIn,
     AlternativeOut,
     AuditLogOut,
+    BookingInviteIn,
     BookingOut,
     CancelIn,
     ConflictResolveIn,
     ExceptionOut,
+    InvitationOut,
     Page,
     ReassignIn,
 )
-from app.services import audit, settings_service
+from app.services import audit, invitations, settings_service
 from app.services.availability import resource_timezone
 from app.services.booking_engine import BookingEngine, suggest_alternatives
 
+log = logging.getLogger("bookings")
 router = APIRouter(prefix="/api/admin", tags=["admin: bookings"])
 ViewAll = Depends(require_permission(Permission.BOOKINGS_VIEW_ALL))
 Manage = Depends(require_permission(Permission.BOOKINGS_MANAGE))
@@ -96,6 +110,43 @@ def admin_create_booking(body: AdminBookingCreateIn, db: DB, background: Backgro
     booking = create_with_auto_assign(engine, body, user_id=body.user_id, override_rules=body.override_rules)
     background.add_task(dispatch_notifications)
     return booking_out(db, booking, actor, engine.rules, engine.now)
+
+
+@router.post("/bookings/invite", response_model=InvitationOut, status_code=status.HTTP_201_CREATED)
+def invite_customer(body: BookingInviteIn, db: DB, actor: User = Manage) -> BookingInvitation:
+    """Book for an e-mail address with no account: invite them to register.
+
+    Nothing is booked yet; it is made if they register and accept, and the admin
+    is told if they decline."""
+    email = body.customer_email.lower()
+    if db.scalar(select(User.id).where(User.email == email)):
+        raise AppError("ALREADY_REGISTERED", "That e-mail already has an account: choose them from the list", status_code=409)
+    if db.get(Service, body.service_id) is None:
+        raise NotFound("Service")
+    if body.resource_id and db.get(Resource, body.resource_id) is None:
+        raise NotFound("Resource")
+    token = new_token()
+    invitation = BookingInvitation(
+        email=email,
+        token_hash=hash_token(token),
+        invited_by_id=actor.id,
+        request=body.model_dump(mode="json", exclude={"customer_email"}),
+        expires_at=invitations.expiry(),
+    )
+    db.add(invitation)
+    db.flush()
+    audit.record(
+        db, actor_id=actor.id, action="BOOKING_INVITATION_SENT", entity_type="booking_invitation",
+        entity_id=invitation.id, new={"email": email},
+    )
+    try:
+        invitations.send_invitation(db, invitation, actor, token)
+    except Exception:
+        log.exception("Could not send the booking invitation to %s", email)
+        db.rollback()
+        raise AppError("EMAIL_FAILED", f"The invitation e-mail to {email} could not be sent", status_code=502) from None
+    db.commit()
+    return invitation
 
 
 @router.get("/bookings/{booking_id}", response_model=BookingOut)
