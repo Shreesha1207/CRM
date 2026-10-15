@@ -154,7 +154,11 @@ def test_accepting_when_the_time_has_been_taken_keeps_the_account_and_tells_the_
     assert db.scalar(select(User).where(User.email == GUEST)) is not None
     assert db.scalar(select(BookingInvitation)).status == InvitationStatus.FAILED
     note = db.scalars(
-        select(Notification).where(Notification.user_id == admin.id, Notification.type == NotificationType.INVITATION_ACCEPTED)
+        select(Notification).where(
+            Notification.user_id == admin.id,
+            Notification.type == NotificationType.INVITATION_ACCEPTED,
+            Notification.channel == NotificationChannel.IN_APP,
+        )
     ).one()
     assert "could not be booked" in note.body
 
