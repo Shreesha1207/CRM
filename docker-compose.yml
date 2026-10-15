@@ -12,7 +12,14 @@ services:
       JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-me-0123456789}
       CORS_ORIGINS: '["http://localhost:8080"]'
       FRONTEND_URL: http://localhost:8080
-      EMAIL_BACKEND: console
+      # E-mail: "console" only logs messages; set EMAIL_BACKEND=smtp and the SMTP_* values in
+      # .env to really send them (see .env.example for Gmail).
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-console}
+      SMTP_HOST: ${SMTP_HOST:-localhost}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-no-reply@example.com}
 
   frontend:
     build: ./frontend
