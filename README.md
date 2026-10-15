@@ -59,10 +59,36 @@ Roles follow a hierarchy. An admin can create and edit customers (role User). A 
 
 The seed builds a small catalogue spanning several industries: a strength coach with a lunch break, a consultant who is off on Wednesdays, a meeting room, a tennis court at another location, and a 12-seat yoga class.
 
+### E-mail
+
+Out of the box, e-mails (booking confirmations, reminders, invitations) are only written to the backend's log. To really send them, put the mail server's details in `.env` next to `docker-compose.yml`, for example for Gmail (turn on 2-Step Verification, then create an *App Password*; a normal password is refused):
+
+```
+EMAIL_BACKEND=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=you@gmail.com
+SMTP_PASSWORD=your-16-letter-app-password
+SMTP_FROM=you@gmail.com
+```
+
+Restart with `docker compose up --build`, then check it sends:
+
+```bash
+docker compose exec backend python -m app.send_test_email --to you@gmail.com
+```
+
+It prints what is configured (never the password) and, if the server refuses, what usually fixes it. Port 587 (STARTTLS) and 465 (SSL) both work.
+
+When an admin books for a customer:
+
+- **who already has an account** is booked straight away and gets a booking confirmation e-mail (it says who booked it for them);
+- **with a new e-mail address** is booked straight away too, as *pending*, so the time is held and shows on the calendar. The person is e-mailed a link to create their account and confirm it, which also sends their confirmation e-mail. If they decline, the booking is cancelled and comes off the calendar. If they never answer, it stays pending; the link works for `INVITATION_TTL_DAYS` days (default 7).
+
 ### Tests
 
 ```bash
-cd backend && pytest            # 116 tests, against a real PostgreSQL database
+cd backend && pytest            # 137 tests, against a real PostgreSQL database
 cd frontend && npm test         # unit tests for prices and booking lengths
 cd frontend && npm run build    # type-check + production build
 ```
@@ -234,7 +260,7 @@ The booking engine publishes domain events (`booking.created`, `.cancelled`, `.r
 
 ## Configuration
 
-**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`. `docker compose` takes `DATABASE_URL` and `JWT_SECRET` from `.env` in the repository root (see `.env.example`).
+**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`. `docker compose` takes `DATABASE_URL`, `JWT_SECRET`, `EMAIL_BACKEND` and the `SMTP_*` values from `.env` in the repository root (see `.env.example`).
 
 **Booking rules** live in the `settings` table. Admins edit them live under Admin → Settings:
 
@@ -266,7 +292,7 @@ Interactive docs: `http://localhost:8000/api/docs` (development only).
 | Bookings | `POST/GET /api/bookings`, `GET /api/bookings/:id`, `POST /api/bookings/:id/cancel · reschedule`, `POST /api/bookings/recurring[/preview]` |
 | Notifications | `GET /api/notifications`, `GET /api/notifications/unread-count`, `POST /api/notifications/:id/read · read-all` |
 | Booking invitations | `GET /api/invitations/:token`, `POST /api/invitations/:token/accept · decline` (public; the e-mailed token is the credential) |
-| Admin: bookings | `GET/POST /api/admin/bookings`, `POST /api/admin/bookings/invite` (book for an e-mail with no account: sends a registration invitation), `GET/PUT /api/admin/bookings/:id`, `POST …/:id/cancel · reschedule · reassign · confirm · complete · no-show`, `GET …/:id/history` |
+| Admin: bookings | `GET/POST /api/admin/bookings`, `POST /api/admin/bookings/invite` (book for an e-mail with no account: the booking goes on the calendar as pending and the person is e-mailed a link to create an account and confirm it; declining cancels it), `GET/PUT /api/admin/bookings/:id`, `POST …/:id/cancel · reschedule · reassign · confirm · complete · no-show`, `GET …/:id/history` |
 | Admin: conflicts | `GET /api/admin/conflicts[/:id]`, `POST /api/admin/conflicts/:id/resolve` |
 | Admin: catalogue | `…/resources`, `…/resources/:id/services`, `…/resources/:id/availability`, `…/services`, `…/locations` |
 | Admin: schedules | `GET/PUT /api/admin/operating-hours`, `GET/POST/DELETE /api/admin/exceptions` |
