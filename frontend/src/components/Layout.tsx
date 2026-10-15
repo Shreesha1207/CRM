@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { api } from "../api/client";
+import { api, errorMessage } from "../api/client";
 import type { NotificationItem, PublicConfig } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { formatDateTime } from "../lib/format";
@@ -76,10 +76,32 @@ export function NotificationBell({ bookingPath }: { bookingPath: (id: string) =>
     queryFn: () => api.get<NotificationItem[]>("/api/notifications", { limit: 15 }),
     enabled: open,
   });
+  // The badge and the dots change at once; the server's answer replaces them (or, on a
+  // failure, the old values come back and the panel says so).
+  const startUpdate = async (apply: (item: NotificationItem, stamp: string) => NotificationItem, unreadAfter: (unread: number) => number) => {
+    await queryClient.cancelQueries({ queryKey: ["notifications"] });
+    const previous = queryClient.getQueriesData({ queryKey: ["notifications"] });
+    const stamp = new Date().toISOString();
+    queryClient.setQueryData<NotificationItem[]>(["notifications", "list"], (old) => old?.map((n) => apply(n, stamp)));
+    queryClient.setQueryData<{ count: number }>(["notifications", "count"], (old) => old && { count: unreadAfter(old.count) });
+    return { previous };
+  };
+  type Context = Awaited<ReturnType<typeof startUpdate>>;
+  const restore = (_error: unknown, _vars: unknown, context?: Context) => context?.previous.forEach(([key, data]) => queryClient.setQueryData(key, data));
+  const settle = () => queryClient.invalidateQueries({ queryKey: ["notifications"] });
   const readAll = useMutation({
     mutationFn: () => api.post("/api/notifications/read-all"),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }),
+    onMutate: () => startUpdate((n, stamp) => ({ ...n, read_at: n.read_at ?? stamp }), () => 0),
+    onError: restore,
+    onSettled: settle,
   });
+  const readOne = useMutation({
+    mutationFn: (id: string) => api.post(`/api/notifications/${id}/read`),
+    onMutate: (id) => startUpdate((n, stamp) => (n.id === id ? { ...n, read_at: n.read_at ?? stamp } : n), (unread) => Math.max(0, unread - 1)),
+    onError: restore,
+    onSettled: settle,
+  });
+  const failure = readAll.error ?? readOne.error;
   const config = useConfig();
   const tz = config.data?.default_timezone ?? "UTC";
 
@@ -125,13 +147,21 @@ export function NotificationBell({ bookingPath }: { bookingPath: (id: string) =>
               </button>
             )}
           </div>
+          {failure ? (
+            <p role="alert" className="border-b border-line bg-danger-soft px-4 py-2 text-xs text-danger-text">
+              Could not update your notifications: {errorMessage(failure)}
+            </p>
+          ) : null}
           <div className="max-h-[70dvh] overflow-y-auto sm:max-h-96">
             {list.data?.length === 0 && <p className="px-4 py-8 text-center text-sm text-muted">Nothing yet.</p>}
             {list.data?.map((n) => (
               <Link
                 key={n.id}
                 to={n.booking_id ? bookingPath(n.booking_id) : "#"}
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setOpen(false);
+                  if (!n.read_at) readOne.mutate(n.id);
+                }}
                 className="flex gap-3 border-b border-line px-4 py-3 last:border-b-0 hover:bg-subtle"
               >
                 <span aria-hidden className={cx("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", n.read_at ? "bg-transparent" : "bg-accent")} />
