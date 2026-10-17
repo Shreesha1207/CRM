@@ -20,6 +20,15 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-no-reply@example.com}
+      # Booking assistant (see README): the model's key, and the guards' OpenAI-compatible endpoint.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CHAT_MODEL: ${CHAT_MODEL:-claude-opus-5-5}
+      CHAT_EFFORT: ${CHAT_EFFORT:-low}
+      GUARD_BASE_URL: ${GUARD_BASE_URL:-https://api.groq.com/openai/v1}
+      GUARD_API_KEY: ${GUARD_API_KEY:-}
+      GUARD_TOPIC_MODEL: ${GUARD_TOPIC_MODEL:-openai/gpt-oss-safeguard-20b}
+      GUARD_INJECTION_MODEL: ${GUARD_INJECTION_MODEL-meta-llama/llama-prompt-guard-2-86m}
+      GUARD_INJECTION_THRESHOLD: ${GUARD_INJECTION_THRESHOLD:-0.8}
 
   frontend:
     build: ./frontend

@@ -98,11 +98,63 @@ Answering the invitation does not change the booking (the answer is e-mailed to 
 
 To try it with Gmail, book for an address other than `SMTP_FROM`: Gmail may show no invitation for an event you organise yourself.
 
+### Booking assistant
+
+Customers get an **Assistant** link: a chat that books from a sentence, behind a (demo) paywall.
+
+1. The customer types *"Book personal training with John next Tuesday at 10 for two hours"*.
+2. The assistant works out the real service, person, date and time (in that location's time zone) and length (120 minutes) with its tools. It asks when something is missing or ambiguous ("which coach?"), offering the options as buttons. When the time isn't free, it says why and offers the nearest free times.
+3. It **books it straight away as a hold**: a `PENDING` booking that keeps the slot, so nobody else can take it, and sends no e-mail yet. All the usual rules are checked, through the same booking engine as the website, as that customer.
+4. The chat shows a card with the same details as the booking e-mails (date and time with the time zone, the service and who with, where with an **Open in Google Maps** button, the price, a countdown) and **Confirm** / **Delete**. Confirm sends the normal confirmation e-mail and calendar invitation; Delete frees the time without any e-mail. A hold nobody answers is released after `CHAT_HOLD_MINUTES` (default 10), and a customer can hold at most `CHAT_MAX_OPEN_HOLDS` (default 2) at once.
+5. Moving or cancelling an existing booking is only *offered* (a card with Confirm / Decline); nothing changes until the customer confirms.
+
+It also answers questions about the business from text an admin writes under **Admin → Settings → Booking assistant FAQ**.
+
+**Setup.** Put two keys in `.env`; without them the chat says it isn't set up yet and the rest of the app is unaffected.
+
+```
+ANTHROPIC_API_KEY=sk-ant-...          # console.anthropic.com
+GUARD_API_KEY=gsk_...                 # console.groq.com (or another provider, below)
+```
+
+| `CHAT_MODEL` | Price per million tokens (input / output) | |
+| --- | --- | --- |
+| `claude-opus-5-5` (default) | 4 / 20 (cached input 0.20) | Most capable; roughly 0.05–0.25 per conversation |
+| `claude-sonnet-5-5` | 2 / 10 (cached input 0.20) | Half the price, strong at tool use |
+| `claude-haiku-5-5` | 0.10 / 0.50 | Cheapest and fastest, weaker on multi-step requests |
+
+The guards talk to any OpenAI-compatible endpoint, so changing provider is three settings:
+
+| Guard | `GUARD_BASE_URL` | `GUARD_TOPIC_MODEL` |
+| --- | --- | --- |
+| Groq (default) | `https://api.groq.com/openai/v1` | `openai/gpt-oss-safeguard-20b` |
+| Self-hosted with Ollama (nothing leaves your servers) | `http://ollama:11434/v1` | `gpt-oss-safeguard:20b` (and `GUARD_INJECTION_MODEL=` empty) |
+| Gemini (use a paid key) | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.5-flash-lite` |
+
+`GUARD_INJECTION_MODEL` (default `meta-llama/llama-prompt-guard-2-86m` on Groq) is a cheap first filter for jailbreak wording; leave it empty to switch it off. The guards cost about 0.0001–0.0002 per message.
+
+**How it is kept on topic and safe.** The model can write code or anything else, and no instruction in a prompt can take that away, so the protection sits outside it:
+
+- *Every message* passes rule checks (length, anything shaped like code), then Prompt Guard, then the policy guard, a model that reads a written policy ("only this business's bookings") and must answer exactly `ALLOW` or `BLOCK`. A blocked message gets a fixed reply and never reaches the main model.
+- *Every reply* (and every button label) passes the rule checks and the policy guard before it is shown. A blocked reply is never shown: the whole turn is thrown away, anything it held is released, and the customer gets the fixed reply. Replies are therefore shown once checked (progress steps stream while it works), not word by word.
+- A guard that errors, times out or answers anything else counts as a block. Three blocked messages in 10 minutes pause the assistant for that customer for an hour and flag the conversation.
+- The model never sees SQL, tables or other customers: its only access is a handful of fixed tools that return small JSON and run as the signed-in customer. The browser sends only the new message; the server keeps and replays the history, so nobody can plant fake turns.
+- Per-customer limits: `CHAT_MESSAGES_PER_MINUTE` (10), `CHAT_DAILY_MESSAGE_LIMIT` (60), `CHAT_DAILY_TOKEN_LIMIT` (500k), 40 messages per conversation, 8 tool rounds per message, one reply at a time per conversation.
+
+**The paywall is a demo.** **Pay** just activates a `chat_subscriptions` row; nothing is charged. To take real payments, send **Pay** to a payment provider's checkout (e.g. Stripe Checkout) and set the row from its webhook (`status=ACTIVE` on payment, `CANCELLED` when the subscription ends).
+
+**Checking it with the real model.** The unit tests use stand-ins and never touch the network. To see how the real model and guards behave on realistic and hostile conversations ("reverse a linked list in Python", role-play, prompts hidden in base64, two people with the same name, another language...), run the eval. It costs a little money, runs on a throwaway `booking_eval` database, and reports leaks (must be 0), wrongly blocked booking messages, timings and token cost:
+
+```bash
+createdb booking_eval
+cd backend && python -m app.chat_eval
+```
+
 ### Tests
 
 ```bash
-cd backend && pytest            # 161 tests, against a real PostgreSQL database
-cd frontend && npm test         # unit tests for prices and booking lengths
+cd backend && pytest            # 232 tests, against a real PostgreSQL database
+cd frontend && npm test         # unit tests for prices, booking lengths and the chat's event stream
 cd frontend && npm run build    # type-check + production build
 ```
 
@@ -152,7 +204,8 @@ backend/app/
     notifications.py     event handlers, reminder scheduling, delivery
     settings_service.py  runtime-configurable booking rules
     reports.py, audit.py, events.py
-  api/routes/  auth, catalog (public), bookings, notifications, admin_*
+    chat/                the booking assistant: guards, model, tools, held bookings, one turn
+  api/routes/  auth, catalog (public), bookings, notifications, chat, admin_*
   jobs/        background loop (single-runner via PostgreSQL advisory lock)
   seed.py      demo data
 ```
@@ -164,7 +217,7 @@ frontend/src/
   api/          fetch client (CSRF header, typed errors) + TypeScript API types
   auth/         session context and route guards
   components/   UI kit, layout, slot picker, booking widgets
-  pages/        public, account (dashboard, bookings, profile), book (wizard)
+  pages/        public, account (dashboard, bookings, profile), book (wizard), chat (assistant + demo paywall)
   pages/admin/  overview, calendar (day/week/month), bookings, conflicts,
                 resources, services, schedules, locations, users, settings, audit
 ```
@@ -273,7 +326,7 @@ The booking engine publishes domain events (`booking.created`, `.cancelled`, `.r
 
 ## Configuration
 
-**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`. `docker compose` takes `DATABASE_URL`, `JWT_SECRET`, `EMAIL_BACKEND` and the `SMTP_*` values from `.env` in the repository root (see `.env.example`).
+**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`, and for the booking assistant `ANTHROPIC_API_KEY`, `CHAT_MODEL` and `GUARD_*`. `docker compose` takes `DATABASE_URL`, `JWT_SECRET`, `EMAIL_BACKEND`, the `SMTP_*` values and the assistant's settings from `.env` in the repository root (see `.env.example`).
 
 **Booking rules** live in the `settings` table. Admins edit them live under Admin → Settings:
 
@@ -304,6 +357,7 @@ Interactive docs: `http://localhost:8000/api/docs` (development only).
 | Availability | `GET /api/availability?service_id&date[&resource_id][&location_id][&quantity][&duration_minutes]`, `GET /api/availability/alternatives` |
 | Bookings | `POST/GET /api/bookings`, `GET /api/bookings/:id`, `POST /api/bookings/:id/cancel · reschedule`, `POST /api/bookings/recurring[/preview]` |
 | Notifications | `GET /api/notifications`, `GET /api/notifications/unread-count`, `POST /api/notifications/:id/read · read-all` |
+| Booking assistant | `GET/POST/DELETE /api/chat/subscription` (demo paywall), `GET/POST /api/chat/conversations`, `GET /api/chat/conversations/:id`, `POST /api/chat/conversations/:id/messages` (server-sent events: `status`, then the checked `reply`), `POST /api/chat/proposals/:id/confirm · decline`, `POST /api/chat/messages/:id/feedback` |
 | Booking invitations | `GET /api/invitations/:token`, `POST /api/invitations/:token/accept · decline` (public; the e-mailed token is the credential) |
 | Admin: bookings | `GET/POST /api/admin/bookings`, `POST /api/admin/bookings/invite` (book for an e-mail with no account: the booking goes on the calendar as pending and the person is e-mailed a link to create an account and confirm it; declining cancels it), `GET/PUT /api/admin/bookings/:id`, `POST …/:id/cancel · reschedule · reassign · confirm · complete · no-show`, `GET …/:id/history` |
 | Admin: conflicts | `GET /api/admin/conflicts[/:id]`, `POST /api/admin/conflicts/:id/resolve` |
@@ -321,6 +375,6 @@ Bookings, recurring bookings and alternatives take an optional `duration_minutes
 
 ## Scope
 
-**Implemented (MVP and most of Phase 2):** authentication; users and admin with RBAC; resources with JSON metadata; services; resource-service overrides; operating hours; weekly availability; exceptions and special hours; dynamic slots; individual and capacity bookings; buffers; notice and advance windows; clash prevention (application and database); rescheduling; cancellation policy; waitlists; recurring bookings with per-occurrence validation; multi-resource bookings (atomic); schedule-change previews and conflict resolution; alternative suggestions; multiple locations and timezones, each location linking to Google Maps (its own link, or a search for its address) on bookings, resource pages and booking e-mails; in-app and e-mail notifications with reminders; admin dashboard with utilization; day/week/month calendar; audit log.
+**Implemented (MVP and most of Phase 2):** authentication; users and admin with RBAC; resources with JSON metadata; services; resource-service overrides; operating hours; weekly availability; exceptions and special hours; dynamic slots; individual and capacity bookings; buffers; notice and advance windows; clash prevention (application and database); rescheduling; cancellation policy; waitlists; recurring bookings with per-occurrence validation; multi-resource bookings (atomic); schedule-change previews and conflict resolution; alternative suggestions; a customers' booking assistant (chat that books from a sentence, with guards outside the model and a demo paywall); multiple locations and timezones, each location linking to Google Maps (its own link, or a search for its address) on bookings, resource pages and booking e-mails; in-app and e-mail notifications with reminders; admin dashboard with utilization; day/week/month calendar; audit log.
 
-**Not implemented (Phase 2 remainder):** payments and refunds, reviews, SMS/push delivery providers, advanced reporting beyond utilization, and scoping `RESOURCE_OWNER` to their own resources (the role and permission hooks exist).
+**Not implemented (Phase 2 remainder):** payments and refunds (the assistant's paywall is a demo), reviews, SMS/push delivery providers, advanced reporting beyond utilization, and scoping `RESOURCE_OWNER` to their own resources (the role and permission hooks exist).

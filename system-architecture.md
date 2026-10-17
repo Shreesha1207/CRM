@@ -48,7 +48,8 @@ graph TB
 | **Booking Engine** | All writes that touch a booking: create, cancel, reschedule, reassign, confirm/complete/no-show, recurring, waitlist promotion. Owns the lock → re-validate → write sequence. | `backend/app/services/booking_engine.py` |
 | **Admin services** | Catalogue CRUD, schedule-change dry-run/apply, conflict resolution, utilization reports, audit trail. | `backend/app/api/routes/admin_*.py`, `backend/app/services/schedule.py`, `reports.py`, `audit.py` |
 | **Notifications** | Subscribes to domain events; writes in-app + queued e-mail rows in the same transaction as the triggering change. | `backend/app/services/notifications.py`, `events.py` |
-| **Background jobs** | Every `JOB_INTERVAL_SECONDS` (default 60s): queue due reminders, dispatch pending notifications. Runs inside the API process; a PostgreSQL advisory lock makes sure only one replica does the work at a time. | `backend/app/jobs/runner.py` |
+| **Booking assistant** | The customers' chat (behind a demo paywall). Turns a sentence into a booking the customer confirms; every create, confirm, cancel or move goes through the Booking Engine as the customer. Guards outside the model check every message and reply. | `backend/app/services/chat/`, `backend/app/api/routes/chat.py`, `frontend/src/pages/chat.tsx` |
+| **Background jobs** | Every `JOB_INTERVAL_SECONDS` (default 60s): release expired chat holds, queue due reminders, dispatch pending notifications. Runs inside the API process; a PostgreSQL advisory lock makes sure only one replica does the work at a time. | `backend/app/jobs/runner.py` |
 | **PostgreSQL** | System of record, and the final enforcement point for "never double-book" via an exclusion constraint — true even if every layer above it were bypassed. | schema in `backend/app/models/entities.py`, migrations in `backend/alembic/` |
 
 ## 3. Backend layout
@@ -66,10 +67,13 @@ backend/app/
     notifications.py      domain-event handlers, reminder scheduling, delivery
     settings_service.py   runtime-configurable booking rules
     events.py, audit.py, reports.py
+    chat/                 the booking assistant: guard.py (checks outside the model), llm.py (Claude API),
+                          prompt.py, tools.py (the only way the model sees or changes data),
+                          proposals.py + holds.py (held bookings and offered changes), agent.py (one turn)
   api/
     deps.py        auth/permission dependencies, DB session, rate-limit dependency
     serializers.py response-shaping helpers
-    routes/         auth.py, catalog.py, bookings.py, notifications.py, admin_bookings.py,
+    routes/         auth.py, catalog.py, bookings.py, notifications.py, chat.py, admin_bookings.py,
                      admin_catalog.py, admin_schedules.py, admin_system.py
   jobs/runner.py  background loop
   seed.py         demo data
@@ -83,7 +87,8 @@ frontend/src/
   api/          fetch client (client.ts: CSRF header, typed ApiError) + generated-by-hand TS types (types.ts)
   auth/         AuthContext: session state, permission checks, RequireAuth route guard
   components/   ui.tsx (design-system primitives), Layout.tsx (nav + notification bell), booking.tsx (slot picker, booking cards)
-  pages/        public.tsx (home/services/resources/auth), account.tsx (dashboard, my bookings, profile), book.tsx (booking wizard)
+  pages/        public.tsx (home/services/resources/auth), account.tsx (dashboard, my bookings, profile), book.tsx (booking wizard),
+                chat.tsx (the booking assistant and its demo paywall)
   pages/admin/  overview, calendar, bookings, catalog (resources/services/locations), schedules, system (users/settings/audit), scheduleChange.tsx (the dry-run/apply modal shared by every admin screen that can shrink availability)
 ```
 
@@ -156,6 +161,34 @@ sequenceDiagram
 
 Every admin action that can shrink availability — resource/location hours, a new block, resource deactivation, a location timezone change — goes through this one shared mechanism (`useScheduleChange` on the frontend, `apply_schedule_change`-style dry-run/apply on the backend).
 
+### 5.4 Booking from a sentence (the booking assistant)
+
+```mermaid
+sequenceDiagram
+    participant C as Customer (chat)
+    participant API as POST /api/chat/conversations/:id/messages
+    participant G as Guards (rules, Prompt Guard, policy guard)
+    participant M as Claude (main model)
+    participant T as Tools (fixed functions, as the customer)
+    participant BE as BookingEngine
+
+    C->>API: "Book strength coaching with Sam next Tuesday at 10 for two hours"
+    API->>G: check the message
+    G-->>API: BLOCK -> fixed reply, the model is never called
+    API->>M: history (replayed unchanged) + message + turn note (current time)
+    M->>T: list_services / list_resources / find_available_slots
+    T-->>M: small JSON (times and prices already formatted)
+    M->>T: hold_booking(service, resource, start, 120 min)
+    T->>BE: create(awaiting the customer): PENDING, slot held, no e-mail yet
+    M-->>API: "I've held it for you; press Confirm"
+    API->>G: check the reply (and button labels)
+    G-->>API: BLOCK -> the whole turn is thrown away and the hold released
+    API-->>C: reply + card with the e-mail's details, Confirm / Delete
+    C->>BE: Confirm -> CONFIRMED, normal confirmation e-mail and calendar invite
+```
+
+The model never sees SQL or other customers' data and never changes anything itself: it can only fill in the pieces for the tools, which run the same catalogue queries and booking engine as the website, as the signed-in customer. A hold that is neither confirmed nor deleted is released by the background job after `CHAT_HOLD_MINUTES`. Moves and cancellations are only offered (a card), and change nothing until the customer confirms.
+
 ## 6. Concurrency & data-integrity architecture
 
 Two independent layers, deliberately redundant:
@@ -227,6 +260,7 @@ nginx (`frontend/nginx.conf`) also sets the SPA's own strict `Content-Security-P
 | Auth | argon2id (via `passlib`/`argon2-cffi`), PyJWT |
 | Deployment | Docker Compose (3 services), nginx (static frontend + reverse proxy) |
 | Testing | pytest (backend, against a real PostgreSQL database), Playwright (end-to-end, both API-driven and browser-driven passes) |
+| Booking assistant | Anthropic Python SDK (Claude, `CHAT_MODEL`); guards over any OpenAI-compatible endpoint (Groq by default: `gpt-oss-safeguard-20b`, Prompt Guard 2) |
 
 ## 12. Non-functional characteristics
 
