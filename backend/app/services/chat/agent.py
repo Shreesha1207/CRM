@@ -10,6 +10,7 @@ review but never sent to the model again, and any booking it held is released.
 
 import json
 import logging
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -358,7 +359,7 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
         _refuse(turn, "unfinished", TOO_COMPLEX, emit, strike=False)
         return
 
-    reply_text = model_text(final.content)
+    reply_text = consistent_reply(db, user, ctx.proposal_ids, model_text(final.content))
     emit("status", {"label": "Checking the reply…"})
     verdict = guard.screen_output(reply_text, ctx.choices)
     if not verdict.allowed:
@@ -377,6 +378,43 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
 
 def model_text(message: dict[str, Any]) -> str:
     return (message.get("content") or "").strip()
+
+
+_CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s?([AP])M\b", re.IGNORECASE)
+
+
+def _clocks(text: str) -> set[str]:
+    return {f"{int(h)}:{m}{ap.upper()}" for h, m, ap in _CLOCK.findall(text)}
+
+
+def _describe(card: dict[str, Any]) -> str:
+    """The card in words, for when the model's own words disagree with it."""
+    when, was = card["when"], card.get("was")
+    where = f"{when['date']}, {when['time']} ({when['zone']})"
+    if card["kind"] == "HOLD":
+        return f"I've held {card['service']} with {card['resource']} for you on {where}. Press Confirm on the card to book it, or Delete."
+    if card["kind"] == "RESCHEDULE" and was:
+        return (
+            f"I can move your {card['service']} from {was['date']}, {was['time']} to {where}, with {card['resource']}. "
+            "Press Confirm on the card to move it, or Decline to keep it as it is."
+        )
+    return f"I can cancel your {card['service']} on {where}. Press Confirm on the card to cancel it, or Decline to keep it."
+
+
+def consistent_reply(db: Session, user: User, proposal_ids: list[uuid.UUID], text: str) -> str:
+    """The cards are what gets booked, so a reply that names a time shown on none of them
+    ("11:00 AM – 1:00 PM" over a card for 11:00 AM – 12:00 PM) is replaced by the cards in words.
+    Markdown the model adds despite being told not to is removed."""
+    text = text.replace("**", "")
+    if not proposal_ids:
+        return text
+    found = db.scalars(select(ChatProposal).where(ChatProposal.id.in_(proposal_ids)).order_by(ChatProposal.created_at)).all()
+    cards = [c for c in (proposals.card(db, p, user) for p in found) if "when" in c]
+    shown = set().union(*(_clocks(f"{c['when']['time']} {(c.get('was') or {}).get('time', '')}") for c in cards)) if cards else set()
+    if cards and _clocks(text) - shown:
+        log.warning("Reply named times %s but the cards show %s; using the cards' words", sorted(_clocks(text) - shown), sorted(shown))
+        return " ".join(_describe(c) for c in cards)
+    return text
 
 
 # ---------------------------------------------------------------- what the customer sees

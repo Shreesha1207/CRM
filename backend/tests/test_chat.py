@@ -2,6 +2,7 @@
 deleted), offered changes, and what the model and the customer get to see."""
 
 import json
+import uuid
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 
@@ -577,6 +578,67 @@ def test_placeholders_for_unknown_ids_are_left_out_instead_of_failing(client, db
     assert failed and "booking_id" in json.loads(content)["message"]
     # Groq checks the schema before the server does, so it must not insist on a uuid format.
     assert all("format" not in p for t in tools.TOOLS for p in t.schema.get("properties", {}).values())
+
+
+def test_a_move_keeps_the_length_and_says_so(client, gym, chat) -> None:
+    service, sam = gym
+    booking = _booked(client, chat.headers, service, sam, at(TUESDAY, 10))  # one hour
+    move = {"booking_id": booking["id"], "new_start": at(TUESDAY, 14)}
+    reply = reply_of(chat.send("Move it to 2pm for two hours", call("propose_reschedule", {**move, "duration_minutes": 120}), say("A move keeps one hour. Want a new session instead?")))
+    assert reply["cards"] == []
+    [result] = last_tool_results(chat.model.requests[-1]["messages"])
+    assert result["error"] == "LENGTH_CANNOT_CHANGE" and "60 minutes" in result["message"] and "hold_booking" in result["message"]
+
+    reply = reply_of(chat.send("Then just move it", call("propose_reschedule", move), say("Press Confirm to move it to 2:00 PM.")))
+    [result] = last_tool_results(chat.model.requests[-1]["messages"])
+    assert len(reply["cards"]) == 1 and result["length_minutes"] == 60 and "length stays 60 minutes" in result["next_step"]
+
+
+def test_a_held_booking_is_changed_by_replacing_it(db, make, gym, client, chat) -> None:
+    service, sam = gym
+    pat = make.resource("Coach Pat", services=[service], location=sam.location, hours=make.weekdays(time(9), time(17)))
+
+    def hold(resource, start=10, **extra):
+        return call("hold_booking", {"service_id": str(service.id), "resource_id": str(resource.id), "start": at(TUESDAY, start), "duration_minutes": 120, **extra})
+
+    reply_of(chat.send("Book Sam Tuesday 10 for two hours", hold(sam), say("Held 10:00 AM – 12:00 PM.")))
+    [held] = last_tool_results(chat.model.requests[-1]["messages"])
+
+    # A time that is not free leaves the held booking alone.
+    _booked(client, chat.headers, service, pat, at(TUESDAY, 14))
+    reply_of(chat.send("Make it 2pm with Pat", hold(pat, 14, replaces_booking_id=held["booking_id"]), say("Sorry, that is taken.")))
+    [failed] = last_tool_results(chat.model.requests[-1]["messages"])
+    assert failed["error"] == "NOT_AVAILABLE"
+    db.expire_all()
+    assert db.get(Booking, uuid.UUID(held["booking_id"])).status == BookingStatus.PENDING
+
+    # Something already booked is moved, not replaced.
+    other = _booked(client, chat.headers, service, sam, at(TUESDAY, 15))
+    reply_of(chat.send("Change my 3pm", hold(pat, 11, replaces_booking_id=other["id"]), say("Use a move for that.")))
+    assert last_tool_results(chat.model.requests[-1]["messages"])[0]["error"] == "NOT_A_HOLD"
+
+    reply = reply_of(chat.send("Change that to Pat", hold(pat, replaces_booking_id=held["booking_id"]), say("Held with Pat, 10:00 AM – 12:00 PM.")))
+    db.expire_all()
+    assert db.get(Booking, uuid.UUID(held["booking_id"])).status == BookingStatus.CANCELLED
+    [card] = reply["cards"]
+    assert card["resource"] == "Coach Pat" and card["status"] == "PENDING"
+    new = db.get(Booking, uuid.UUID(card["booking_id"]))
+    assert new.status == BookingStatus.PENDING and new.end_datetime - new.start_datetime == timedelta(hours=2)
+
+
+def test_a_reply_that_contradicts_its_card_is_replaced_by_the_card_in_words(client, gym, chat) -> None:
+    service, sam = gym
+    booking = _booked(client, chat.headers, service, sam, at(TUESDAY, 10))
+    steps = [call("propose_reschedule", {"booking_id": booking["id"], "new_start": at(TUESDAY, 14)}), say("I'll move it to **2:00 PM – 4:00 PM**. Press Confirm.")]
+    reply = reply_of(chat.send("Move it to 2pm", *steps))
+    assert "4:00 PM" not in reply["text"] and "**" not in reply["text"]
+    assert "2:00 PM" in reply["text"] and "3:00 PM" in reply["text"] and "Coach Sam" in reply["text"]
+    assert len(reply["cards"]) == 1
+
+    # A reply that agrees with the card is kept, minus any Markdown.
+    other = _booked(client, chat.headers, service, sam, at(TUESDAY + timedelta(days=1), 10))
+    steps = [call("propose_reschedule", {"booking_id": other["id"], "new_start": at(TUESDAY + timedelta(days=1), 14)}), say("Moving it to **2:00 PM**. Press Confirm.")]
+    assert reply_of(chat.send("And this one to 2pm", *steps))["text"] == "Moving it to 2:00 PM. Press Confirm."
 
 
 # ---------------------------------------------------------------- finding the booking the customer means

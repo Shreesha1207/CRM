@@ -202,14 +202,16 @@ Each tool call takes the same path:
 | --- | --- | --- |
 | Read: catalogue | `list_services`, `list_resources`, `list_locations`, `find_available_slots`, `suggest_alternatives` | Read-only, with the same availability rules as the website. `list_services` with `on_date` also lists each service's free times that day. |
 | Read: own bookings | `list_my_bookings`, `get_booking` | Only the customer's own bookings. Another customer's ID returns `NOT_FOUND`. |
-| Create | `hold_booking` | Creates a PENDING booking with no e-mail. At most `CHAT_MAX_OPEN_HOLDS` open holds per customer. |
-| Update | `propose_reschedule` | Checks that the new time is free, then stores a card. The move happens only when the customer presses Confirm. |
+| Create | `hold_booking` | Creates a PENDING booking with no e-mail. At most `CHAT_MAX_OPEN_HOLDS` open holds per customer. With `replaces_booking_id` it swaps a still-unconfirmed hold for a new one: the new time is checked first, then the old hold is released. |
+| Update | `propose_reschedule` | Checks that the new time is free, then stores a card. The move happens only when the customer presses Confirm. A move keeps the booking's length: a different `duration_minutes` is refused, and the model is told to offer a new hold plus a cancellation instead. |
 | Delete | `propose_cancellation` | Checks the cancellation window, then stores a card. The cancellation happens only on Confirm. Delete on a held booking frees the time with no e-mail. |
 | UI only | `offer_choices` | Shows buttons under the reply. Writes nothing. |
 
 The model has no tool that confirms, declines or cancels anything. Those are the customer's button presses, which call `POST /api/chat/proposals/:id/confirm` or `/decline` directly.
 
 **Rows to JSON.** `tools._booking_json` builds each booking from `booking_mail.facts()`, the same function that writes the confirmation e-mails. The chat card and the e-mail therefore show identical details. The model receives the booking's id, service, resource, date, time and time zone, place, places, status, price, and flags such as `can_cancel`, `can_reschedule` and `waiting_for_confirmation_in_chat`.
+
+**Replies match the cards.** The card is what gets booked. If the model's reply names a clock time that is on none of this turn's cards (for example "11:00 AM – 1:00 PM" over a card for 11:00 AM – 12:00 PM), the server replaces the reply with the cards described in words, and removes any Markdown (`agent.consistent_reply`).
 
 **Finding the booking a customer means.** `list_my_bookings` takes optional `on_date`, `around_time` (within 60 minutes, in the booking's own time zone) and `query` (names and descriptions, with typo tolerance). The filtering happens in code, and the result includes `match_count`. The model can act only on ids returned for this customer in an earlier result.
 

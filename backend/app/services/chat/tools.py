@@ -376,6 +376,37 @@ class HoldBookingIn(_In):
     resource_id: uuid.UUID | None = None
     duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
     quantity: int = Field(default=1, ge=1, le=100)
+    # A booking still waiting for Confirm that this one changes: it is released as the new one is held.
+    replaces_booking_id: uuid.UUID | None = None
+
+
+def _minutes(booking: Booking) -> int:
+    return int((booking.end_datetime - booking.start_datetime).total_seconds() // 60)
+
+
+def _replace_hold(db: Session, user: User, args: HoldBookingIn, engine: BookingEngine) -> dict[str, Any] | None:
+    """Release the held booking this one replaces, once the new time is known to be free.
+    Returns an error result instead when it can't be done, leaving the old hold as it was."""
+    old = _mine(db, user, args.replaces_booking_id)
+    if engine.open_chat_hold(old.id) is None:
+        return _error("NOT_A_HOLD", "Only a booking still waiting for Confirm can be replaced. To move a booked one, use propose_reschedule.")
+    rules = settings_service.get_rules(db)
+    target = db.get(Resource, args.resource_id) if args.resource_id else old.primary_resource
+    start = ensure_aware(args.start, resource_timezone(target, rules))
+    free = catalog.availability(
+        db,
+        service_id=args.service_id,
+        date=start.astimezone(resource_timezone(target, rules)).date(),
+        moving=old,
+        resource_id=args.resource_id,
+        location_id=None,
+        quantity=args.quantity,
+        duration_minutes=args.duration_minutes,
+    )
+    if not any(slot.available and slot.start == start for r in free.resources for slot in r.slots):
+        return _error("NOT_AVAILABLE", "That time is not free, so the earlier held booking was left as it is. Use find_available_slots to find free times.")
+    engine.release_chat_hold(old.id, reason="Replaced in the chat")
+    return None
 
 
 def hold_booking(db: Session, user: User, ctx: ToolContext, args: HoldBookingIn) -> dict[str, Any]:
@@ -391,7 +422,7 @@ def hold_booking(db: Session, user: User, ctx: ToolContext, args: HoldBookingIn)
             ChatProposal.expires_at > now,
         )
     )
-    if open_holds >= settings.chat_max_open_holds:
+    if open_holds >= settings.chat_max_open_holds and args.replaces_booking_id is None:
         return _error(
             "HOLD_LIMIT",
             f"The customer already has {open_holds} held bookings waiting. Ask them to confirm or delete those first.",
@@ -404,6 +435,8 @@ def hold_booking(db: Session, user: User, ctx: ToolContext, args: HoldBookingIn)
         duration_minutes=args.duration_minutes,
     )
     engine = BookingEngine(db, user)
+    if args.replaces_booking_id is not None and (failure := _replace_hold(db, user, args, engine)) is not None:
+        return failure
     hold = ChatHold(ctx.conversation_id, ctx.turn_id, now + timedelta(minutes=settings.chat_hold_minutes))
     booking = create_with_auto_assign(engine, body, user_id=user.id, chat_hold=hold)
     proposal = engine.open_chat_hold(booking.id)
@@ -411,6 +444,8 @@ def hold_booking(db: Session, user: User, ctx: ToolContext, args: HoldBookingIn)
     card = proposals.card(db, proposal, user, now)
     return {
         "held": True,
+        "booking_id": str(booking.id),
+        "length_minutes": _minutes(booking),
         "booking": {k: card[k] for k in ("service", "resource", "when", "place", "price", "quantity")},
         "hold_minutes": settings.chat_hold_minutes,
         "next_step": "Tell the customer the time is held for them, and that they can press Confirm on the card to book it, or Delete.",
@@ -421,6 +456,8 @@ class RescheduleIn(_In):
     booking_id: uuid.UUID
     new_start: datetime
     resource_id: uuid.UUID | None = None
+    # Only to say what the customer asked for: a move keeps the booking's length.
+    duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
 
 
 def _new_card(db: Session, user: User, ctx: ToolContext, kind: ChatProposalKind, booking: Booking, payload: dict) -> ChatProposal:
@@ -451,6 +488,13 @@ def propose_reschedule(db: Session, user: User, ctx: ToolContext, args: Reschedu
         return _error("HELD_IN_CHAT", "This booking is still waiting for the customer to confirm or delete it. Delete it and hold the new time instead.")
     if not flags.can_reschedule:
         return _error("CANNOT_RESCHEDULE", "This booking can no longer be moved online. Suggest contacting the business.")
+    length = _minutes(booking)
+    if args.duration_minutes is not None and args.duration_minutes != length:
+        return _error(
+            "LENGTH_CANNOT_CHANGE",
+            f"A move keeps the booking's length ({length} minutes). For {args.duration_minutes} minutes, tell the customer that, and offer to "
+            "hold a new session of that length (hold_booking) and cancel this one (propose_cancellation); each shows a card to confirm.",
+        )
     target = db.get(Resource, args.resource_id or booking.primary_resource_id)
     if target is None or target.status != RecordStatus.ACTIVE:
         return _error("NOT_FOUND", "Resource not found")
@@ -476,8 +520,10 @@ def propose_reschedule(db: Session, user: User, ctx: ToolContext, args: Reschedu
     card = proposals.card(db, proposal, user)
     return {
         "proposed": True,
+        "length_minutes": length,
         "change": {"from": card["was"], "to": card["when"], "service": card["service"], "resource": card["resource"]},
-        "next_step": "Tell the customer to press Confirm on the card to move it, or Decline to keep it as it is.",
+        "next_step": f"Describe the new time exactly as in change.to (the length stays {length} minutes). "
+        "Tell the customer to press Confirm on the card to move it, or Decline to keep it as it is.",
     }
 
 
@@ -646,6 +692,7 @@ TOOLS = [
         "Book a time for the customer straight away and hold it for them: the customer sees a card with the details and "
         "presses Confirm to book it or Delete to release it. Omit resource_id to take any suitable free resource. "
         "Use duration_minutes only for a longer booking of a flexible service, quantity for places in a group session. "
+        "To change a booking that is still waiting for Confirm, pass its id as replaces_booking_id: it is released as the new one is held. "
         "On a rule problem it returns error and message: explain it and offer other times.",
         {
             "properties": {
@@ -654,6 +701,7 @@ TOOLS = [
                 "resource_id": _UUID,
                 "duration_minutes": {"type": "integer", "minimum": 1},
                 "quantity": {"type": "integer", "minimum": 1},
+                "replaces_booking_id": _UUID,
             },
             "required": ["service_id", "start"],
         },
@@ -663,10 +711,16 @@ TOOLS = [
     ),
     Tool(
         "propose_reschedule",
-        "Offer to move one of the customer's bookings to a new time (and optionally another resource). Nothing changes "
-        "until the customer presses Confirm on the card.",
+        "Offer to move one of the customer's bookings to a new time (and optionally another resource). A move keeps the "
+        "booking's length: pass duration_minutes only when the customer asked for a length, to be told if it differs. "
+        "Nothing changes until the customer presses Confirm on the card.",
         {
-            "properties": {"booking_id": _UUID, "new_start": _START, "resource_id": _UUID},
+            "properties": {
+                "booking_id": _UUID,
+                "new_start": _START,
+                "resource_id": _UUID,
+                "duration_minutes": {"type": "integer", "minimum": 1},
+            },
             "required": ["booking_id", "new_start"],
         },
         RescheduleIn,
