@@ -116,3 +116,34 @@ class RecurrenceFrequency(StrEnum):
     DAILY = "DAILY"
     WEEKLY = "WEEKLY"
     MONTHLY = "MONTHLY"
+
+
+class ChatSubscriptionStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    CANCELLED = "CANCELLED"
+
+
+class ChatRole(StrEnum):
+    # The roles of the model's conversation, spelled as the API spells them.
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    # Shown to the customer but never sent to the model (e.g. the fixed reply
+    # to a blocked message).
+    NOTICE = "notice"
+
+
+class ChatProposalKind(StrEnum):
+    # A booking the assistant made and holds for the customer to confirm or delete.
+    HOLD = "HOLD"
+    # Changes to an existing booking, made only when the customer confirms.
+    RESCHEDULE = "RESCHEDULE"
+    CANCEL = "CANCEL"
+
+
+class ChatProposalStatus(StrEnum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    DECLINED = "DECLINED"
+    EXPIRED = "EXPIRED"
+    FAILED = "FAILED"

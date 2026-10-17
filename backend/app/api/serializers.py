@@ -24,6 +24,7 @@ from app.schemas import (
 from app.services import invitations
 from app.services.availability import resource_timezone
 from app.services.booking_engine import OPEN_STATUSES
+from app.services.chat import holds
 from app.services.settings_service import BookingRules
 
 
@@ -139,10 +140,14 @@ def bookings_out(
             )
 
     waiting = invitations.awaiting_customer(db, ids)
+    held = holds.held_in_chat(db, ids)
     out = []
     for b in bookings:
         resource = b.primary_resource
         can_cancel, can_reschedule = booking_permissions(b, actor, rules, now)
+        if b.id in held and b.status == BookingStatus.PENDING:
+            # Never confirmed: it can be deleted at any time, and only confirmed or deleted, not moved.
+            can_cancel, can_reschedule = (b.user_id == actor.id or has_permission(actor.role, Permission.BOOKINGS_MANAGE)), False
         seen: set[uuid.UUID] = set()
         additional = []
         for a in b.allocations:
@@ -183,6 +188,7 @@ def bookings_out(
                 can_cancel=can_cancel,
                 can_reschedule=can_reschedule,
                 awaiting_customer=b.id in waiting and b.status == BookingStatus.PENDING,
+                held_in_chat=b.id in held and b.status == BookingStatus.PENDING,
             )
         )
     return out

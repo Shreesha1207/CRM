@@ -45,6 +45,38 @@ class Settings(BaseSettings):
     run_background_jobs: bool = True
     job_interval_seconds: int = 60
 
+    # Booking assistant: the model that talks to the customer and calls tools.
+    anthropic_api_key: str | None = None
+    chat_model: str = "claude-opus-5-5"
+    chat_effort: str = "low"
+    chat_max_output_tokens: int = 4096
+    chat_max_tool_rounds: int = 8
+    # The guards: any OpenAI-compatible endpoint (Groq, Gemini, Ollama...).
+    guard_base_url: str = "https://api.groq.com/openai/v1"
+    guard_api_key: str | None = None
+    guard_topic_model: str = "openai/gpt-oss-safeguard-20b"
+    # Prompt Guard, the cheap first filter for jailbreak wording; empty switches it off.
+    guard_injection_model: str = "meta-llama/llama-prompt-guard-2-86m"
+    guard_injection_threshold: float = 0.8
+    guard_timeout_seconds: float = 5.0
+    # How long a booking the assistant made stays held for the customer to confirm.
+    chat_hold_minutes: int = 10
+    chat_max_open_holds: int = 2
+    # Abuse and cost limits, per customer.
+    chat_max_input_chars: int = 1000
+    chat_max_reply_chars: int = 800
+    chat_messages_per_minute: int = 10
+    chat_daily_message_limit: int = 60
+    chat_daily_token_limit: int = 500_000
+    chat_max_messages_per_conversation: int = 40
+    chat_strike_limit: int = 3
+    chat_strike_window_minutes: int = 10
+    chat_pause_minutes: int = 60
+
+    @property
+    def chat_configured(self) -> bool:
+        return bool(self.anthropic_api_key and self.guard_api_key and self.guard_topic_model)
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"

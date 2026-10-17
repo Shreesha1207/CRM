@@ -32,7 +32,15 @@ SETTING_DEFINITIONS: dict[str, tuple[Any, str]] = {
     "pending_consumes_capacity": (True, "PENDING bookings hold their slot and capacity."),
     "enforce_operating_hours": (True, "Reject bookings outside operating hours."),
     "reminder_offsets": ([1440, 60], "Minutes before the start at which reminders are sent."),
+    "assistant_knowledge": (
+        "",
+        "Facts and policies the booking assistant may use to answer customers' questions "
+        "(parking, what to bring, refunds...). Leave empty if there are none.",
+    ),
 }
+
+# Free text that may be empty.
+OPTIONAL_TEXT = {"assistant_knowledge": 20_000}
 
 
 @dataclass(frozen=True)
@@ -75,6 +83,12 @@ def _coerce(key: str, value: Any) -> Any:
         ):
             raise SettingsValidationError(f"{key} must be a list of positive integers")
         return sorted(set(value), reverse=True)
+    if key in OPTIONAL_TEXT:
+        if not isinstance(value, str):
+            raise SettingsValidationError(f"{key} must be text")
+        if len(value) > OPTIONAL_TEXT[key]:
+            raise SettingsValidationError(f"{key} must be at most {OPTIONAL_TEXT[key]} characters")
+        return value.strip()
     if not isinstance(value, str) or not value.strip():
         raise SettingsValidationError(f"{key} must be a non-empty string")
     if key == "default_timezone" and not is_valid_timezone(value):
