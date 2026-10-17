@@ -189,6 +189,30 @@ sequenceDiagram
 
 The model never sees SQL or other customers' data and never changes anything itself: it can only fill in the pieces for the tools, which run the same catalogue queries and booking engine as the website, as the signed-in customer. A hold that is neither confirmed nor deleted is released by the background job after `CHAT_HOLD_MINUTES`. Moves and cancellations are only offered (a card), and change nothing until the customer confirms.
 
+#### 5.4.1 How the assistant reads and changes bookings (CRUD)
+
+The model has no database access, and no bookings in its prompt: the prompt holds the rules, the business FAQ and the current time. It gets data only as tool results.
+
+Each tool call takes the same path:
+1. The model's arguments are validated against the tool's schema. Bad input goes back to the model as `INVALID_INPUT`, so it can correct itself.
+2. The handler runs in its own database session, as the customer in the chat (`ctx.user_id`).
+3. Its result is serialized to JSON and returned to the model as a `tool` message. Errors come back as `{code, message}`. An unexpected exception is logged, and the model gets only a generic `INTERNAL` message.
+
+| Operation | Tools | What happens |
+| --- | --- | --- |
+| Read: catalogue | `list_services`, `list_resources`, `list_locations`, `find_available_slots`, `suggest_alternatives` | Read-only, with the same availability rules as the website |
+| Read: own bookings | `list_my_bookings`, `get_booking` | Only the customer's own bookings. Another customer's ID returns `NOT_FOUND`. |
+| Create | `hold_booking` | Creates a PENDING booking with no e-mail. At most `CHAT_MAX_OPEN_HOLDS` open holds per customer. |
+| Update | `propose_reschedule` | Checks that the new time is free, then stores a card. The move happens only when the customer presses Confirm. |
+| Delete | `propose_cancellation` | Checks the cancellation window, then stores a card. The cancellation happens only on Confirm. Delete on a held booking frees the time with no e-mail. |
+| UI only | `offer_choices` | Shows buttons under the reply. Writes nothing. |
+
+The model has no tool that confirms, declines or cancels anything. Those are the customer's button presses, which call `POST /api/chat/proposals/:id/confirm` or `/decline` directly.
+
+**Rows to JSON.** `tools._booking_json` builds each booking from `booking_mail.facts()`, the same function that writes the confirmation e-mails. The chat card and the e-mail therefore show identical details. The model receives the booking's id, service, resource, date, time and time zone, place, places, status, price, and flags such as `can_cancel`, `can_reschedule` and `waiting_for_confirmation_in_chat`.
+
+**Finding the booking a customer means.** `list_my_bookings` takes optional `on_date`, `around_time` (within 60 minutes, in the booking's own time zone) and `query` (names and descriptions, with typo tolerance). The filtering happens in code, and the result includes `match_count`. The model can act only on ids returned for this customer in an earlier result.
+
 ## 6. Concurrency & data-integrity architecture
 
 Two independent layers, deliberately redundant:
