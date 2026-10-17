@@ -504,8 +504,10 @@ def test_a_tool_call_the_server_could_not_read_is_asked_for_again_with_a_hint(gy
     assert reply_of(chat.send("Hi", _raise(bad), _raise(bad), say("Hello!")))["text"] == "Hello!"
     first, second, third = chat.model.requests
     assert TOOL_CALL_HINT not in str(first["messages"])
-    assert second["messages"][-1] == {"role": "system", "content": TOOL_CALL_HINT}
-    assert third["messages"][-1] == {"role": "system", "content": TOOL_CALL_HINT}
+    for request in (second, third):
+        hint = request["messages"][-1]
+        assert hint["role"] == "system" and hint["content"].startswith(TOOL_CALL_HINT)
+        assert "Failed to call a function" in hint["content"]  # what was wrong goes back to the model
     assert "list_services<|channel|>{oops" in caplog.text  # what the model wrote is logged
     assert TOOL_CALL_HINT not in str(chat.transcript())  # the hint is never stored
 
@@ -543,6 +545,38 @@ def test_only_the_last_turns_are_sent_and_never_cut_inside_a_tool_call(gym, chat
     assert [m["role"] for m in sent] == ["user", "system", "assistant", "tool", "assistant", "user", "system"]
     assert sent[0] == {"role": "user", "content": "second"}
     assert sent[2]["tool_calls"][0]["id"] == sent[3]["tool_call_id"]
+
+
+def test_older_turns_are_replayed_as_text_and_the_previous_turn_in_full(gym, chat) -> None:
+    reply_of(chat.send("first", call("list_services", {}), say("A")))
+    reply_of(chat.send("second", call("list_services", {}), say("B")))
+    reply_of(chat.send("third", call("list_services", {}), say("C")))
+    reply_of(chat.send("fourth", say("D")))
+    sent = chat.model.requests[-1]["messages"]
+    assert [m["role"] for m in sent] == [
+        "user", "assistant",  # first and second: only what was said
+        "user", "assistant",
+        "user", "system", "assistant", "tool", "assistant",  # the previous turn: with its tool call and result
+        "user", "system",  # the new message
+    ]
+    assert sent[1] == {"role": "assistant", "content": "A"}
+
+
+def test_placeholders_for_unknown_ids_are_left_out_instead_of_failing(client, db, make, gym, user, user_headers) -> None:
+    import uuid as _uuid
+
+    from app.services.chat import tools
+
+    service, sam = gym
+    ctx = tools.ToolContext(user_id=user.id, conversation_id=_uuid.uuid4(), turn_id=_uuid.uuid4())
+    # An unknown optional id ("?") is simply not given...
+    content, failed = tools.run("list_services", {"query": "strength", "location_id": "?"}, ctx)
+    assert not failed and json.loads(content)["services"][0]["name"] == "Strength coaching"
+    # ...and for a required one the model is told it is missing.
+    content, failed = tools.run("get_booking", {"booking_id": "?"}, ctx)
+    assert failed and "booking_id" in json.loads(content)["message"]
+    # Groq checks the schema before the server does, so it must not insist on a uuid format.
+    assert all("format" not in p for t in tools.TOOLS for p in t.schema.get("properties", {}).values())
 
 
 # ---------------------------------------------------------------- finding the booking the customer means

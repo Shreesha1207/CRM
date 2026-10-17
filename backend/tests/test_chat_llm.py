@@ -64,6 +64,14 @@ def test_a_short_rate_limit_is_waited_out_and_a_long_one_is_reported(monkeypatch
     assert m.run_turn(system="s", tools=[], messages=MESSAGES).text == "Hi"
     assert len(sent) == 2
 
+    # A wait of up to 20 s is made, twice at most; a longer one is reported at once.
+    answers[:] = [FakeResponse(429, headers={"retry-after": "15"}), FakeResponse(429, headers={"retry-after": "15"}), completion("Hi again")]
+    assert m.run_turn(system="s", tools=[], messages=MESSAGES).text == "Hi again"
+
+    answers[:] = [FakeResponse(429, headers={"retry-after": "15"})] * 3
+    with pytest.raises(RateLimited):
+        m.run_turn(system="s", tools=[], messages=MESSAGES)
+
     answers[:] = [FakeResponse(429, headers={"retry-after": "3600"})]
     with pytest.raises(RateLimited) as limited:
         m.run_turn(system="s", tools=[], messages=MESSAGES)

@@ -55,6 +55,9 @@ TOOL_CALL_HINT = (
     "that match their schema (ids are UUIDs from earlier tool results, dates are YYYY-MM-DD), or answer in plain text."
 )
 MAX_TOOL_CALL_RETRIES = 2
+# The latest turns are replayed with their tool calls and results (the ids and times
+# the customer may be answering); older turns as text only, to save tokens.
+FULL_TURNS = 2
 TOO_COMPLEX = "Sorry, I couldn't finish that. Could you try again, one step at a time? You can also use the booking page."
 REFUSED = "Sorry, I can't help with that. I can find a time, book, move or cancel an appointment, or answer questions about our services."
 BUSY = "The assistant is busy right now. Please try again in a minute, or use the booking page."
@@ -136,11 +139,26 @@ def _history(db: Session, conversation_id: uuid.UUID) -> list[dict[str, Any]]:
         )
         .order_by(ChatMessage.seq)
     ).all()
-    turn_starts = [i for i, row in enumerate(rows) if row.role == ChatRole.USER]
-    keep = get_settings().chat_history_turns
-    if len(turn_starts) > keep:
-        rows = rows[turn_starts[-keep]:]
-    return [row.content for row in rows]
+    turns: list[list[ChatMessage]] = []
+    for row in rows:
+        if row.role == ChatRole.USER or not turns:
+            turns.append([])
+        turns[-1].append(row)
+    turns = turns[-get_settings().chat_history_turns:]
+    messages: list[dict[str, Any]] = []
+    for n, turn in enumerate(turns):
+        recent = n >= len(turns) - FULL_TURNS
+        for row in turn:
+            if recent or _is_conversation(row):
+                messages.append(row.content)
+    return messages
+
+
+def _is_conversation(row: ChatMessage) -> bool:
+    """What the customer and the assistant said, without the tool calls and results between."""
+    if row.role == ChatRole.USER:
+        return True
+    return row.role == ChatRole.ASSISTANT and not row.content.get("tool_calls") and bool(row.content.get("content"))
 
 
 def last_reply(db: Session, conversation_id: uuid.UUID) -> str | None:
@@ -283,21 +301,23 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
     definitions = tools.definitions()
     ctx = tools.ToolContext(user_id=user.id, conversation_id=conversation.id, turn_id=turn.turn_id)
     final = None
-    unreadable = 0
+    problem = ""
+    rejected = 0
     last_stop = ""
     tool_errors: list[str] = []
     for _round in range(settings.chat_max_tool_rounds):
         emit("status", {"label": "Thinking…"})
         messages = _history(db, conversation.id)
-        if unreadable:
-            messages.append({"role": "system", "content": TOOL_CALL_HINT})
+        if problem:
+            messages.append({"role": "system", "content": f"{TOOL_CALL_HINT} Problem: {problem}"})
         try:
             result = model.run_turn(system=system, tools=definitions, messages=messages)
         except ToolCallFailed as exc:
             # The model wrote a tool call the server couldn't read: ask again, with a hint.
-            unreadable += 1
-            log.warning("Model tool call rejected (%s of %s): %s | %s", unreadable, MAX_TOOL_CALL_RETRIES + 1, exc, exc.failed_generation)
-            if unreadable > MAX_TOOL_CALL_RETRIES:
+            rejected += 1
+            problem = str(exc)
+            log.warning("Model tool call rejected (%s of %s): %s | %s", rejected, MAX_TOOL_CALL_RETRIES + 1, exc, exc.failed_generation)
+            if rejected > MAX_TOOL_CALL_RETRIES:
                 _refuse(turn, "tool call failed", TOO_COMPLEX, emit, strike=False)
                 return
             continue

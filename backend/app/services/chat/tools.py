@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -50,8 +50,21 @@ class ToolContext:
     choices: list[str] = field(default_factory=list)
 
 
+# What small models write for a field they don't know.
+_PLACEHOLDERS = {"", "?", "-", "null", "none", "n/a", "na", "unknown", "undefined", "tbd"}
+
+
 class _In(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _leave_out_placeholders(cls, data: Any) -> Any:
+        """"?" or "null" for an optional field means "not given"; for a required one it
+        becomes a plain "field required" the model can act on."""
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if not (isinstance(v, str) and v.strip().lower() in _PLACEHOLDERS)}
+        return data
 
 
 def _error(code: str, message: str) -> dict[str, Any]:
@@ -526,7 +539,7 @@ class Tool:
         }
 
 
-_UUID = {"type": "string", "format": "uuid"}
+_UUID = {"type": "string", "description": "An id copied from an earlier tool result; leave out when not known"}
 _START = {"type": "string", "description": "Wall-clock time at the resource's location, YYYY-MM-DDTHH:MM, e.g. 2026-10-20T10:00"}
 
 TOOLS = [

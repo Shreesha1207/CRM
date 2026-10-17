@@ -11,8 +11,10 @@ from app.core.config import Settings, get_settings
 
 log = logging.getLogger("chat.groq")
 
-# A rate limit asking us to wait longer than this ends the turn instead.
-MAX_WAIT_SECONDS = 10.0
+# A rate limit asking us to wait longer than this ends the turn instead; up to
+# MAX_RATE_LIMIT_WAITS waits are made for one request.
+MAX_WAIT_SECONDS = 20.0
+MAX_RATE_LIMIT_WAITS = 2
 
 
 class GroqError(Exception):
@@ -66,22 +68,26 @@ class GroqClient:
         headers = {"Authorization": f"Bearer {self.settings.groq_api_key}"}
         body = {"model": model, "messages": messages, **extra}
         last: Exception | None = None
-        for attempt in range(2):  # one retry
+        attempts = waits = 0
+        while attempts < 2:  # one retry after an error
             try:
                 response = self.session.post(url, json=body, headers=headers, timeout=timeout)
             except requests.RequestException as exc:
                 last = exc
+                attempts += 1
                 time.sleep(0.3)
                 continue
             if response.status_code == 429:
                 wait = _retry_after(response)
-                if attempt == 0 and wait <= MAX_WAIT_SECONDS:
+                if waits < MAX_RATE_LIMIT_WAITS and wait <= MAX_WAIT_SECONDS:
+                    waits += 1
                     log.info("Rate limited by %s, waiting %.1f s", model, wait)
                     time.sleep(wait)
                     continue
                 raise RateLimited(wait)
             if response.status_code >= 500:
                 last = GroqError(f"{model} returned {response.status_code}")
+                attempts += 1
                 time.sleep(0.3)
                 continue
             if not response.ok:
@@ -93,4 +99,5 @@ class GroqClient:
                 return response.json()
             except ValueError as exc:
                 last = exc
+                attempts += 1
         raise GroqError(str(last))
