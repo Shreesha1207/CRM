@@ -1,6 +1,8 @@
 /** Thin fetch wrapper. The server is the source of truth for everything;
  * the client never decides availability or permissions on its own. */
 
+import { createSseParser, type SseEvent } from "../lib/sse";
+
 export class ApiError extends Error {
   status: number;
   code?: string;
@@ -81,6 +83,27 @@ export async function request<T>(
     );
   }
   return body as T;
+}
+
+/** POST that answers with server-sent events (the assistant's progress, then its reply). */
+export async function streamPost(path: string, body: unknown, onEvent: (event: SseEvent) => void): Promise<void> {
+  const headers: Record<string, string> = { Accept: "text/event-stream", "Content-Type": "application/json" };
+  const csrf = readCookie("csrf_token");
+  if (csrf) headers["X-CSRF-Token"] = decodeURIComponent(csrf);
+  const response = await fetch(path, { method: "POST", headers, credentials: "include", body: JSON.stringify(body) });
+  if (!response.ok || !response.body) {
+    const text = await response.text();
+    const parsed = text ? JSON.parse(text) : undefined;
+    throw new ApiError(response.status, messageFrom(parsed, response.statusText || "Request failed"), parsed?.code, parsed?.details);
+  }
+  const parser = createSseParser(onEvent);
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parser.push(value);
+  }
+  parser.end();
 }
 
 export const api = {

@@ -338,6 +338,15 @@ export function BookingDetailPage() {
           <Alert tone="info">You're #{b.waitlist_position} on the waitlist. We'll confirm you automatically if a place opens.</Alert>
         )}
         {state?.rescheduled && <Alert tone="success">Your booking has been moved.</Alert>}
+        {b.held_in_chat && (
+          <Alert tone="info">
+            The booking assistant is holding this time for you. Confirm or delete it in the{" "}
+            <Link to="/chat" className={linkClass}>
+              assistant
+            </Link>
+            ; if you don't, it is released in a few minutes.
+          </Alert>
+        )}
         {b.status === "CONFLICTED" && (
           <Alert tone="warning">
             A schedule change affects this booking{b.conflict_reason ? ` (${b.conflict_reason})` : ""}. Our team will contact you, or you can reschedule it now.
@@ -401,7 +410,7 @@ export function BookingDetailPage() {
               Reschedule
             </Button>
             <Button variant="danger" disabled={!b.can_cancel} onClick={() => setModal("cancel")}>
-              {b.status === "WAITLISTED" ? "Leave waitlist" : "Cancel booking"}
+              {b.status === "WAITLISTED" ? "Leave waitlist" : b.held_in_chat ? "Delete" : "Cancel booking"}
             </Button>
           </div>
           {notes.length > 0 && (

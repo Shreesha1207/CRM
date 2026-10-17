@@ -131,11 +131,17 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
               move it, they get a new link for the new time.
             </Alert>
           )}
+          {b.held_in_chat && (
+            <Alert tone="info">
+              Held by the booking assistant for {b.user.email}. They confirm or delete it in the chat; if they don't answer in a few minutes, the
+              time is released by itself. You can cancel it, but not confirm or move it.
+            </Alert>
+          )}
           {resend.error && <Alert>{errorMessage(resend.error)}</Alert>}
           {resend.isSuccess && <Alert tone="success">A new link was sent to {b.user.email}. The old one no longer works.</Alert>}
           {manage && (
             <div className="flex flex-wrap gap-2">
-              {b.status === "PENDING" && !b.awaiting_customer && <Button size="sm" onClick={() => action.mutate("confirm")}>Confirm</Button>}
+              {b.status === "PENDING" && !b.awaiting_customer && !b.held_in_chat && <Button size="sm" onClick={() => action.mutate("confirm")}>Confirm</Button>}
               {b.awaiting_customer && (
                 <Button size="sm" variant="secondary" loading={resend.isPending} onClick={() => resend.mutate()}>
                   Resend invitation
@@ -147,8 +153,8 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
                   <Button size="sm" variant="secondary" onClick={() => action.mutate("no-show")}>Mark no-show</Button>
                 </>
               )}
-              {open && <Button size="sm" variant="secondary" onClick={() => setSub("reschedule")}>Reschedule</Button>}
-              {open && <Button size="sm" variant="secondary" onClick={() => setSub("reassign")}>Reassign resource</Button>}
+              {open && !b.held_in_chat && <Button size="sm" variant="secondary" onClick={() => setSub("reschedule")}>Reschedule</Button>}
+              {open && !b.held_in_chat && <Button size="sm" variant="secondary" onClick={() => setSub("reassign")}>Reassign resource</Button>}
               {(open || b.status === "WAITLISTED") && <Button size="sm" variant="danger" onClick={() => setSub("cancel")}>Cancel</Button>}
             </div>
           )}
@@ -599,7 +605,7 @@ export function AdminBookingsPage() {
                 </Td>
                 <Td>{b.resource.name}</Td>
                 <Td>
-                  <StatusBadge status={b.awaiting_customer ? "AWAITING_CUSTOMER" : b.status} />
+                  <StatusBadge status={b.awaiting_customer || b.held_in_chat ? "AWAITING_CUSTOMER" : b.status} />
                 </Td>
                 <Td className="text-right">
                   <Button size="sm" variant="secondary" onClick={() => setSelected(b)}>

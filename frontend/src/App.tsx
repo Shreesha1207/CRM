@@ -12,6 +12,7 @@ import { AdminConflictsPage, AdminOverviewPage } from "./pages/admin/overview";
 import { AdminSchedulesPage } from "./pages/admin/schedules";
 import { AdminAuditPage, AdminSettingsPage, AdminUsersPage } from "./pages/admin/system";
 import { BookPage } from "./pages/book";
+import { ChatPage, ChatUpgradePage } from "./pages/chat";
 import {
   ForgotPasswordPage,
   HomePage,
@@ -78,6 +79,8 @@ export function App() {
         <Route path="bookings" element={<RequireAuth customer><BookingsPage /></RequireAuth>} />
         <Route path="bookings/:id" element={<RequireAuth customer><BookingDetailPage /></RequireAuth>} />
         <Route path="profile" element={<RequireAuth customer><ProfilePage /></RequireAuth>} />
+        <Route path="chat" element={<RequireAuth customer><ChatPage /></RequireAuth>} />
+        <Route path="chat/upgrade" element={<RequireAuth customer><ChatUpgradePage /></RequireAuth>} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

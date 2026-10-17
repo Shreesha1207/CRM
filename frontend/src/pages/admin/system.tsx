@@ -4,7 +4,7 @@ import { api, errorMessage } from "../../api/client";
 import type { AuditLog, Page, Role, SettingDefinition, User, UserStatus } from "../../api/types";
 import { ROLES } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
-import { Alert, Button, Card, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td } from "../../components/ui";
+import { Alert, Button, Card, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td, Textarea } from "../../components/ui";
 import { formatStamp, titleCase } from "../../lib/format";
 
 // ---------------------------------------------------------------- users
@@ -254,6 +254,13 @@ export function AdminSettingsPage() {
                       )
                     }
                   />
+                </Field>
+              );
+            }
+            if (d.key === "assistant_knowledge") {
+              return (
+                <Field key={d.key} label="Booking assistant FAQ" hint={`${d.description} The assistant answers only from this text and its own lookups.`}>
+                  <Textarea rows={6} maxLength={20000} value={String(value ?? "")} onChange={(e) => set(d.key, e.target.value)} />
                 </Field>
               );
             }

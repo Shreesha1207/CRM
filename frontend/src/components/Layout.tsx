@@ -194,6 +194,7 @@ export function Layout() {
           { to: "/dashboard", label: "Dashboard" },
           { to: "/book", label: "Book" },
           { to: "/bookings", label: "My bookings" },
+          { to: "/chat", label: "Assistant" },
         ]
       : []),
   ];

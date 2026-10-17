@@ -223,6 +223,8 @@ export interface Booking {
   can_reschedule: boolean;
   /** Made for a customer who has not confirmed it yet: only they can, the admin cannot. */
   awaiting_customer: boolean;
+  /** Held by the booking assistant until the customer confirms or deletes it in the chat. */
+  held_in_chat: boolean;
 }
 
 export interface Occurrence {
@@ -378,4 +380,68 @@ export interface SettingDefinition {
   key: string;
   default: unknown;
   description: string;
+}
+
+// ---------------------------------------------------------------- booking assistant
+
+export interface ChatSubscription {
+  active: boolean;
+  activated_at: string | null;
+  paused_until: string | null;
+  /** False until the operator has set the model and guard keys. */
+  configured: boolean;
+  price_label: string;
+  demo: boolean;
+}
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  updated_at: string;
+}
+
+export interface ChatWhen {
+  date: string;
+  time: string;
+  zone: string;
+}
+
+export type ChatCardStatus = "PENDING" | "CONFIRMED" | "DECLINED" | "EXPIRED" | "FAILED";
+
+/** A booking the assistant holds (HOLD), or a change it offers (RESCHEDULE, CANCEL),
+ * with the same details as the booking e-mails. */
+export interface ChatCard {
+  id: string;
+  kind: "HOLD" | "RESCHEDULE" | "CANCEL";
+  status: ChatCardStatus;
+  expires_at: string;
+  result_message: string | null;
+  booking_id: string | null;
+  business?: string;
+  service?: string;
+  resource?: string;
+  quantity?: number;
+  when?: ChatWhen;
+  was?: ChatWhen | null;
+  place?: string | null;
+  map_url?: string | null;
+  price?: string | null;
+  booking_status?: BookingStatus;
+}
+
+export interface ChatItem {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  choices: string[];
+  cards: ChatCard[];
+  paused: boolean;
+  feedback: 1 | -1 | null;
+  created_at: string;
+}
+
+export interface ChatConversationDetail extends ChatConversation {
+  items: ChatItem[];
+  starters: string[];
+  hold_minutes: number;
 }
