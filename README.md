@@ -142,7 +142,10 @@ GROQ_API_KEY=gsk_...
 **Checking it with the real model.** The unit tests use stand-ins and never touch the network. To see how the real model and guards behave on realistic and hostile conversations ("reverse a linked list in Python", role-play, prompts hidden in base64, two people with the same name, another language...), run the eval. It uses part of the day's free Groq tokens (it pauses between cases to stay inside the per-minute limits; `--pause` sets how long), runs on a throwaway `booking_eval` database, and reports leaks (must be 0), wrongly blocked booking messages, how well it found existing bookings, timings and tokens used:
 
 ```bash
-createdb booking_eval
+# a throwaway PostgreSQL for it (or `createdb booking_eval` on a local PostgreSQL)
+docker run -d --name booking-eval-db -e POSTGRES_USER=booking -e POSTGRES_PASSWORD=booking -e POSTGRES_DB=booking_eval -p 5433:5432 postgres:16
+# in backend/.env, next to GROQ_API_KEY:
+#   EVAL_DATABASE_URL=postgresql+psycopg://booking:booking@localhost:5433/booking_eval
 cd backend && python -m app.chat_eval
 ```
 

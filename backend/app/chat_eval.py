@@ -7,8 +7,8 @@ It uses the real model and guards on Groq (GROQ_API_KEY), so each run uses up pa
 of the day's free tokens. On the free tier it waits --pause seconds between cases
 (default 20) to stay inside the per-minute limits; a case that still hits a limit is
 reported as RATE LIMITED, not as a failure. It runs on a throwaway database, EVAL_DATABASE_URL
-(default: the local `booking_eval`), which it wipes and fills with the demo
-catalogue. The database name must contain "eval" or "test" so a real database
+(from the environment or backend/.env; default: the local `booking_eval`), which it wipes
+and fills with the demo catalogue. The database name must contain "eval" or "test" so a real database
 can never be wiped by mistake.
 
 Every case is graded by rules on what the assistant did: did it hold the right
@@ -25,12 +25,29 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-EVAL_URL = os.environ.get("EVAL_DATABASE_URL", "postgresql+psycopg://booking:booking@localhost:5432/booking_eval")
+
+def _dotenv(name: str) -> str | None:
+    """A value from backend/.env, so EVAL_DATABASE_URL can sit next to GROQ_API_KEY."""
+    path = Path(__file__).resolve().parent.parent / ".env"
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key.strip() == name:
+                return value.strip().strip("\"'") or None
+    return None
+
+
+EVAL_URL = (
+    os.environ.get("EVAL_DATABASE_URL")
+    or _dotenv("EVAL_DATABASE_URL")
+    or "postgresql+psycopg://booking:booking@localhost:5432/booking_eval"
+)
 os.environ["DATABASE_URL"] = EVAL_URL  # before anything opens the database
 os.environ["RUN_BACKGROUND_JOBS"] = "false"
 os.environ["EMAIL_BACKEND"] = "console"
 
-from sqlalchemy import select, text  # noqa: E402
+from sqlalchemy import make_url, select, text  # noqa: E402
+from sqlalchemy.exc import OperationalError  # noqa: E402
 
 from app.core.config import get_settings  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
@@ -278,7 +295,17 @@ def main() -> None:
     from app.services.chat.guard import GuardClient
     from app.services.chat.llm import GroqChatModel
 
-    _fresh_database()
+    try:
+        _fresh_database()
+    except OperationalError:
+        sys.exit(
+            f"Can't reach the eval database ({make_url(EVAL_URL).render_as_string(hide_password=True)}).\n"
+            "Start a throwaway PostgreSQL for it, for example with Docker:\n"
+            "  docker run -d --name booking-eval-db -e POSTGRES_USER=booking -e POSTGRES_PASSWORD=booking "
+            "-e POSTGRES_DB=booking_eval -p 5433:5432 postgres:16\n"
+            "then add this line to backend/.env (or set it in the environment) and run again:\n"
+            "  EVAL_DATABASE_URL=postgresql+psycopg://booking:booking@localhost:5433/booking_eval"
+        )
     model, guard = GroqChatModel(settings), GuardClient(settings)
     timed = _TimedGuard(guard)
     results = []
