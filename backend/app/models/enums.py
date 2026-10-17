@@ -128,6 +128,8 @@ class ChatRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
+    # A tool's result, answering one of the model's tool calls.
+    TOOL = "tool"
     # Shown to the customer but never sent to the model (e.g. the fixed reply
     # to a blocked message).
     NOTICE = "notice"

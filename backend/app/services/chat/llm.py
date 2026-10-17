@@ -1,75 +1,87 @@
-"""The model that talks to the customer and calls the assistant's tools."""
+"""The model that talks to the customer and calls the assistant's tools (on Groq)."""
 
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from app.core.config import Settings, get_settings
+from app.services.chat.groq import GroqClient
 
-# Models whose refusals the API can retry on another model server-side.
-_SERVER_FALLBACK_PREFIXES = ("claude-opus-", "claude-sonnet-5-5", "claude-fable-")
+_STOP_REASONS = {"tool_calls": "tool_use", "stop": "end_turn", "length": "max_tokens", "content_filter": "refusal"}
 
 
 @dataclass
 class ModelTurn:
-    # The response's content blocks as plain JSON, exactly as they are sent back
-    # on later requests (thinking blocks included, unchanged).
-    content: list[dict[str, Any]]
-    stop_reason: str
+    # The assistant message as it is stored and sent back on later requests:
+    # role, content and (when the model called tools) tool_calls.
+    message: dict[str, Any]
+    stop_reason: str  # "tool_use", "end_turn", "max_tokens" or "refusal"
     input_tokens: int = 0
     output_tokens: int = 0
-    tool_uses: list[dict[str, Any]] = field(default_factory=list)
+    # Each call as {"id", "name", "arguments"}; arguments is the raw JSON text.
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def text(self) -> str:
-        return "\n\n".join(b["text"].strip() for b in self.content if b.get("type") == "text" and b.get("text", "").strip())
+        return (self.message.get("content") or "").strip()
 
 
 class ChatModel(Protocol):
-    def run_turn(self, *, system: list[dict], tools: list[dict], messages: list[dict]) -> ModelTurn: ...
+    def run_turn(self, *, system: str, tools: list[dict], messages: list[dict]) -> ModelTurn: ...
 
 
-class AnthropicChatModel:
-    def __init__(self, settings: Settings | None = None, http_client=None) -> None:
-        import anthropic  # imported here so the rest of the app never needs it
-
+class GroqChatModel:
+    def __init__(self, settings: Settings | None = None, client: GroqClient | None = None) -> None:
         self.settings = settings or get_settings()
-        self.client = anthropic.Anthropic(
-            api_key=self.settings.anthropic_api_key, timeout=60.0, max_retries=2, http_client=http_client
-        )
+        self.client = client or GroqClient(self.settings)
 
-    def run_turn(self, *, system: list[dict], tools: list[dict], messages: list[dict]) -> ModelTurn:
+    def run_turn(self, *, system: str, tools: list[dict], messages: list[dict]) -> ModelTurn:
         s = self.settings
-        kwargs: dict[str, Any] = dict(
-            model=s.chat_model,
-            max_tokens=s.chat_max_output_tokens,
-            system=system,
+        extra: dict[str, Any] = dict(
             tools=tools,
-            messages=messages,
-            thinking={"type": "adaptive"},
-            output_config={"effort": s.chat_effort},
-            # Caches the tools, the system prompt and the conversation so far.
-            cache_control={"type": "ephemeral"},
+            tool_choice="auto",
+            parallel_tool_calls=True,
+            temperature=0.2,
+            max_completion_tokens=s.chat_max_output_tokens,
         )
-        betas: list[str] = []
-        if s.chat_model.startswith(_SERVER_FALLBACK_PREFIXES):
-            # A declined request is retried on the model Anthropic recommends for it.
-            betas.append("server-side-fallback-2026-07-01")
-            kwargs["fallbacks"] = "default"
-        response = self.client.beta.messages.create(**kwargs, betas=betas)
-        content = [block.model_dump(mode="json", by_alias=True, exclude_none=True) for block in response.content]
-        usage = response.usage
+        if s.chat_reasoning_effort:
+            extra["reasoning_effort"] = s.chat_reasoning_effort
+        # The fixed system prompt first, so its tokens are cached from one request to the next.
+        data = self.client.chat(
+            s.chat_model, [{"role": "system", "content": system}, *messages], timeout=s.chat_timeout_seconds, **extra
+        )
+        choice = data["choices"][0]
+        reply = choice.get("message") or {}
+        calls = reply.get("tool_calls") or []
+        message: dict[str, Any] = {"role": "assistant", "content": reply.get("content")}
+        if calls:
+            message["tool_calls"] = [
+                {
+                    "id": c["id"],
+                    "type": "function",
+                    "function": {"name": c["function"]["name"], "arguments": c["function"].get("arguments") or "{}"},
+                }
+                for c in calls
+            ]
+        stop = _STOP_REASONS.get(choice.get("finish_reason") or "", "end_turn")
+        if calls and stop == "end_turn":
+            stop = "tool_use"
+        usage = data.get("usage") or {}
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
         return ModelTurn(
-            content=content,
-            stop_reason=response.stop_reason or "end_turn",
-            # What the daily limit counts: everything except cheap cache reads.
-            input_tokens=(usage.input_tokens or 0) + (getattr(usage, "cache_creation_input_tokens", 0) or 0),
-            output_tokens=usage.output_tokens or 0,
-            tool_uses=[b for b in content if b.get("type") == "tool_use"],
+            message=message,
+            stop_reason=stop,
+            # What the daily limit counts: cached prompt tokens are left out, as Groq does.
+            input_tokens=max(0, (usage.get("prompt_tokens") or 0) - cached),
+            output_tokens=usage.get("completion_tokens") or 0,
+            tool_calls=[
+                {"id": c["id"], "name": c["function"]["name"], "arguments": c["function"]["arguments"]}
+                for c in message.get("tool_calls", [])
+            ],
         )
 
 
 def get_chat_model() -> ChatModel | None:
     settings = get_settings()
-    if not settings.anthropic_api_key:
+    if not settings.chat_configured:
         return None
-    return AnthropicChatModel(settings)
+    return GroqChatModel(settings)

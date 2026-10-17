@@ -3,11 +3,12 @@
     check the message (guards) -> model <-> tools, a few rounds -> check the reply (guards)
     -> show it, or throw the whole turn away and show the fixed reply
 
-Everything the model sees is stored, and replayed unchanged on later turns. A
-turn that is blocked is kept for review but never sent to the model again, and
-any booking it held is released.
+Every message the model sees is stored in the OpenAI chat format and sent again
+on later turns (the most recent turns only). A turn that is blocked is kept for
+review but never sent to the model again, and any booking it held is released.
 """
 
+import json
 import logging
 import uuid
 from collections.abc import Callable
@@ -27,6 +28,7 @@ from app.models import ChatConversation, ChatMessage, ChatProposal, ChatSubscrip
 from app.models.enums import ChatRole
 from app.services import settings_service
 from app.services.chat import prompt, proposals, tools
+from app.services.chat.groq import RateLimited, ToolCallFailed
 from app.services.chat.guard import GuardClient, Verdict
 from app.services.chat.llm import ChatModel
 
@@ -49,6 +51,8 @@ def fixed_reply(db: Session) -> str:
 UNAVAILABLE = "The assistant is unavailable right now. Please try again in a moment, or use the booking page."
 TOO_COMPLEX = "Sorry, I couldn't finish that. Could you try again, one step at a time? You can also use the booking page."
 REFUSED = "Sorry, I can't help with that. I can find a time, book, move or cancel an appointment, or answer questions about our services."
+BUSY = "The assistant is busy right now. Please try again in a minute, or use the booking page."
+OUT_FOR_TODAY = "The assistant has reached today's limit. Please use the booking page, or try again tomorrow."
 
 
 class ChatLimit(AppError):
@@ -115,6 +119,8 @@ def take_lease(db: Session, conversation: ChatConversation) -> None:
 
 
 def _history(db: Session, conversation_id: uuid.UUID) -> list[dict[str, Any]]:
+    """The messages sent to the model: the last few customer turns, never cut between
+    a tool call and its result."""
     rows = db.scalars(
         select(ChatMessage)
         .where(
@@ -124,7 +130,11 @@ def _history(db: Session, conversation_id: uuid.UUID) -> list[dict[str, Any]]:
         )
         .order_by(ChatMessage.seq)
     ).all()
-    return [{"role": r.role.value, "content": r.content} for r in rows]
+    turn_starts = [i for i, row in enumerate(rows) if row.role == ChatRole.USER]
+    keep = get_settings().chat_history_turns
+    if len(turn_starts) > keep:
+        rows = rows[turn_starts[-keep]:]
+    return [row.content for row in rows]
 
 
 def last_reply(db: Session, conversation_id: uuid.UUID) -> str | None:
@@ -251,7 +261,7 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
     db.commit()
 
     previous = last_reply(db, conversation.id)
-    turn.add(ChatRole.USER, text, display={"text": text})
+    turn.add(ChatRole.USER, {"role": "user", "content": text}, display={"text": text})
 
     emit("status", {"label": "Reading your message…"})
     verdict: Verdict = guard.screen_input(text, previous)
@@ -261,33 +271,48 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
         return
 
     events = proposals.report(db, conversation.id, user, now)
-    turn.add(ChatRole.SYSTEM, prompt.turn_note(db, user, now, events))
+    turn.add(ChatRole.SYSTEM, {"role": "system", "content": prompt.turn_note(db, user, now, events)})
 
     system = prompt.system_prompt(db)
     definitions = tools.definitions()
     ctx = tools.ToolContext(user_id=user.id, conversation_id=conversation.id, turn_id=turn.turn_id)
     final = None
+    retried = False
     for _round in range(settings.chat_max_tool_rounds):
         emit("status", {"label": "Thinking…"})
-        result = model.run_turn(system=system, tools=definitions, messages=_history(db, conversation.id))
-        row = turn.add(ChatRole.ASSISTANT, result.content, input_tokens=result.input_tokens, output_tokens=result.output_tokens)
+        try:
+            result = model.run_turn(system=system, tools=definitions, messages=_history(db, conversation.id))
+        except ToolCallFailed:
+            # The model wrote a tool call the server couldn't read: ask once more.
+            if retried:
+                _refuse(turn, "tool call failed", TOO_COMPLEX, emit, strike=False)
+                return
+            retried = True
+            continue
+        except RateLimited as exc:
+            _refuse(turn, "rate limited", BUSY if exc.retry_after <= 120 else OUT_FOR_TODAY, emit, strike=False)
+            return
+        row = turn.add(ChatRole.ASSISTANT, result.message, input_tokens=result.input_tokens, output_tokens=result.output_tokens)
         conversation.input_tokens += result.input_tokens
         conversation.output_tokens += result.output_tokens
         db.commit()
         if result.stop_reason == "refusal":
             _refuse(turn, "refusal", REFUSED, emit, strike=False)
             return
-        if result.stop_reason == "tool_use" and result.tool_uses:
-            outputs = []
-            for call in result.tool_uses:
+        if result.stop_reason == "tool_use" and result.tool_calls:
+            for call in result.tool_calls:
                 spec = tools.TOOLS_BY_NAME.get(call["name"])
                 if spec is not None and spec.status:
                     emit("status", {"label": spec.status})
-                content, is_error = tools.run(call["name"], call.get("input"), ctx)
-                outputs.append({"type": "tool_result", "tool_use_id": call["id"], "content": content, **({"is_error": True} if is_error else {})})
-            turn.add(ChatRole.USER, outputs)
+                try:
+                    args = json.loads(call["arguments"] or "{}")
+                except ValueError:
+                    content = json.dumps({"error": "INVALID_JSON", "message": "The tool arguments were not valid JSON."})
+                else:
+                    content, _ = tools.run(call["name"], args, ctx)
+                turn.add(ChatRole.TOOL, {"role": "tool", "tool_call_id": call["id"], "content": content})
             continue
-        if result.stop_reason in ("end_turn", "stop_sequence"):
+        if result.stop_reason == "end_turn":
             final = row
             break
         log.warning("Chat turn stopped with %s", result.stop_reason)
@@ -313,8 +338,8 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
     emit("reply", _reply(db, user, final))
 
 
-def model_text(content: list[dict[str, Any]]) -> str:
-    return "\n\n".join(b["text"].strip() for b in content if b.get("type") == "text" and b.get("text", "").strip())
+def model_text(message: dict[str, Any]) -> str:
+    return (message.get("content") or "").strip()
 
 
 # ---------------------------------------------------------------- what the customer sees

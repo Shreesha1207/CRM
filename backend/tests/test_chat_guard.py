@@ -16,7 +16,7 @@ from app.services.chat.guard import (
     rule_check_input,
     rule_check_output,
 )
-from tests.chat_fakes import FakeGuard, call, reply_of, say
+from tests.chat_fakes import FakeGuard, FakeResponse, call, completion, fake_http, reply_of, say
 from tests.conftest import MONDAY, NOW, at
 
 TUESDAY = MONDAY + timedelta(days=1)
@@ -198,7 +198,7 @@ def test_repeated_blocked_messages_pause_the_assistant(db, chat) -> None:
 def test_a_refusal_by_the_model_gets_a_polite_reply(chat) -> None:
     from app.services.chat.llm import ModelTurn
 
-    reply = reply_of(chat.send("Hi", ModelTurn(content=[], stop_reason="refusal")))
+    reply = reply_of(chat.send("Hi", ModelTurn(message={"role": "assistant", "content": ""}, stop_reason="refusal")))
     assert reply["text"].startswith("Sorry, I can't help with that")
 
 
@@ -211,42 +211,26 @@ def test_the_guard_never_sees_more_than_it_needs(gym, chat) -> None:
     assert "<assistant_reply>\nHello! How can I help with your booking?\n</assistant_reply>" in guard.calls[2][1]
 
 
-
-class _Response:
-    def __init__(self, status: int, content: str | None = None) -> None:
-        self.status_code, self._content = status, content
-
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400:
-            import requests
-
-            raise requests.HTTPError(str(self.status_code))
-
-    def json(self) -> dict:
-        return {"choices": [{"message": {"content": self._content}}]}
-
-
 def test_the_guard_client_speaks_the_openai_compatible_api_and_retries_once(monkeypatch) -> None:
     from app.core.config import Settings
     from app.services.chat.guard import GuardClient
 
-    client = GuardClient(Settings(guard_api_key="gsk_test", guard_base_url="https://api.groq.com/openai/v1/"))
-    sent, answers = [], [_Response(500), _Response(200, "0.02"), _Response(200, "ALLOW")]
-
-    def post(url, json, headers, timeout):
-        sent.append((url, json, headers))
-        return answers.pop(0)
-
-    monkeypatch.setattr(client.session, "post", post)
-    monkeypatch.setattr("app.services.chat.guard.time.sleep", lambda _: None)
+    client = GuardClient(Settings(groq_api_key="gsk_test", groq_base_url="https://api.groq.com/openai/v1/"))
+    answers = [FakeResponse(500), completion("0.02"), completion("ALLOW")]
+    sent = fake_http(monkeypatch, client.client, answers)
     assert client.screen_input("Book yoga on Tuesday", None).allowed
     assert [s[0] for s in sent] == ["https://api.groq.com/openai/v1/chat/completions"] * 3
     injection, policy = sent[1][1], sent[2][1]
     assert injection["model"] == "meta-llama/llama-prompt-guard-2-86m" and injection["messages"] == [{"role": "user", "content": "Book yoga on Tuesday"}]
-    assert policy["model"] == "openai/gpt-oss-safeguard-20b" and policy["temperature"] == 0 and policy["reasoning_effort"] == "low"
+    assert policy["model"] == "openai/gpt-oss-20b" and policy["temperature"] == 0 and policy["reasoning_effort"] == "low"
     assert policy["messages"][0]["role"] == "system" and "## BLOCKED" in policy["messages"][0]["content"]
     assert sent[2][2]["Authorization"] == "Bearer gsk_test"
 
-    answers[:] = [_Response(503), _Response(503)]
+    answers[:] = [FakeResponse(503), FakeResponse(503)]
+    verdict = client.screen_input("Book yoga on Tuesday", None)
+    assert not verdict.allowed and verdict.unavailable
+
+    # A rate limit on the guard blocks too (fail closed), without blaming the customer.
+    answers[:] = [FakeResponse(429, headers={"retry-after": "120"})]
     verdict = client.screen_input("Book yoga on Tuesday", None)
     assert not verdict.allowed and verdict.unavailable

@@ -67,7 +67,7 @@ backend/app/
     notifications.py      domain-event handlers, reminder scheduling, delivery
     settings_service.py   runtime-configurable booking rules
     events.py, audit.py, reports.py
-    chat/                 the booking assistant: guard.py (checks outside the model), llm.py (Claude API),
+    chat/                 the booking assistant: groq.py (the one API client), guard.py (checks outside the model), llm.py (the model),
                           prompt.py, tools.py (the only way the model sees or changes data),
                           proposals.py + holds.py (held bookings and offered changes), agent.py (one turn)
   api/
@@ -168,7 +168,7 @@ sequenceDiagram
     participant C as Customer (chat)
     participant API as POST /api/chat/conversations/:id/messages
     participant G as Guards (rules, Prompt Guard, policy guard)
-    participant M as Claude (main model)
+    participant M as Model on Groq (gpt-oss-20b)
     participant T as Tools (fixed functions, as the customer)
     participant BE as BookingEngine
 
@@ -176,7 +176,7 @@ sequenceDiagram
     API->>G: check the message
     G-->>API: BLOCK -> fixed reply, the model is never called
     API->>M: history (replayed unchanged) + message + turn note (current time)
-    M->>T: list_services / list_resources / find_available_slots
+    M->>T: list_services / list_resources / find_available_slots / list_my_bookings (filtered by what was said)
     T-->>M: small JSON (times and prices already formatted)
     M->>T: hold_booking(service, resource, start, 120 min)
     T->>BE: create(awaiting the customer): PENDING, slot held, no e-mail yet
@@ -260,7 +260,7 @@ nginx (`frontend/nginx.conf`) also sets the SPA's own strict `Content-Security-P
 | Auth | argon2id (via `passlib`/`argon2-cffi`), PyJWT |
 | Deployment | Docker Compose (3 services), nginx (static frontend + reverse proxy) |
 | Testing | pytest (backend, against a real PostgreSQL database), Playwright (end-to-end, both API-driven and browser-driven passes) |
-| Booking assistant | Anthropic Python SDK (Claude, `CHAT_MODEL`); guards over any OpenAI-compatible endpoint (Groq by default: `gpt-oss-safeguard-20b`, Prompt Guard 2) |
+| Booking assistant | Groq's OpenAI-compatible chat API over `requests`, one key for everything: `gpt-oss-20b` as the model (`CHAT_MODEL`) and the policy guard, Prompt Guard 2 as the first filter. Any OpenAI-compatible server (e.g. Ollama) can stand in. |
 
 ## 12. Non-functional characteristics
 

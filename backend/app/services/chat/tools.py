@@ -8,10 +8,11 @@ returns a small JSON result. The model never sees SQL, tables or other customers
 import difflib
 import json
 import logging
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -267,15 +268,59 @@ def _booking_json(db: Session, booking: Booking, user: User, flags) -> dict[str,
 class ListBookingsIn(_In):
     scope: Literal["upcoming", "past", "cancelled", "waitlisted", "all"] = "upcoming"
     limit: int = Field(default=10, ge=1, le=MAX_BOOKINGS)
+    # Narrow it down to the booking the customer means, in each booking's own time zone.
+    on_date: date | None = None
+    around_time: time | None = None
+    query: str | None = Field(default=None, max_length=100)
+
+
+# Words that say nothing about which booking is meant.
+_VAGUE = {"my", "the", "a", "an", "with", "booking", "bookings", "appointment", "appointments", "session", "sessions", "meeting", "slot", "one"}
+
+
+def _names_match(query: str, names: list[str]) -> bool:
+    """Whether "yoga", "Sam", "personal trainng" or "the coach" names this booking."""
+    hay = " ".join(names).lower()
+    if query.lower().strip() in hay:
+        return True
+    words = [w for w in re.findall(r"\w+", query.lower()) if w not in _VAGUE and len(w) > 1]
+    if not words:
+        return True  # nothing specific to match on
+    tokens = re.findall(r"\w+", hay)
+    return all(any(w in t or difflib.SequenceMatcher(None, w, t).ratio() >= 0.8 for t in tokens) for w in words)
 
 
 def list_my_bookings(db: Session, user: User, ctx: ToolContext, args: ListBookingsIn) -> dict[str, Any]:
     now = utcnow()
-    stmt = scope_filter(select(Booking).where(Booking.user_id == user.id), args.scope, now)
-    bookings = db.scalars(stmt.limit(args.limit)).unique().all()
     rules = settings_service.get_rules(db)
-    flags = bookings_out(db, bookings, user, rules, now)
-    return {"bookings": [_booking_json(db, b, user, f) for b, f in zip(bookings, flags, strict=True)]}
+    stmt = scope_filter(select(Booking).where(Booking.user_id == user.id), args.scope, now)
+    filtering = args.on_date is not None or args.around_time is not None or bool(args.query)
+    bookings = db.scalars(stmt.limit(200 if filtering else args.limit)).unique().all()
+
+    def matches(b: Booking) -> bool:
+        start = b.start_datetime.astimezone(resource_timezone(b.primary_resource, rules))
+        if args.on_date is not None and start.date() != args.on_date:
+            return False
+        if args.around_time is not None:
+            wanted = args.around_time.hour * 60 + args.around_time.minute
+            if abs(start.hour * 60 + start.minute - wanted) > 60:
+                return False
+        names = [b.service.name, b.primary_resource.name, b.service.description or "", b.primary_resource.description or ""]
+        return not args.query or _names_match(args.query, names)
+
+    found = [b for b in bookings if matches(b)][: args.limit] if filtering else list(bookings)
+    flags = bookings_out(db, found, user, rules, now)
+    result: dict[str, Any] = {
+        "bookings": [_booking_json(db, b, user, f) for b, f in zip(found, flags, strict=True)],
+        "match_count": len(found),
+    }
+    if filtering and not found:
+        others = bookings[:5]
+        others_flags = bookings_out(db, others, user, rules, now)
+        result["other_upcoming" if args.scope == "upcoming" else "other_bookings"] = [
+            _booking_json(db, b, user, f) for b, f in zip(others, others_flags, strict=True)
+        ]
+    return result
 
 
 class GetBookingIn(_In):
@@ -456,10 +501,14 @@ class Tool:
     status: str  # shown to the customer while it runs
 
     def definition(self) -> dict[str, Any]:
+        """In the OpenAI function-calling format Groq uses."""
         return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": {"type": "object", "additionalProperties": False, **self.schema},
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {"type": "object", "additionalProperties": False, **self.schema},
+            },
         }
 
 
@@ -534,11 +583,16 @@ TOOLS = [
     ),
     Tool(
         "list_my_bookings",
-        "The signed-in customer's own bookings (upcoming by default), with whether each can still be cancelled or moved.",
+        "The signed-in customer's own bookings (upcoming by default), with whether each can still be cancelled or moved. "
+        "To find the booking the customer means, pass what they said: on_date, around_time (matches within an hour) and "
+        "query (service or person, typos allowed). match_count says how many match; with none, other_upcoming lists the rest.",
         {
             "properties": {
                 "scope": {"type": "string", "enum": ["upcoming", "past", "cancelled", "waitlisted", "all"]},
                 "limit": {"type": "integer", "minimum": 1, "maximum": MAX_BOOKINGS},
+                "on_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "around_time": {"type": "string", "description": "HH:MM, 24-hour"},
+                "query": {"type": "string", "description": "Service or person, e.g. 'yoga' or 'Sam'"},
             }
         },
         ListBookingsIn,

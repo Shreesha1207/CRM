@@ -7,19 +7,18 @@ is used or shown:
 
 1. rule checks: plain Python, nothing to talk round;
 2. Prompt Guard (input only): a small classifier for jailbreak wording;
-3. the policy guard: a model that reads our written policy and answers ALLOW or BLOCK.
+3. the policy guard: a model that reads our written policy and answers ALLOW or BLOCK
+   (gpt-oss-20b on Groq by default).
 
 Anything the guards cannot answer clearly counts as a block (fail closed).
 """
 
 import logging
 import re
-import time
 from dataclasses import dataclass
 
-import requests
-
 from app.core.config import Settings, get_settings
+from app.services.chat.groq import GroqClient, GroqError
 
 log = logging.getLogger("chat.guard")
 
@@ -193,41 +192,33 @@ class GuardError(Exception):
 
 
 class GuardClient:
-    """Talks to any OpenAI-compatible chat endpoint (Groq, Gemini, Ollama...)."""
+    """The guard checks, run on Groq (any OpenAI-compatible endpoint works)."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, client: GroqClient | None = None) -> None:
         self.settings = settings or get_settings()
-        self.session = requests.Session()
+        self.client = client or GroqClient(self.settings)
 
     def _complete(self, model: str, messages: list[dict], **extra) -> str:
-        url = self.settings.guard_base_url.rstrip("/") + "/chat/completions"
-        body = {"model": model, "messages": messages, "temperature": 0, **extra}
-        headers = {"Authorization": f"Bearer {self.settings.guard_api_key}"}
-        last_error: Exception | None = None
-        for attempt in range(2):  # one retry
-            try:
-                response = self.session.post(url, json=body, headers=headers, timeout=self.settings.guard_timeout_seconds)
-                if response.status_code >= 500 or response.status_code == 429:
-                    raise GuardError(f"guard returned {response.status_code}")
-                response.raise_for_status()
-                content = response.json()["choices"][0]["message"].get("content")
-                return content if isinstance(content, str) else ""
-            except (requests.RequestException, GuardError, KeyError, IndexError, ValueError) as exc:
-                last_error = exc
-                if attempt == 0:
-                    time.sleep(0.3)
-        raise GuardError(str(last_error))
+        try:
+            data = self.client.chat(model, messages, timeout=self.settings.guard_timeout_seconds, temperature=0, **extra)
+            content = data["choices"][0]["message"].get("content")
+        except (GroqError, KeyError, IndexError, TypeError) as exc:
+            raise GuardError(str(exc)) from exc
+        return content if isinstance(content, str) else ""
 
     def injection_score(self, text: str) -> float | None:
         content = self._complete(self.settings.guard_injection_model, [{"role": "user", "content": text}])
         return parse_injection_score(content)
 
     def policy(self, prompt: str) -> bool | None:
+        extra = {"max_completion_tokens": 1024}
+        if self.settings.guard_reasoning_effort:
+            extra["reasoning_effort"] = self.settings.guard_reasoning_effort
         content = self._complete(
             self.settings.guard_topic_model,
+            # The fixed policy first, so its tokens are cached from one check to the next.
             [{"role": "system", "content": POLICY}, {"role": "user", "content": prompt}],
-            reasoning_effort="low",
-            max_tokens=512,
+            **extra,
         )
         return parse_policy_answer(content)
 
@@ -272,6 +263,6 @@ class GuardClient:
 
 def get_guard() -> GuardClient | None:
     settings = get_settings()
-    if not (settings.guard_api_key and settings.guard_topic_model):
+    if not settings.chat_configured:
         return None
     return GuardClient(settings)

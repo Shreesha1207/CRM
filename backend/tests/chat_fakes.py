@@ -17,27 +17,38 @@ _ids = itertools.count(1)
 
 
 def say(text: str) -> ModelTurn:
-    """A final answer (with the empty thinking block current models return first)."""
+    """A final answer."""
+    return ModelTurn(message={"role": "assistant", "content": text}, stop_reason="end_turn", input_tokens=100, output_tokens=20)
+
+
+def call_raw(*calls: tuple[str, str]) -> ModelTurn:
+    """Tool calls with their arguments exactly as the model wrote them (JSON text)."""
+    tool_calls = [
+        {"id": f"call_{next(_ids)}", "type": "function", "function": {"name": name, "arguments": arguments}}
+        for name, arguments in calls
+    ]
     return ModelTurn(
-        content=[{"type": "thinking", "thinking": "", "signature": "sig"}, {"type": "text", "text": text}],
-        stop_reason="end_turn",
+        message={"role": "assistant", "content": None, "tool_calls": tool_calls},
+        stop_reason="tool_use",
         input_tokens=100,
         output_tokens=20,
+        tool_calls=[{"id": c["id"], "name": c["function"]["name"], "arguments": c["function"]["arguments"]} for c in tool_calls],
     )
 
 
 def call(name: str, input: dict[str, Any] | None = None, *more: tuple[str, dict[str, Any]]) -> ModelTurn:
     """One or more tool calls in a single response."""
-    uses = [
-        {"type": "tool_use", "id": f"toolu_{next(_ids)}", "name": n, "input": i or {}}
-        for n, i in [(name, input), *more]
-    ]
-    return ModelTurn(content=uses, stop_reason="tool_use", input_tokens=100, output_tokens=20, tool_uses=uses)
+    return call_raw(*[(n, json.dumps(i or {})) for n, i in [(name, input), *more]])
 
 
 def last_tool_results(messages: list[dict]) -> list[dict]:
-    """The JSON results of the tool calls answered in the last message."""
-    return [json.loads(block["content"]) for block in messages[-1]["content"] if block.get("type") == "tool_result"]
+    """The JSON results of the tool calls answered just before this request."""
+    results = []
+    for message in reversed(messages):
+        if message["role"] != "tool":
+            break
+        results.insert(0, json.loads(message["content"]))
+    return results
 
 
 Step = ModelTurn | Callable[[list[dict]], ModelTurn]
@@ -72,6 +83,36 @@ class FakeGuard(GuardClient):
         if self.down:
             raise GuardError("guard is down")
         return {"injection": self.injection, "message": self.policy_answer, "reply": self.reply_policy}[kind]
+
+
+class FakeResponse:
+    """What requests returns, for tests of the Groq client."""
+
+    def __init__(self, status: int = 200, body: dict | None = None, headers: dict | None = None) -> None:
+        self.status_code, self._body, self.headers = status, body or {}, headers or {}
+        self.ok = status < 400
+        self.text = json.dumps(self._body)
+
+    def json(self) -> dict:
+        return self._body
+
+
+def completion(content: str | None = None, tool_calls: list | None = None, finish: str = "stop", **usage) -> FakeResponse:
+    message = {"role": "assistant", "content": content, **({"tool_calls": tool_calls} if tool_calls else {})}
+    return FakeResponse(200, {"choices": [{"message": message, "finish_reason": finish}], "usage": usage})
+
+
+def fake_http(monkeypatch, groq_client, answers: list[FakeResponse]) -> list[tuple[str, dict, dict]]:
+    """Answer the client's requests from `answers`, in order; returns what was sent."""
+    sent: list[tuple[str, dict, dict]] = []
+
+    def post(url, json, headers, timeout):
+        sent.append((url, json, headers))
+        return answers.pop(0)
+
+    monkeypatch.setattr(groq_client.session, "post", post)
+    monkeypatch.setattr("app.services.chat.groq.time.sleep", lambda _: None)
+    return sent
 
 
 def events(response) -> list[tuple[str, dict]]:

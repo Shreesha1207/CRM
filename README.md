@@ -110,28 +110,24 @@ Customers get an **Assistant** link: a chat that books from a sentence, behind a
 
 It also answers questions about the business from text an admin writes under **Admin → Settings → Booking assistant FAQ**.
 
-**Setup.** Put two keys in `.env`; without them the chat says it isn't set up yet and the rest of the app is unaffected.
+**Setup.** One key runs everything: put a Groq API key (free, from [console.groq.com](https://console.groq.com)) in `.env`. Without it the chat says it isn't set up yet, and the rest of the app is unaffected.
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...          # console.anthropic.com
-GUARD_API_KEY=gsk_...                 # console.groq.com (or another provider, below)
+GROQ_API_KEY=gsk_...
 ```
 
-| `CHAT_MODEL` | Price per million tokens (input / output) | |
-| --- | --- | --- |
-| `claude-opus-5-5` (default) | 4 / 20 (cached input 0.20) | Most capable; roughly 0.05–0.25 per conversation |
-| `claude-sonnet-5-5` | 2 / 10 (cached input 0.20) | Half the price, strong at tool use |
-| `claude-haiku-5-5` | 0.10 / 0.50 | Cheapest and fastest, weaker on multi-step requests |
+| Role | Setting | Default | |
+| --- | --- | --- | --- |
+| The model that talks to customers and calls the tools | `CHAT_MODEL` | `openai/gpt-oss-20b` | Fast and light. `openai/gpt-oss-120b` is stronger at multi-step requests ("move my Tuesday session to the next free afternoon") but uses the free tokens faster. |
+| How hard it thinks | `CHAT_REASONING_EFFORT` | `low` | `medium` or `high` are more accurate and use more tokens; empty leaves it out (for models without the option). |
+| The policy guard (ALLOW / BLOCK) | `GUARD_TOPIC_MODEL` | `openai/gpt-oss-20b` | |
+| The jailbreak pre-filter | `GUARD_INJECTION_MODEL` | `meta-llama/llama-prompt-guard-2-86m` | Leave empty to switch it off. |
 
-The guards talk to any OpenAI-compatible endpoint, so changing provider is three settings:
+**Groq's free tier** (as of October 2026; your account's Limits page has the exact numbers) gives each model a few thousand tokens a minute and a daily token allowance, roughly 30 requests a minute. Limits apply per model and per organisation, so extra keys don't add capacity. The model and the policy guard share gpt-oss-20b's limits. A customer message takes about 2–3 model calls and 2 guard checks, so the free tier carries **roughly 30–100 customer messages a day for the whole site** and 1–2 a minute: enough to develop and demo. To keep within it, the prompt and tools come first in every request (Groq doesn't count cached prompt tokens against the limits), only the last `CHAT_HISTORY_TURNS` (8) customer turns are sent, and tool results are kept small. When a limit is hit, the customer is told the assistant is busy (or has reached today's limit) and nothing is held; it isn't counted against them. For real traffic, Groq's paid Developer tier (add a card) raises the limits about 10x; nothing else changes.
 
-| Guard | `GUARD_BASE_URL` | `GUARD_TOPIC_MODEL` |
-| --- | --- | --- |
-| Groq (default) | `https://api.groq.com/openai/v1` | `openai/gpt-oss-safeguard-20b` |
-| Self-hosted with Ollama (nothing leaves your servers) | `http://ollama:11434/v1` | `gpt-oss-safeguard:20b` (and `GUARD_INJECTION_MODEL=` empty) |
-| Gemini (use a paid key) | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.5-flash-lite` |
+`GROQ_BASE_URL` can point at any OpenAI-compatible server instead, e.g. a self-hosted Ollama (`http://ollama:11434/v1`, `CHAT_MODEL=gpt-oss:20b`, `GUARD_TOPIC_MODEL=gpt-oss:20b`, `GUARD_INJECTION_MODEL=` empty), so nothing leaves your servers.
 
-`GUARD_INJECTION_MODEL` (default `meta-llama/llama-prompt-guard-2-86m` on Groq) is a cheap first filter for jailbreak wording; leave it empty to switch it off. The guards cost about 0.0001–0.0002 per message.
+**How it finds the booking you mean.** Every booking has a unique id, but customers never need it. When someone says "move my Thursday 9 PM yoga to Tuesday at 8", the assistant asks the server for that customer's bookings matching Thursday, around 9 PM and "yoga" (typos allowed, in each booking's own time zone). One match is used; several make it ask which one, with buttons; none make it say so and show the bookings they do have. The move is then a card showing that booking, with the old time struck through, and nothing changes until Confirm.
 
 **How it is kept on topic and safe.** The model can write code or anything else, and no instruction in a prompt can take that away, so the protection sits outside it:
 
@@ -143,7 +139,7 @@ The guards talk to any OpenAI-compatible endpoint, so changing provider is three
 
 **The paywall is a demo.** **Pay** just activates a `chat_subscriptions` row; nothing is charged. To take real payments, send **Pay** to a payment provider's checkout (e.g. Stripe Checkout) and set the row from its webhook (`status=ACTIVE` on payment, `CANCELLED` when the subscription ends).
 
-**Checking it with the real model.** The unit tests use stand-ins and never touch the network. To see how the real model and guards behave on realistic and hostile conversations ("reverse a linked list in Python", role-play, prompts hidden in base64, two people with the same name, another language...), run the eval. It costs a little money, runs on a throwaway `booking_eval` database, and reports leaks (must be 0), wrongly blocked booking messages, timings and token cost:
+**Checking it with the real model.** The unit tests use stand-ins and never touch the network. To see how the real model and guards behave on realistic and hostile conversations ("reverse a linked list in Python", role-play, prompts hidden in base64, two people with the same name, another language...), run the eval. It uses part of the day's free Groq tokens (it pauses between cases to stay inside the per-minute limits; `--pause` sets how long), runs on a throwaway `booking_eval` database, and reports leaks (must be 0), wrongly blocked booking messages, how well it found existing bookings, timings and tokens used:
 
 ```bash
 createdb booking_eval
@@ -153,7 +149,7 @@ cd backend && python -m app.chat_eval
 ### Tests
 
 ```bash
-cd backend && pytest            # 232 tests, against a real PostgreSQL database
+cd backend && pytest            # 242 tests, against a real PostgreSQL database
 cd frontend && npm test         # unit tests for prices, booking lengths and the chat's event stream
 cd frontend && npm run build    # type-check + production build
 ```
@@ -326,7 +322,7 @@ The booking engine publishes domain events (`booking.created`, `.cancelled`, `.r
 
 ## Configuration
 
-**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`, and for the booking assistant `ANTHROPIC_API_KEY`, `CHAT_MODEL` and `GUARD_*`. `docker compose` takes `DATABASE_URL`, `JWT_SECRET`, `EMAIL_BACKEND`, the `SMTP_*` values and the assistant's settings from `.env` in the repository root (see `.env.example`).
+**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`, and for the booking assistant `GROQ_API_KEY`, `CHAT_MODEL` and `GUARD_*`. `docker compose` takes `DATABASE_URL`, `JWT_SECRET`, `EMAIL_BACKEND`, the `SMTP_*` values and the assistant's settings (`GROQ_API_KEY`, `CHAT_MODEL`, `GUARD_*`) from `.env` in the repository root (see `.env.example`).
 
 **Booking rules** live in the `settings` table. Admins edit them live under Admin → Settings:
 

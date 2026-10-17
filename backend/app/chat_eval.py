@@ -1,17 +1,20 @@
 """Runs the booking assistant against real conversations and grades what it did.
 
-    python -m app.chat_eval            # asks before spending anything
-    python -m app.chat_eval --yes --only book-full-sentence
+    python -m app.chat_eval            # asks before starting
+    python -m app.chat_eval --yes --only book-full-sentence --pause 30
 
-It uses the real model and guards (ANTHROPIC_API_KEY, GUARD_API_KEY), so each
-run costs a little money. It runs on a throwaway database, EVAL_DATABASE_URL
+It uses the real model and guards on Groq (GROQ_API_KEY), so each run uses up part
+of the day's free tokens. On the free tier it waits --pause seconds between cases
+(default 20) to stay inside the per-minute limits; a case that still hits a limit is
+reported as RATE LIMITED, not as a failure. It runs on a throwaway database, EVAL_DATABASE_URL
 (default: the local `booking_eval`), which it wipes and fills with the demo
 catalogue. The database name must contain "eval" or "test" so a real database
 can never be wiped by mistake.
 
 Every case is graded by rules on what the assistant did: did it hold the right
-booking, ask a question, or refuse; and no reply shown may contain code. Cases
-are in evals/chat_cases.json; results are saved under evals/results/.
+booking or offer the right change, ask a question, or refuse; and no reply shown
+may contain code. Cases can start from existing bookings ("setup"). They are in
+evals/chat_cases.json; results are saved under evals/results/.
 """
 
 import argparse
@@ -19,7 +22,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 EVAL_URL = os.environ.get("EVAL_DATABASE_URL", "postgresql+psycopg://booking:booking@localhost:5432/booking_eval")
@@ -36,8 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CASES = ROOT / "evals" / "chat_cases.json"
 RESULTS = ROOT / "evals" / "results"
 
-# $ per million tokens (input, output) for the main model; see the README.
-PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (0.10, 0.50)}
+WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def _fresh_database() -> None:
@@ -77,11 +79,14 @@ class _TimedGuard:
         guard._complete = timed
 
 
-def _grade(expect: dict, outcome: dict) -> tuple[bool, str]:
+def _grade(expect: dict, outcome: dict) -> tuple[bool | None, str]:
+    """(True, why) passed, (False, why) failed, (None, why) couldn't tell: rate limited."""
     holds, replies = outcome["holds"], outcome["replies"]
     last = replies[-1] if replies else {"text": "", "choices": []}
     if any(r["code_shown"] for r in replies):
         return False, "LEAK: a reply shown to the customer contains code"
+    if "rate limited" in outcome["blocked"]:
+        return None, "RATE LIMITED: rerun it with --only, or a longer --pause"
     if "held" in expect:
         want = expect["held"]
         if outcome["blocked"]:
@@ -108,6 +113,24 @@ def _grade(expect: dict, outcome: dict) -> tuple[bool, str]:
         if outcome["blocked"]:
             return False, f"wrongly blocked ({outcome['blocked']})"
         return bool(last["text"]) and not holds, "answered"
+    if "proposes" in expect:
+        want = expect["proposes"]
+        if outcome["blocked"]:
+            return False, f"wrongly blocked ({outcome['blocked']})"
+        if holds or len(outcome["proposals"]) != 1:
+            return False, f"expected one {want['kind']} card, got {len(outcome['proposals'])} (and {len(holds)} holds)"
+        got = outcome["proposals"][0]
+        problems = [] if got["kind"] == want["kind"] else [f"kind: wanted {want['kind']}, got {got['kind']}"]
+        for part in ("booking", "to"):
+            for key, value in want.get(part, {}).items():
+                if (got.get(part) or {}).get(key) != value:
+                    problems.append(f"{part}.{key}: wanted {value!r}, got {(got.get(part) or {}).get(key)!r}")
+        return (not problems), "; ".join(problems) or "offered the right change"
+    if expect.get("no_change"):
+        if outcome["blocked"]:
+            return False, f"wrongly blocked ({outcome['blocked']})"
+        changed = holds or outcome["proposals"]
+        return (not changed), "explained, nothing offered" if not changed else "offered a change anyway"
     if expect.get("refused"):
         if holds or outcome["proposals"]:
             return False, "made a booking or offered a change"
@@ -116,9 +139,39 @@ def _grade(expect: dict, outcome: dict) -> tuple[bool, str]:
     return False, "unknown expectation"
 
 
+def _next(weekday: str) -> date:
+    """The next such weekday, at least a day ahead."""
+    today = date.today()
+    return today + timedelta(days=(WEEKDAYS.index(weekday) - today.weekday() - 1) % 7 + 1)
+
+
+def _setup(db, user, items: list[dict]) -> list:
+    """Bookings the customer already has before the case starts."""
+    from app.models import Resource, Service
+    from app.services.booking_engine import BookingEngine, BookingRequest
+
+    made = []
+    for item in items:
+        service = db.scalar(select(Service).where(Service.name == item["service"]))
+        resource = db.scalar(select(Resource).where(Resource.name == item["resource"]))
+        hour, minute = map(int, item["time"].split(":"))
+        start = datetime.combine(_next(item["weekday"]), datetime.min.time()).replace(hour=hour, minute=minute)
+        booking = BookingEngine(db, user).create(
+            BookingRequest(user_id=user.id, service_id=service.id, resource_id=resource.id, start=start)
+        )
+        made.append(booking.id)
+    return made
+
+
+def _when(part: dict | None) -> dict | None:
+    if not part:
+        return None
+    return {"weekday": part["date"][:3], "time": part["time"].split(" – ")[0]}
+
+
 def _run_case(case: dict, model, guard) -> dict:
     from app.models import Booking, ChatConversation, ChatMessage, ChatProposal, ChatSubscription, User
-    from app.models.enums import ChatProposalKind, ChatProposalStatus, ChatSubscriptionStatus
+    from app.models.enums import BookingStatus, ChatProposalKind, ChatProposalStatus, ChatSubscriptionStatus
     from app.services.booking_engine import BookingEngine
     from app.services.chat import agent, proposals
     from app.services.chat.guard import looks_like_code
@@ -131,6 +184,7 @@ def _run_case(case: dict, model, guard) -> dict:
         db.add(conversation)
         db.commit()
         user_id, conversation_id = user.id, conversation.id
+        existing = _setup(db, user, case.get("setup", []))
 
     replies, seconds = [], []
     for message in case["messages"]:
@@ -166,6 +220,25 @@ def _run_case(case: dict, model, guard) -> dict:
             )
             if card.status == ChatProposalStatus.PENDING:  # free the time for the next case
                 BookingEngine(db, user).release_chat_hold(card.booking_id, outcome=ChatProposalStatus.DECLINED, reason="eval")
+        offered = []
+        for card in cards:
+            if card.kind == ChatProposalKind.HOLD:
+                continue
+            shown = proposals.card(db, card, user)
+            existing_booking = shown.get("was") if card.kind == ChatProposalKind.RESCHEDULE else shown.get("when")
+            offered.append(
+                {
+                    "kind": card.kind.value,
+                    "booking": {"service": shown.get("service"), **(_when(existing_booking) or {})},
+                    "to": _when(shown.get("when")) if card.kind == ChatProposalKind.RESCHEDULE else None,
+                }
+            )
+            if card.status == ChatProposalStatus.PENDING:
+                card.status = ChatProposalStatus.EXPIRED
+        for booking_id in existing:  # free the time for the next case
+            booking = db.get(Booking, booking_id)
+            if booking.status in (BookingStatus.CONFIRMED, BookingStatus.PENDING):
+                BookingEngine(db, user).cancel(booking_id, reason="eval")
         tokens = (sum(r.input_tokens for r in rows), sum(r.output_tokens for r in rows))
         # Unblock the account between cases: strikes are tested in the unit tests.
         sub = db.scalar(select(ChatSubscription).where(ChatSubscription.user_id == user_id))
@@ -174,7 +247,7 @@ def _run_case(case: dict, model, guard) -> dict:
     return {
         "replies": replies,
         "holds": holds,
-        "proposals": [c.kind.value for c in cards if c.kind != ChatProposalKind.HOLD],
+        "proposals": offered,
         "blocked": ", ".join(blocked),
         "seconds": seconds,
         "tokens": tokens,
@@ -185,51 +258,59 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--yes", action="store_true", help="run without asking first")
     parser.add_argument("--only", action="append", help="run only this case id (repeatable)")
+    parser.add_argument("--pause", type=float, default=20.0, help="seconds between cases, to stay inside free-tier limits")
     args = parser.parse_args()
 
     settings = get_settings()
     if not settings.chat_configured:
-        sys.exit("Set ANTHROPIC_API_KEY and GUARD_API_KEY first: the eval talks to the real model and guards.")
+        sys.exit("Set GROQ_API_KEY first: the eval talks to the real model and guards.")
     cases = json.loads(CASES.read_text())["cases"]
     if args.only:
         cases = [c for c in cases if c["id"] in args.only]
     if not args.yes:
-        answer = input(f"Run {len(cases)} cases against {settings.chat_model} and {settings.guard_topic_model}? This costs a little money. [y/N] ")
+        answer = input(
+            f"Run {len(cases)} cases against {settings.chat_model} (guard: {settings.guard_topic_model})? "
+            "This uses part of today's Groq tokens. [y/N] "
+        )
         if answer.strip().lower() != "y":
             return
 
     from app.services.chat.guard import GuardClient
-    from app.services.chat.llm import AnthropicChatModel
+    from app.services.chat.llm import GroqChatModel
 
     _fresh_database()
-    model, guard = AnthropicChatModel(settings), GuardClient(settings)
+    model, guard = GroqChatModel(settings), GuardClient(settings)
     timed = _TimedGuard(guard)
     results = []
-    for case in cases:
+    for i, case in enumerate(cases):
+        if i and args.pause:
+            time.sleep(args.pause)
         outcome = _run_case(case, model, guard)
         passed, why = _grade(case["expect"], outcome)
         results.append({"id": case["id"], "category": case["category"], "passed": passed, "why": why, **outcome})
-        mark = "PASS" if passed else "FAIL"
+        mark = {True: "PASS", False: "FAIL", None: "----"}[passed]
         print(f"{mark}  {case['category']:<16} {case['id']:<22} {why}  ({'+'.join(map(str, outcome['seconds']))} s)")
 
     tokens_in = sum(r["tokens"][0] for r in results)
     tokens_out = sum(r["tokens"][1] for r in results)
-    price = PRICES.get(settings.chat_model)
-    cost = f"${(tokens_in * price[0] + tokens_out * price[1]) / 1e6:.2f}" if price else "unknown for this model"
+    limited = [r["id"] for r in results if r["passed"] is None]
     leaks = [r["id"] for r in results if r["why"].startswith("LEAK")]
     wrongly_blocked = [r for r in results if r["why"].startswith("wrongly blocked")]
     turns = [s for r in results for s in r["seconds"]]
     print()
-    for category in ("booking", "misunderstanding", "off-topic"):
+    for category in ("booking", "existing-booking", "misunderstanding", "off-topic"):
         group = [r for r in results if r["category"] == category]
         if group:
-            print(f"{category:<16} {sum(r['passed'] for r in group)}/{len(group)} passed")
+            graded = [r for r in group if r["passed"] is not None]
+            print(f"{category:<16} {sum(r['passed'] for r in graded)}/{len(graded)} passed")
     print(f"leaks (code shown to a customer): {len(leaks)} {leaks or ''}")
     print(f"booking messages wrongly blocked: {len(wrongly_blocked)} " + ", ".join(f"{r['id']} by {r['blocked']}" for r in wrongly_blocked))
     if turns:
         print(f"time per message: median {sorted(turns)[len(turns) // 2]} s, slowest {max(turns)} s")
-    print(f"main model: {tokens_in} input + {tokens_out} output tokens, about {cost} (cache reads not counted)")
-    print(f"guards: {timed.calls} calls, {timed.seconds:.1f} s in total (see your guard provider's prices)")
+    if limited:
+        print(f"rate limited, not graded: {len(limited)} {limited}")
+    print(f"model: {tokens_in} input + {tokens_out} output tokens (cached prompt tokens not counted), against Groq's daily free limit for {settings.chat_model}")
+    print(f"guards: {timed.calls} calls, {timed.seconds:.1f} s in total")
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     path = RESULTS / f"{datetime.now():%Y%m%d-%H%M%S}.json"

@@ -285,7 +285,7 @@ Access to the booking assistant. The paywall is a demo: "Pay" activates the row;
 | `created_at`, `updated_at` | timestamptz | |
 
 ### `chat_messages`
-One message of a conversation. `content` is exactly what was sent to, or came back from, the model (thinking and tool blocks included) and is replayed unchanged on later turns, so the history is only ever appended to. `display` is what the customer sees, set only on rows that are shown.
+One message of a conversation. `content` is the message exactly as it was sent to, or came back from, the model, in the OpenAI chat format (`{role, content}`, plus `tool_calls` on the model's messages and `tool_call_id` on tool results); the most recent turns are sent again on later turns. `display` is what the customer sees, set only on rows that are shown.
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | uuid PK | |
@@ -293,8 +293,8 @@ One message of a conversation. `content` is exactly what was sent to, or came ba
 | `user_id` | uuid FK → `users.id`, cascade | indexed; for per-customer limits |
 | `turn_id` | uuid | indexed; groups the rows of one customer message and its reply |
 | `seq` | int | order within the conversation; unique with `conversation_id` |
-| `role` | enum `ChatRole` | `user`, `assistant`, `system` (the per-turn note), `notice` (shown, never sent to the model) |
-| `content` | jsonb | the model's message content |
+| `role` | enum `ChatRole` | `user`, `assistant`, `system` (the per-turn note), `tool` (a tool's result), `notice` (shown, never sent to the model) |
+| `content` | jsonb | the whole message, in the OpenAI chat format |
 | `display` | jsonb, nullable | `{text, choices, proposal_ids}` for shown rows |
 | `input_tokens`, `output_tokens` | int | on the model's replies |
 | `feedback` | int, nullable | +1 / −1 from the customer (check constraint) |
@@ -335,7 +335,7 @@ A booking the assistant holds for the customer (`HOLD`), or a change it offers (
 | `NotificationType` | `BOOKING_CREATED`, `BOOKING_CONFIRMED`, `BOOKING_RESCHEDULED`, `BOOKING_CANCELLED`, `BOOKING_REMINDER`, `WAITLIST_PROMOTION`, `RESOURCE_CHANGED`, `BOOKING_CONFLICTED`, `PASSWORD_RESET` |
 | `RecurrenceFrequency` | `DAILY`, `WEEKLY`, `MONTHLY` |
 | `ChatSubscriptionStatus` | `ACTIVE`, `CANCELLED` |
-| `ChatRole` | `user`, `assistant`, `system`, `notice` |
+| `ChatRole` | `user`, `assistant`, `system`, `tool`, `notice` |
 | `ChatProposalKind` | `HOLD`, `RESCHEDULE`, `CANCEL` |
 | `ChatProposalStatus` | `PENDING`, `CONFIRMED`, `DECLINED`, `EXPIRED`, `FAILED` |
 
