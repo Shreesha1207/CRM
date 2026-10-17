@@ -496,12 +496,42 @@ def test_a_rate_limited_turn_says_busy_releases_its_hold_and_is_not_a_strike(db,
     assert reply["text"].startswith("The assistant has reached today's limit")
 
 
-def test_a_tool_call_the_server_could_not_read_is_asked_for_again_once(gym, chat) -> None:
+def test_a_tool_call_the_server_could_not_read_is_asked_for_again_with_a_hint(gym, chat, caplog) -> None:
+    from app.services.chat.agent import TOOL_CALL_HINT
     from app.services.chat.groq import ToolCallFailed
 
-    assert reply_of(chat.send("Hi", _raise(ToolCallFailed("bad")), say("Hello!")))["text"] == "Hello!"
-    reply = reply_of(chat.send("Hi", _raise(ToolCallFailed("bad")), _raise(ToolCallFailed("bad"))))
+    bad = ToolCallFailed("Failed to call a function", "list_services<|channel|>{oops")
+    assert reply_of(chat.send("Hi", _raise(bad), _raise(bad), say("Hello!")))["text"] == "Hello!"
+    first, second, third = chat.model.requests
+    assert TOOL_CALL_HINT not in str(first["messages"])
+    assert second["messages"][-1] == {"role": "system", "content": TOOL_CALL_HINT}
+    assert third["messages"][-1] == {"role": "system", "content": TOOL_CALL_HINT}
+    assert "list_services<|channel|>{oops" in caplog.text  # what the model wrote is logged
+    assert TOOL_CALL_HINT not in str(chat.transcript())  # the hint is never stored
+
+    reply = reply_of(chat.send("Hi", _raise(bad), _raise(bad), _raise(bad)))
     assert "couldn't finish" in reply["text"]
+
+
+def test_an_unfinished_turn_logs_why(gym, chat, caplog) -> None:
+    looping = [call("get_booking", {"booking_id": "not-a-uuid"}) for _ in range(8)]
+    reply = reply_of(chat.send("Hi", *looping))
+    assert "couldn't finish" in reply["text"]
+    assert "Chat turn unfinished" in caplog.text and "get_booking" in caplog.text and "INVALID_INPUT" in caplog.text
+
+
+def test_services_on_a_date_say_which_have_free_times(gym, chat) -> None:
+    service, _ = gym
+    reply_of(chat.send("What can I book on Tuesday?", call("list_services", {"on_date": TUESDAY.isoformat()}), say("Strength coaching has times.")))
+    [result] = last_tool_results(chat.model.requests[-1]["messages"])
+    [entry] = result["services"]
+    assert entry["id"] == str(service.id)
+    free = entry["free_times_on_date"]
+    assert free["date"] == TUESDAY.isoformat() and free["count"] > 0 and free["first"][0] == "9:00 AM"
+
+    reply_of(chat.send("What do you offer?", call("list_services", {}), say("Strength coaching.")))
+    [plain] = last_tool_results(chat.model.requests[-1]["messages"])
+    assert "free_times_on_date" not in plain["services"][0]
 
 
 def test_only_the_last_turns_are_sent_and_never_cut_inside_a_tool_call(gym, chat, settings) -> None:

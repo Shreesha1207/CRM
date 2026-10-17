@@ -49,6 +49,12 @@ def fixed_reply(db: Session) -> str:
 
 
 UNAVAILABLE = "The assistant is unavailable right now. Please try again in a moment, or use the booking page."
+# Added to the request (not stored) when the model's last tool call could not be read.
+TOOL_CALL_HINT = (
+    "Your last tool call could not be read. Call only the tools you were given, with arguments as valid JSON "
+    "that match their schema (ids are UUIDs from earlier tool results, dates are YYYY-MM-DD), or answer in plain text."
+)
+MAX_TOOL_CALL_RETRIES = 2
 TOO_COMPLEX = "Sorry, I couldn't finish that. Could you try again, one step at a time? You can also use the booking page."
 REFUSED = "Sorry, I can't help with that. I can find a time, book, move or cancel an appointment, or answer questions about our services."
 BUSY = "The assistant is busy right now. Please try again in a minute, or use the booking page."
@@ -277,21 +283,28 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
     definitions = tools.definitions()
     ctx = tools.ToolContext(user_id=user.id, conversation_id=conversation.id, turn_id=turn.turn_id)
     final = None
-    retried = False
+    unreadable = 0
+    last_stop = ""
+    tool_errors: list[str] = []
     for _round in range(settings.chat_max_tool_rounds):
         emit("status", {"label": "Thinking…"})
+        messages = _history(db, conversation.id)
+        if unreadable:
+            messages.append({"role": "system", "content": TOOL_CALL_HINT})
         try:
-            result = model.run_turn(system=system, tools=definitions, messages=_history(db, conversation.id))
-        except ToolCallFailed:
-            # The model wrote a tool call the server couldn't read: ask once more.
-            if retried:
+            result = model.run_turn(system=system, tools=definitions, messages=messages)
+        except ToolCallFailed as exc:
+            # The model wrote a tool call the server couldn't read: ask again, with a hint.
+            unreadable += 1
+            log.warning("Model tool call rejected (%s of %s): %s | %s", unreadable, MAX_TOOL_CALL_RETRIES + 1, exc, exc.failed_generation)
+            if unreadable > MAX_TOOL_CALL_RETRIES:
                 _refuse(turn, "tool call failed", TOO_COMPLEX, emit, strike=False)
                 return
-            retried = True
             continue
         except RateLimited as exc:
             _refuse(turn, "rate limited", BUSY if exc.retry_after <= 120 else OUT_FOR_TODAY, emit, strike=False)
             return
+        last_stop = result.stop_reason
         row = turn.add(ChatRole.ASSISTANT, result.message, input_tokens=result.input_tokens, output_tokens=result.output_tokens)
         conversation.input_tokens += result.input_tokens
         conversation.output_tokens += result.output_tokens
@@ -308,8 +321,11 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
                     args = json.loads(call["arguments"] or "{}")
                 except ValueError:
                     content = json.dumps({"error": "INVALID_JSON", "message": "The tool arguments were not valid JSON."})
+                    failed = True
                 else:
-                    content, _ = tools.run(call["name"], args, ctx)
+                    content, failed = tools.run(call["name"], args, ctx)
+                if failed:
+                    tool_errors.append(f"{call['name']}: {content[:200]}")
                 turn.add(ChatRole.TOOL, {"role": "tool", "tool_call_id": call["id"], "content": content})
             continue
         if result.stop_reason == "end_turn":
@@ -318,6 +334,7 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
         log.warning("Chat turn stopped with %s", result.stop_reason)
         break
     if final is None:
+        log.warning("Chat turn unfinished: last stop %r, tool errors %s", last_stop, tool_errors)
         _refuse(turn, "unfinished", TOO_COMPLEX, emit, strike=False)
         return
 

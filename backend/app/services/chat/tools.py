@@ -83,6 +83,8 @@ def _active_links(service: Service) -> list:
 class ListServicesIn(_In):
     query: str | None = Field(default=None, max_length=100)
     location_id: uuid.UUID | None = None
+    # With a date, every service also says which start times are free that day.
+    on_date: date | None = None
 
 
 def list_services(db: Session, user: User, ctx: ToolContext, args: ListServicesIn) -> dict[str, Any]:
@@ -90,19 +92,31 @@ def list_services(db: Session, user: User, ctx: ToolContext, args: ListServicesI
     out = []
     for s in services[:20]:
         flexible = s.booking_type == BookingType.INDIVIDUAL and s.max_duration_minutes
-        out.append(
-            {
-                "id": str(s.id),
-                "name": s.name,
-                "description": (s.description or "")[:160] or None,
-                "length_minutes": s.duration_minutes,
-                # The customer may book longer, in multiples of length_minutes up to this.
-                "max_length_minutes": s.max_duration_minutes if flexible else None,
-                "rate_per_hour": _money(s.price),
-                "group_session": s.booking_type == BookingType.CAPACITY,
-                "resources": [{"id": str(l.resource.id), "name": l.resource.name} for l in _active_links(s)][:10],
-            }
-        )
+        entry = {
+            "id": str(s.id),
+            "name": s.name,
+            "description": (s.description or "")[:160] or None,
+            "length_minutes": s.duration_minutes,
+            # The customer may book longer, in multiples of length_minutes up to this.
+            "max_length_minutes": s.max_duration_minutes if flexible else None,
+            "rate_per_hour": _money(s.price),
+            "group_session": s.booking_type == BookingType.CAPACITY,
+            "resources": [{"id": str(l.resource.id), "name": l.resource.name} for l in _active_links(s)][:10],
+        }
+        if args.on_date is not None:
+            free = catalog.availability(
+                db,
+                service_id=s.id,
+                date=args.on_date,
+                moving=None,
+                resource_id=None,
+                location_id=args.location_id,
+                quantity=1,
+                duration_minutes=None,
+            )
+            times = [slot for slot in free.slots if slot.available]
+            entry["free_times_on_date"] = {"date": args.on_date.isoformat(), "count": len(times), "first": [_clock(t.start) for t in times[:6]]}
+        out.append(entry)
     result: dict[str, Any] = {"services": out}
     if args.query and not out:
         names = [s.name for s in catalog.list_services(db, q=None, resource_id=None, location_id=None, max_price=None)]
@@ -519,8 +533,15 @@ TOOLS = [
     Tool(
         "list_services",
         "List the services the business offers, with their length, hourly rate and who or what provides them. "
-        "Use query to search by name. When nothing matches, closest_names lists similar names.",
-        {"properties": {"query": {"type": "string"}, "location_id": _UUID}},
+        "Use query to search by name. When nothing matches, closest_names lists similar names. "
+        "Pass on_date to see which services have free times that day (free_times_on_date).",
+        {
+            "properties": {
+                "query": {"type": "string"},
+                "location_id": _UUID,
+                "on_date": {"type": "string", "description": "YYYY-MM-DD"},
+            }
+        },
         ListServicesIn,
         list_services,
         "Looking up services…",

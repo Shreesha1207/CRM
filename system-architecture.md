@@ -200,7 +200,7 @@ Each tool call takes the same path:
 
 | Operation | Tools | What happens |
 | --- | --- | --- |
-| Read: catalogue | `list_services`, `list_resources`, `list_locations`, `find_available_slots`, `suggest_alternatives` | Read-only, with the same availability rules as the website |
+| Read: catalogue | `list_services`, `list_resources`, `list_locations`, `find_available_slots`, `suggest_alternatives` | Read-only, with the same availability rules as the website. `list_services` with `on_date` also lists each service's free times that day. |
 | Read: own bookings | `list_my_bookings`, `get_booking` | Only the customer's own bookings. Another customer's ID returns `NOT_FOUND`. |
 | Create | `hold_booking` | Creates a PENDING booking with no e-mail. At most `CHAT_MAX_OPEN_HOLDS` open holds per customer. |
 | Update | `propose_reschedule` | Checks that the new time is free, then stores a card. The move happens only when the customer presses Confirm. |

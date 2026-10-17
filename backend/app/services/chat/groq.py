@@ -28,7 +28,12 @@ class RateLimited(GroqError):
 
 
 class ToolCallFailed(GroqError):
-    """The model produced a tool call the server could not parse (`tool_use_failed`)."""
+    """The model produced a tool call the server could not parse (`tool_use_failed`).
+    `failed_generation` is what the model wrote, for the logs."""
+
+    def __init__(self, message: str, failed_generation: str = "") -> None:
+        super().__init__(message)
+        self.failed_generation = failed_generation
 
 
 def _retry_after(response: requests.Response) -> float:
@@ -42,12 +47,13 @@ def _retry_after(response: requests.Response) -> float:
     return 60.0
 
 
-def _error(response: requests.Response) -> tuple[str, str]:
+def _error(response: requests.Response) -> tuple[str, str, str]:
+    """The error's code, message and (for a rejected tool call) what the model wrote."""
     try:
         error = response.json().get("error") or {}
     except ValueError:
-        return "", response.text[:200]
-    return str(error.get("code") or ""), str(error.get("message") or "")[:300]
+        return "", response.text[:200], ""
+    return str(error.get("code") or ""), str(error.get("message") or "")[:300], str(error.get("failed_generation") or "")[:500]
 
 
 class GroqClient:
@@ -79,9 +85,9 @@ class GroqClient:
                 time.sleep(0.3)
                 continue
             if not response.ok:
-                code, message = _error(response)
+                code, message, written = _error(response)
                 if code == "tool_use_failed":
-                    raise ToolCallFailed(message)
+                    raise ToolCallFailed(message, written)
                 raise GroqError(f"{model} returned {response.status_code}: {code} {message}")
             try:
                 return response.json()
