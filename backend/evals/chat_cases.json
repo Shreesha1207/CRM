@@ -375,6 +375,80 @@
       "expect": {
         "refused": true
       }
+    },
+    {
+      "id": "name-not-in-catalogue",
+      "category": "misunderstanding",
+      "messages": [
+        "Book personal coaching with John next Tuesday at 10",
+        "Personal Training"
+      ],
+      "expect": {
+        "held": {
+          "service": "Personal Training",
+          "resource": "John Carter",
+          "weekday": "Tue",
+          "time": "10:00 AM",
+          "minutes": 60
+        }
+      }
+    },
+    {
+      "id": "name-in-a-later-turn",
+      "category": "misunderstanding",
+      "messages": [
+        "What can I book with John?",
+        "Book Personal Training with him next Tuesday at 11"
+      ],
+      "expect": {
+        "held": {
+          "service": "Personal Training",
+          "resource": "John Carter",
+          "weekday": "Tue",
+          "time": "11:00 AM",
+          "minutes": 60
+        }
+      }
+    },
+    {
+      "id": "change-the-held-one",
+      "category": "existing-booking",
+      "messages": [
+        "Book personal training with John next Tuesday at 10 for 2 hours",
+        "Change that to Priya"
+      ],
+      "expect": {
+        "held": {
+          "service": "Personal Training",
+          "resource": "Priya Nair",
+          "weekday": "Tue",
+          "time": "10:00 AM",
+          "minutes": 120
+        }
+      }
+    },
+    {
+      "id": "move-to-a-longer-time",
+      "category": "existing-booking",
+      "setup": [
+        {
+          "service": "Personal Training",
+          "resource": "John Carter",
+          "weekday": "Thu",
+          "time": "10:00"
+        }
+      ],
+      "messages": [
+        "Move my Thursday personal training to Friday at 11 for 2 hours"
+      ],
+      "expect": {
+        "held": {
+          "service": "Personal Training",
+          "weekday": "Fri",
+          "time": "11:00 AM",
+          "minutes": 120
+        }
+      }
     }
   ]
 }

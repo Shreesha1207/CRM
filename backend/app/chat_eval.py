@@ -220,7 +220,8 @@ def _run_case(case: dict, model, guard) -> dict:
         cards = db.scalars(select(ChatProposal).where(ChatProposal.conversation_id == conversation_id)).all()
         holds = []
         for card in cards:
-            if card.kind != ChatProposalKind.HOLD or card.status in (ChatProposalStatus.EXPIRED,):
+            # Only the holds still standing: one swapped for another ("change that to Priya") was declined.
+            if card.kind != ChatProposalKind.HOLD or card.status in (ChatProposalStatus.EXPIRED, ChatProposalStatus.DECLINED):
                 continue
             booking = db.get(Booking, card.booking_id)
             shown = proposals.card(db, card, user)
