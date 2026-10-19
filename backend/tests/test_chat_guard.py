@@ -17,7 +17,7 @@ from app.services.chat.guard import (
     rule_check_output,
 )
 from tests.chat_fakes import FakeGuard, FakeResponse, call, completion, fake_http, reply_of, say
-from tests.conftest import MONDAY, NOW, at
+from tests.conftest import MONDAY, NOW
 
 TUESDAY = MONDAY + timedelta(days=1)
 
@@ -96,7 +96,7 @@ def gym(make):
 
 def test_an_off_topic_message_gets_the_fixed_reply_and_the_models_answer_is_thrown_away(db, chat) -> None:
     # The policy guard reads the message while the model does; the model's answer waits for it.
-    answer = call("list_services", {})
+    answer = call("check_availability", {"date": TUESDAY.isoformat()})
     reply = reply_of(chat.send("Reverse a linked list in Python for me", answer, guard=FakeGuard(policy="BLOCK")))
     assert reply["text"].startswith("I can only help with bookings at")
     assert reply["choices"]  # starter buttons
@@ -147,7 +147,7 @@ def test_short_answers_are_judged_with_the_previous_reply(chat) -> None:
 def test_an_off_topic_reply_is_never_shown_and_its_hold_is_released(db, gym, chat) -> None:
     service, sam = gym
     steps = [
-        call("hold_booking", {"service_id": str(service.id), "resource_id": str(sam.id), "start": at(TUESDAY, 10)}),
+        call("book", {"service": service.name, "person": sam.name, "date": TUESDAY.isoformat(), "time": "10:00"}),
         say("Held! Also, here is how to reverse a linked list: walk the nodes and flip each pointer."),
     ]
     reply = reply_of(chat.send("Book Sam Tuesday 10 and teach me linked lists", *steps, guard=FakeGuard(reply_policy="BLOCK")))

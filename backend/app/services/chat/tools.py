@@ -108,7 +108,6 @@ def catalogue(db: Session) -> dict[str, Any] | None:
     return {
         "services": [
             {
-                "id": str(s.id),
                 "name": s.name,
                 "description": (s.description or "")[:120] or None,
                 "length_minutes": s.duration_minutes,
@@ -121,7 +120,6 @@ def catalogue(db: Session) -> dict[str, Any] | None:
         ],
         "resources": [
             {
-                "id": str(r.id),
                 "name": r.name,
                 "type": r.type.value.lower(),
                 "location": r.location.name if r.location else None,
@@ -129,9 +127,8 @@ def catalogue(db: Session) -> dict[str, Any] | None:
             }
             for r in resources
         ],
-        "locations": [{"id": str(l.id), "name": l.name, "address": l.address} for l in catalog.list_locations(db)],
+        "locations": [{"name": l.name, "address": l.address} for l in catalog.list_locations(db)],
     }
-
 
 
 class ListServicesIn(_In):
@@ -602,6 +599,267 @@ def offer_choices(db: Session, user: User, ctx: ToolContext, args: ChoicesIn) ->
     }
 
 
+# ---------------------------------------------------------------- the tools the model uses
+#
+# The model passes names and wall-clock times as the customer said them. These resolve
+# them against the catalogue and the customer's bookings, run the handlers above, and set
+# the buttons themselves when the customer has to choose, so a booking or a change takes
+# one tool call instead of a chain the model can get wrong.
+
+# Errors after which other times would not help.
+_NO_OTHER_TIMES = {"HOLD_LIMIT", "NOT_A_HOLD", "INVALID_DURATION", "INVALID_QUANTITY", "NOT_FOUND", "INVALID_INPUT",
+                   "SERVICE_INACTIVE", "RESOURCE_INACTIVE", "USER_INACTIVE", "ALREADY_BOOKED", "HELD_IN_CHAT",
+                   "CANNOT_RESCHEDULE"}  # fmt: skip
+
+
+def _pick(query: str, items: list[Any], names: Callable[[Any], list[str]]) -> tuple[list[Any], bool]:
+    """The items a name refers to, and whether the match is sure: the exact name, or every
+    word of it in a name or description (typos allowed). Otherwise the closest names,
+    which the customer has to confirm."""
+    wanted = query.strip().lower()
+    exact = [i for i in items if names(i)[0].lower() == wanted]
+    if exact:
+        return exact, True
+    matched = [i for i in items if _names_match(query, names(i))]
+    if matched:
+        return matched, True
+    close = _closest(query, [names(i)[0] for i in items])
+    return [i for i in items if names(i)[0] in close], False
+
+
+def _ask(ctx: ToolContext, what: str, said: str, options: list[str], *, sure: bool, note: str = "") -> dict[str, Any]:
+    """A question for the customer, with the options already shown as buttons."""
+    ctx.choices = list(dict.fromkeys(options))[:6]
+    if sure:
+        why = f"Several {what}s match {said!r}."
+    elif options:
+        why = f"No {what} is called {said!r}; the closest names are the options."
+    else:
+        why = f"No {what} is called {said!r}."
+    return {
+        "needs": what,
+        "options": ctx.choices,
+        "next_step": f"{note}{why} Ask which {what} they mean in one short sentence; the options are shown as buttons. "
+        "Never say that one of the options does not exist.",
+    }
+
+
+def _service(db: Session, ctx: ToolContext, name: str) -> tuple[Service | None, dict[str, Any] | None]:
+    services = catalog.list_services(db, q=None, resource_id=None, location_id=None, max_price=None)
+    found, sure = _pick(name, services, lambda s: [s.name, s.description or ""])
+    if len(found) == 1 and sure:
+        return found[0], None
+    return None, _ask(ctx, "service", name, [s.name for s in found or services], sure=sure and bool(found))
+
+
+def _person(db: Session, ctx: ToolContext, service: Service, name: str) -> tuple[Resource | None, dict[str, Any] | None]:
+    providers = [link.resource for link in _active_links(service)]
+    found, sure = _pick(name, providers, lambda r: [r.name, r.description or ""])
+    if len(found) == 1 and sure:
+        return found[0], None
+    note = ""
+    if not found or not sure:
+        everyone = db.scalars(select(Resource).where(Resource.status == RecordStatus.ACTIVE)).all()
+        elsewhere, also_sure = _pick(name, everyone, lambda r: [r.name, r.description or ""])
+        if also_sure and elsewhere:
+            note = f"{', '.join(r.name for r in elsewhere)} does not offer {service.name}; it is offered by the options. "
+            found, sure = [], False
+    options = [r.name for r in found or providers]
+    return None, _ask(ctx, "person", name, options, sure=sure and bool(found), note=note)
+
+
+def _nearest_free(
+    db: Session, user: User, ctx: ToolContext, service: Service, resource: Resource | None, start: datetime,
+    duration: int | None, quantity: int, moving: Booking | None = None,
+) -> list[dict[str, Any]]:  # fmt: skip
+    """The free times closest to the one asked for (that day and the next), also shown as buttons."""
+    try:
+        found = find_available_slots(
+            db, user, ctx,
+            FindSlotsIn(
+                service_id=service.id, date=start.date(), days=2, resource_id=resource.id if resource else None,
+                quantity=quantity, duration_minutes=duration, rescheduling_booking_id=moving.id if moving else None,
+            ),
+        )  # fmt: skip
+    except AppError:
+        db.rollback()
+        return []
+    times = [(day, t) for day in found["days"] for t in day["times"]]
+    times.sort(key=lambda dt: abs(datetime.fromisoformat(dt[1]["start"]) - start.replace(tzinfo=None)))
+    nearest = sorted(times[:6], key=lambda dt: dt[1]["start"])
+    ctx.choices = [f"{day['label']}, {t['label']}" for day, t in nearest]
+    return [{"start": t["start"], "label": f"{day['label']}, {t['label']}", "with": [r["name"] for r in t["resources"]]} for day, t in nearest]
+
+
+def _hold(
+    db: Session, user: User, ctx: ToolContext, args: HoldBookingIn, service: Service, resource: Resource | None,
+    moving: Booking | None = None,
+) -> dict[str, Any]:  # fmt: skip
+    try:
+        result = hold_booking(db, user, ctx, args)
+    except AppError as exc:
+        db.rollback()
+        result = _error(exc.code, exc.message)
+    if result.get("error") and result["error"] not in _NO_OTHER_TIMES:
+        result["nearest_free"] = _nearest_free(db, user, ctx, service, resource, args.start, args.duration_minutes, args.quantity, moving)
+        result["next_step"] = (
+            "Say in one sentence why that time can't be booked, and ask which of the nearest free times they want; "
+            "they are shown as buttons. When they pick one, call the same tool again with that time."
+        )
+    return result
+
+
+class BookIn(_In):
+    service: str = Field(max_length=100)
+    date: date
+    time: time
+    person: str | None = Field(default=None, max_length=100)
+    duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
+    quantity: int = Field(default=1, ge=1, le=100)
+
+
+def book(db: Session, user: User, ctx: ToolContext, args: BookIn) -> dict[str, Any]:
+    service, question = _service(db, ctx, args.service)
+    if question:
+        return question
+    resource = None
+    if args.person:
+        resource, question = _person(db, ctx, service, args.person)
+        if question:
+            return question
+    hold = HoldBookingIn(
+        service_id=service.id,
+        start=datetime.combine(args.date, args.time),
+        resource_id=resource.id if resource else None,
+        duration_minutes=args.duration_minutes,
+        quantity=args.quantity,
+    )
+    return _hold(db, user, ctx, hold, service, resource)
+
+
+class WhichBookingIn(_In):
+    # Which of the customer's bookings: its id, or what they said about it.
+    booking_id: uuid.UUID | None = None
+    on_date: date | None = None
+    around_time: time | None = None
+    query: str | None = Field(default=None, max_length=100)
+
+
+def _which(db: Session, user: User, ctx: ToolContext, args: WhichBookingIn) -> tuple[Booking | None, dict[str, Any] | None]:
+    if args.booking_id:
+        return _mine(db, user, args.booking_id), None
+    found = list_my_bookings(
+        db, user, ctx, ListBookingsIn(on_date=args.on_date, around_time=args.around_time, query=args.query, limit=MAX_BOOKINGS)
+    )
+    bookings = found["bookings"]
+    if len(bookings) == 1:
+        return _mine(db, user, uuid.UUID(bookings[0]["id"])), None
+    if not bookings:
+        return None, {
+            "found": False,
+            "upcoming": found.get("other_upcoming", []),
+            "next_step": "Say you could not find that booking, list their upcoming bookings (upcoming) and ask which one they mean.",
+        }
+    ctx.choices = [f"{b['service']}, {b['date']}, {b['time'].split(' – ')[0]}" for b in bookings][:6]
+    return None, {
+        "which": bookings,
+        "next_step": "Several bookings match: ask which one in one short sentence; they are shown as buttons. "
+        "Then call the tool again with its booking_id.",
+    }
+
+
+class MoveIn(WhichBookingIn):
+    new_date: date | None = None
+    new_time: time | None = None
+    person: str | None = Field(default=None, max_length=100)
+    duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
+
+
+def move(db: Session, user: User, ctx: ToolContext, args: MoveIn) -> dict[str, Any]:
+    booking, answer = _which(db, user, ctx, args)
+    if answer:
+        return answer
+    if args.new_date is None and args.new_time is None and args.person is None and args.duration_minutes is None:
+        return _error("NOTHING_TO_CHANGE", "Ask what to change: the day, the time, the person or the length.")
+    rules = settings_service.get_rules(db)
+    local = booking.start_datetime.astimezone(resource_timezone(booking.primary_resource, rules))
+    start = datetime.combine(args.new_date or local.date(), args.new_time or local.time().replace(tzinfo=None))
+    service, resource = booking.service, booking.primary_resource
+    if args.person:
+        resource, question = _person(db, ctx, service, args.person)
+        if question:
+            return question
+    length = _minutes(booking)
+    duration = args.duration_minutes or length
+    flags = bookings_out(db, [booking], user, rules, utcnow())[0]
+    new = HoldBookingIn(service_id=service.id, start=start, resource_id=resource.id, duration_minutes=duration, quantity=booking.quantity)
+
+    if flags.held_in_chat:
+        # Not confirmed yet: the hold itself is swapped for the new one.
+        return _hold(db, user, ctx, new.model_copy(update={"replaces_booking_id": booking.id}), service, resource, moving=booking)
+
+    if duration != length:
+        # A move keeps a booking's length: hold a new one of the new length and offer to cancel this one.
+        if not flags.can_cancel:
+            return _error("CANNOT_CHANGE_LENGTH", f"A move keeps the length ({length} minutes), and this booking can no longer be cancelled online.")
+        result = _hold(db, user, ctx, new, service, resource)
+        if not result.get("held"):
+            return result
+        result["cancel_old"] = propose_cancellation(db, user, ctx, CancelIn(booking_id=booking.id))
+        result["next_step"] = (
+            f"A move keeps a booking's length ({length} minutes), so a new {duration}-minute session is held and cancelling "
+            "the old booking is offered. Say so: the customer confirms the new one and the cancellation on their cards."
+        )
+        return result
+
+    try:
+        result = propose_reschedule(db, user, ctx, RescheduleIn(booking_id=booking.id, new_start=start, resource_id=resource.id))
+    except AppError as exc:
+        db.rollback()
+        result = _error(exc.code, exc.message)
+    if result.get("error") and result["error"] not in _NO_OTHER_TIMES:
+        result["nearest_free"] = _nearest_free(db, user, ctx, service, resource, start, length, booking.quantity, moving=booking)
+        result["next_step"] = "Say that time is not free and ask which of the nearest free times they want; they are shown as buttons."
+    return result
+
+
+def cancel(db: Session, user: User, ctx: ToolContext, args: WhichBookingIn) -> dict[str, Any]:
+    booking, answer = _which(db, user, ctx, args)
+    if answer:
+        return answer
+    return propose_cancellation(db, user, ctx, CancelIn(booking_id=booking.id))
+
+
+class AvailabilityIn(_In):
+    date: date
+    days: int = Field(default=1, ge=1, le=7)
+    service: str | None = Field(default=None, max_length=100)
+    person: str | None = Field(default=None, max_length=100)
+    duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
+    quantity: int = Field(default=1, ge=1, le=100)
+
+
+def check_availability(db: Session, user: User, ctx: ToolContext, args: AvailabilityIn) -> dict[str, Any]:
+    if not args.service:
+        return list_services(db, user, ctx, ListServicesIn(on_date=args.date))
+    service, question = _service(db, ctx, args.service)
+    if question:
+        return question
+    resource = None
+    if args.person:
+        resource, question = _person(db, ctx, service, args.person)
+        if question:
+            return question
+    found = find_available_slots(
+        db, user, ctx,
+        FindSlotsIn(
+            service_id=service.id, date=args.date, days=args.days, resource_id=resource.id if resource else None,
+            quantity=args.quantity, duration_minutes=args.duration_minutes,
+        ),
+    )  # fmt: skip
+    return {"service": service.name, "person": resource.name if resource else None, **found}
+
+
 # ---------------------------------------------------------------- definitions
 
 
@@ -627,93 +885,95 @@ class Tool:
 
 
 _UUID = {"type": "string", "description": "An id copied from an earlier tool result; leave out when not known"}
-_START = {"type": "string", "description": "Wall-clock time at the resource's location, YYYY-MM-DDTHH:MM, e.g. 2026-10-20T10:00"}
+_DATE = {"type": "string", "description": "YYYY-MM-DD, from the turn note's list of days"}
+_TIME = {"type": "string", "description": "HH:MM, 24-hour, at the place of the booking"}
+_NAME = {"type": "string", "description": "As the customer said it or as in the catalogue; typos are fine"}
+_WHICH = {
+    "booking_id": _UUID,
+    "on_date": {"type": "string", "description": "The booking's date, YYYY-MM-DD, if the customer said it"},
+    "around_time": {"type": "string", "description": "The booking's time, HH:MM 24-hour, if the customer said it"},
+    "query": {"type": "string", "description": "The booking's service or person, if the customer said it"},
+}
+_LENGTH = {"type": "integer", "minimum": 1, "description": "Only when the customer asked for a length: 'two hours' = 120"}
 
 TOOLS = [
     Tool(
-        "list_services",
-        "List the services the business offers, with their length, hourly rate and who or what provides them. "
-        "Use query to search by name. When nothing matches, closest_names lists similar names. "
-        "Pass on_date to see which services have free times that day (free_times_on_date).",
+        "book",
+        "Book a new appointment and hold it for the customer, who sees a card with Confirm / Delete. Pass the service "
+        "and person as said; leave the person out to take any free one. It resolves the names, and when the time is not "
+        "free it returns the nearest free times (shown as buttons). When it returns needs, ask that question.",
         {
             "properties": {
-                "query": {"type": "string"},
-                "location_id": _UUID,
-                "on_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "service": _NAME,
+                "date": _DATE,
+                "time": _TIME,
+                "person": _NAME,
+                "duration_minutes": _LENGTH,
+                "quantity": {"type": "integer", "minimum": 1, "description": "Places, for group sessions"},
+            },
+            "required": ["service", "date", "time"],
+        },
+        BookIn,
+        book,
+        "Holding your booking…",
+    ),
+    Tool(
+        "move",
+        "Change one of the customer's bookings: its day, time, person or length. Say which booking (booking_id, or what "
+        "the customer said about it) and only what changes. It handles bookings still waiting for Confirm and length "
+        "changes; nothing changes until the customer presses Confirm on the card.",
+        {
+            "properties": {
+                **_WHICH,
+                "new_date": _DATE,
+                "new_time": _TIME,
+                "person": _NAME,
+                "duration_minutes": _LENGTH,
             }
         },
-        ListServicesIn,
-        list_services,
-        "Looking up services…",
+        MoveIn,
+        move,
+        "Preparing the change…",
     ),
     Tool(
-        "list_resources",
-        "List the people, rooms or other resources that can be booked, with the services each offers and its time zone. "
-        "Use query to search by name (e.g. a first name). When nothing matches, closest_names lists similar names.",
-        {"properties": {"query": {"type": "string"}, "service_id": _UUID, "location_id": _UUID}},
-        ListResourcesIn,
-        list_resources,
-        "Looking up who's available…",
+        "cancel",
+        "Offer to cancel one of the customer's bookings (booking_id, or what the customer said about it). Nothing "
+        "changes until the customer presses Confirm on the card.",
+        {"properties": _WHICH},
+        WhichBookingIn,
+        cancel,
+        "Preparing the cancellation…",
     ),
     Tool(
-        "list_locations",
-        "List the business's locations with their address and time zone.",
-        {"properties": {}},
-        ListLocationsIn,
-        list_locations,
-        "Looking up locations…",
-    ),
-    Tool(
-        "find_available_slots",
-        "Free start times for a service from a date, for up to 7 days. Times are wall-clock times in the given time zone. "
-        "Pass duration_minutes for a longer booking of a flexible service, quantity for places in a group session, and "
-        "rescheduling_booking_id when looking for a new time for one of the customer's existing bookings.",
+        "check_availability",
+        "Free times. With a service (and optionally a person): its free start times from date, for up to 7 days. "
+        "Without one: every service with its free times that day.",
         {
             "properties": {
-                "service_id": _UUID,
-                "date": {"type": "string", "description": "YYYY-MM-DD"},
+                "date": _DATE,
                 "days": {"type": "integer", "minimum": 1, "maximum": 7},
-                "resource_id": _UUID,
-                "location_id": _UUID,
+                "service": _NAME,
+                "person": _NAME,
+                "duration_minutes": _LENGTH,
                 "quantity": {"type": "integer", "minimum": 1},
-                "duration_minutes": {"type": "integer", "minimum": 1},
-                "rescheduling_booking_id": _UUID,
             },
-            "required": ["service_id", "date"],
+            "required": ["date"],
         },
-        FindSlotsIn,
-        find_available_slots,
-        "Checking availability…",
+        AvailabilityIn,
+        check_availability,
+        "Checking free times…",
     ),
     Tool(
-        "suggest_alternatives",
-        "Nearby free times, with this or another resource, when a requested time is not free.",
-        {
-            "properties": {
-                "service_id": _UUID,
-                "resource_id": _UUID,
-                "start": _START,
-                "quantity": {"type": "integer", "minimum": 1},
-                "duration_minutes": {"type": "integer", "minimum": 1},
-            },
-            "required": ["service_id", "resource_id", "start"],
-        },
-        AlternativesIn,
-        suggest_alternatives,
-        "Looking for other times…",
-    ),
-    Tool(
-        "list_my_bookings",
-        "The signed-in customer's own bookings (upcoming by default), with whether each can still be cancelled or moved. "
-        "To find the booking the customer means, pass what they said: on_date, around_time (matches within an hour) and "
-        "query (service or person, typos allowed). match_count says how many match; with none, other_upcoming lists the rest.",
+        "my_bookings",
+        "The customer's own bookings (upcoming by default), with whether each can still be cancelled or moved. Pass "
+        "on_date, around_time and query to find the one they mean.",
         {
             "properties": {
                 "scope": {"type": "string", "enum": ["upcoming", "past", "cancelled", "waitlisted", "all"]},
                 "limit": {"type": "integer", "minimum": 1, "maximum": MAX_BOOKINGS},
-                "on_date": {"type": "string", "description": "YYYY-MM-DD"},
-                "around_time": {"type": "string", "description": "HH:MM, 24-hour"},
-                "query": {"type": "string", "description": "Service or person, e.g. 'yoga' or 'Sam'"},
+                "on_date": _WHICH["on_date"],
+                "around_time": _WHICH["around_time"],
+                "query": _WHICH["query"],
             }
         },
         ListBookingsIn,
@@ -721,65 +981,9 @@ TOOLS = [
         "Looking at your bookings…",
     ),
     Tool(
-        "get_booking",
-        "One of the customer's own bookings.",
-        {"properties": {"booking_id": _UUID}, "required": ["booking_id"]},
-        GetBookingIn,
-        get_booking,
-        "Looking at your booking…",
-    ),
-    Tool(
-        "hold_booking",
-        "Book a time for the customer straight away and hold it for them: the customer sees a card with the details and "
-        "presses Confirm to book it or Delete to release it. Omit resource_id to take any suitable free resource. "
-        "Use duration_minutes only for a longer booking of a flexible service, quantity for places in a group session. "
-        "To change a booking that is still waiting for Confirm, pass its id as replaces_booking_id: it is released as the new one is held. "
-        "On a rule problem it returns error and message: explain it and offer other times.",
-        {
-            "properties": {
-                "service_id": _UUID,
-                "start": _START,
-                "resource_id": _UUID,
-                "duration_minutes": {"type": "integer", "minimum": 1},
-                "quantity": {"type": "integer", "minimum": 1},
-                "replaces_booking_id": _UUID,
-            },
-            "required": ["service_id", "start"],
-        },
-        HoldBookingIn,
-        hold_booking,
-        "Holding your booking…",
-    ),
-    Tool(
-        "propose_reschedule",
-        "Offer to move one of the customer's bookings to a new time (and optionally another resource). A move keeps the "
-        "booking's length: pass duration_minutes only when the customer asked for a length, to be told if it differs. "
-        "Nothing changes until the customer presses Confirm on the card.",
-        {
-            "properties": {
-                "booking_id": _UUID,
-                "new_start": _START,
-                "resource_id": _UUID,
-                "duration_minutes": {"type": "integer", "minimum": 1},
-            },
-            "required": ["booking_id", "new_start"],
-        },
-        RescheduleIn,
-        propose_reschedule,
-        "Preparing the change…",
-    ),
-    Tool(
-        "propose_cancellation",
-        "Offer to cancel one of the customer's bookings. Nothing changes until the customer presses Confirm on the card.",
-        {"properties": {"booking_id": _UUID}, "required": ["booking_id"]},
-        CancelIn,
-        propose_cancellation,
-        "Preparing the cancellation…",
-    ),
-    Tool(
         "offer_choices",
-        "Show 2 to 6 short options as buttons under your reply (free times, matching services or people, yes/no). "
-        "A click sends the option back as the customer's answer.",
+        "Show 2 to 6 short options of your own as buttons under your reply (e.g. yes/no). A click sends the option back "
+        "as the customer's answer. The other tools set their own buttons.",
         {
             "properties": {
                 "question": {"type": "string"},

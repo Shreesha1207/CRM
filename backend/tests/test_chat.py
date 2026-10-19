@@ -33,17 +33,17 @@ def gym(db, make):
 HELD_REPLY = "I've held Strength coaching with Coach Sam for you on Tue 02 Mar, 10:00 AM (Asia/Kolkata). Press Confirm to book it, or Delete."
 
 
-def hold_steps(service, resource, start=None, duration=120, **extra):
+def book(time_="10:00", duration=120, day=None, **extra):
+    """The model's call for "Book strength coaching with Sam next Tuesday at 10 for two hours"."""
+    args = {"service": "strength coaching", "person": "Sam", "date": (day or TUESDAY).isoformat(), "time": time_, **extra}
+    if duration:
+        args["duration_minutes"] = duration
+    return call("book", args)
+
+
+def hold_steps(service, resource, hour=10, duration=120):
     """What the model does with "Book strength coaching with Sam next Tuesday at 10 for two hours"."""
-    return [
-        call("list_services", {"query": "strength coaching"}),
-        call("list_resources", {"query": "Sam"}),
-        call(
-            "hold_booking",
-            {"service_id": str(service.id), "resource_id": str(resource.id), "start": start or at(TUESDAY, 10), "duration_minutes": duration, **extra},
-        ),
-        say(HELD_REPLY),
-    ]
+    return [book(f"{hour}:00", duration), say(HELD_REPLY)]
 
 
 def emails(db) -> list[Notification]:
@@ -114,22 +114,18 @@ def _other(db):
     return Factory(db).user("other@test.io", name="Other Customer")
 
 
-def test_the_model_resolves_names_with_tools_and_sees_the_turn_note(db, gym, chat) -> None:
+def test_one_call_resolves_the_names_and_holds_it(db, gym, chat) -> None:
     service, sam = gym
     reply_of(chat.send("Book me strength coaching with Sam next Tuesday at 10 for two hours", *hold_steps(service, sam)))
-    first, second, third, fourth = chat.model.requests
+    first, second = chat.model.requests
     # The customer's words, then the server's note with the current time, as a system message.
     assert first["messages"][-2] == {"role": "user", "content": "Book me strength coaching with Sam next Tuesday at 10 for two hours"}
     assert first["messages"][-1]["role"] == "system"
     assert "Current time: Fri 26 Feb 2027" in first["messages"][-1]["content"]
-    [services] = last_tool_results(second["messages"])
-    assert services["services"][0]["name"] == "Strength coaching"
-    assert services["services"][0]["max_length_minutes"] == 180
-    [resources] = last_tool_results(third["messages"])
-    assert resources["resources"][0] == {**resources["resources"][0], "name": "Coach Sam", "timezone": "Asia/Kolkata"}
-    [held] = last_tool_results(fourth["messages"])
+    [held] = last_tool_results(second["messages"])
     assert held["held"] is True and held["booking"]["when"]["time"] == "10:00 AM – 12:00 PM"
-    assert {t["function"]["name"] for t in first["tools"]} >= {"hold_booking", "find_available_slots", "propose_reschedule", "offer_choices"}
+    assert held["booking"]["service"] == "Strength coaching" and held["booking"]["resource"] == "Coach Sam"
+    assert {t["function"]["name"] for t in first["tools"]} == {"book", "move", "cancel", "check_availability", "my_bookings", "offer_choices"}
 
 
 def test_the_prompt_lists_the_catalogue_and_the_next_days(gym, chat, monkeypatch) -> None:
@@ -140,23 +136,23 @@ def test_the_prompt_lists_the_catalogue_and_the_next_days(gym, chat, monkeypatch
     request = chat.model.requests[-1]
     # Every name that exists, with its id, so the model never has to guess one.
     assert "<catalogue>" in request["system"]
-    assert f'"id":"{service.id}","name":"Strength coaching"' in request["system"]
-    assert '"provided_by":["Coach Sam"]' in request["system"] and f'"id":"{sam.id}","name":"Coach Sam"' in request["system"]
+    assert '"name":"Strength coaching"' in request["system"] and str(service.id) not in request["system"]
+    assert '"provided_by":["Coach Sam"]' in request["system"] and '"name":"Coach Sam","type":"person"' in request["system"]
     assert "Next days: Fri 26 Feb = 2027-02-26, Sat 27 Feb = 2027-02-27" in request["messages"][-1]["content"]
 
     # A catalogue too large for the prompt is left to the tools.
     monkeypatch.setattr(tools, "MAX_CATALOGUE_SERVICES", 0)
     reply_of(chat.send("Hi again", say("Hello!")))
-    assert "<catalogue>" not in chat.model.requests[-1]["system"] and "list_services" in chat.model.requests[-1]["system"]
+    assert "<catalogue>" not in chat.model.requests[-1]["system"] and "pass names to the tools" in chat.model.requests[-1]["system"]
 
 
 def test_each_turn_logs_where_its_time_went(gym, chat, caplog) -> None:
     import logging
 
     caplog.set_level(logging.INFO, logger="chat")
-    reply_of(chat.send("Any coaching?", call("list_services", {}), say("Yes, Strength coaching.")))
+    reply_of(chat.send("Anything free Tuesday?", call("check_availability", {"date": TUESDAY.isoformat()}), say("Yes, Strength coaching.")))
     [line] = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Chat turn")]
-    assert "guard in" in line and "guard out" in line and "list_services" in line
+    assert "guard in" in line and "guard policy" in line and "guard out" in line and "check_availability" in line
     assert line.count("model ") == 2 and "100 in, 20 out tokens" in line
 
 
@@ -253,9 +249,9 @@ def test_a_held_booking_cannot_be_moved_and_cancelling_it_elsewhere_deletes_it_q
 def test_at_most_two_holds_are_open_at_once(db, gym, chat) -> None:
     service, sam = gym
     for hour in (10, 13):
-        reply_of(chat.send(f"Book coaching with Sam Tuesday {hour}", *hold_steps(service, sam, start=at(TUESDAY, hour), duration=60)))
+        reply_of(chat.send(f"Book coaching with Sam Tuesday {hour}", *hold_steps(service, sam, hour=hour, duration=60)))
     third = [
-        call("hold_booking", {"service_id": str(service.id), "resource_id": str(sam.id), "start": at(TUESDAY, 15)}),
+        book("15:00", None),
         lambda messages: say(last_tool_results(messages)[0]["error"]),
     ]
     assert reply_of(chat.send("And Tuesday 3pm", *third))["text"] == "HOLD_LIMIT"
@@ -263,23 +259,25 @@ def test_at_most_two_holds_are_open_at_once(db, gym, chat) -> None:
 
 
 @pytest.mark.parametrize(
-    "start, duration, code",
-    [(at(TUESDAY, 20), 60, "OUTSIDE_AVAILABILITY"), (at(TUESDAY, 10), 45, "INVALID_DURATION"), (at(TUESDAY, 10), 240, "INVALID_DURATION")],
+    "time_, duration, code, other_times",
+    [("20:00", 60, "OUTSIDE_AVAILABILITY", True), ("10:00", 45, "INVALID_DURATION", False), ("10:00", 240, "INVALID_DURATION", False)],
 )
-def test_booking_rules_come_back_to_the_model_and_nothing_is_held(db, gym, chat, start, duration, code) -> None:
-    service, sam = gym
-    steps = [
-        call("hold_booking", {"service_id": str(service.id), "resource_id": str(sam.id), "start": start, "duration_minutes": duration}),
-        lambda messages: say(last_tool_results(messages)[0]["error"]),
-    ]
+def test_booking_rules_come_back_to_the_model_and_nothing_is_held(db, gym, chat, time_, duration, code, other_times) -> None:
+    steps = [book(time_, duration), lambda messages: say(last_tool_results(messages)[0]["error"])]
     reply = reply_of(chat.send("Book it", *steps))
     assert reply["text"] == code and reply["cards"] == []
     assert db.scalars(select(Booking)).all() == []
+    # A time that is not free comes with the nearest free ones, as buttons.
+    assert bool(reply["choices"]) is other_times
+    if other_times:
+        [result] = last_tool_results(chat.model.requests[-1]["messages"])
+        assert reply["choices"] == [t["label"] for t in result["nearest_free"]]
+        assert reply["choices"][-1] == "Tue 02 Mar, 4:00 PM"  # Sam works until 5 PM; the next day follows
 
 
 def test_bad_tool_input_is_reported_to_the_model_as_an_error(db, gym, chat) -> None:
     steps = [
-        call("hold_booking", {"service_id": "not-an-id", "start": "tomorrow"}),
+        call("book", {"service": "coaching", "date": "tomorrow", "time": "10"}),
         lambda messages: say(last_tool_results(messages)[0]["error"]),
     ]
     assert reply_of(chat.send("Book it", *steps))["text"] == "INVALID_INPUT"
@@ -289,7 +287,7 @@ def test_bad_tool_input_is_reported_to_the_model_as_an_error(db, gym, chat) -> N
 
 def test_tool_arguments_that_are_not_json_come_back_as_an_error(gym, chat) -> None:
     steps = [
-        call_raw(("hold_booking", '{"service_id": "abc", "start": ')),
+        call_raw(("book", '{"service": "abc", "date": ')),
         lambda messages: say(last_tool_results(messages)[0]["error"]),
     ]
     assert reply_of(chat.send("Book it", *steps))["text"] == "INVALID_JSON"
@@ -307,7 +305,7 @@ def test_offered_choices_come_back_as_buttons(gym, chat) -> None:
 def test_free_times_are_listed_in_the_resources_time_zone(gym, chat) -> None:
     service, sam = gym
     steps = [
-        call("find_available_slots", {"service_id": str(service.id), "date": TUESDAY.isoformat(), "days": 2}),
+        call("check_availability", {"service": "strength coaching", "date": TUESDAY.isoformat(), "days": 2}),
         lambda messages: say(str(last_tool_results(messages)[0]["days"][0]["times"][0]["label"])),
     ]
     reply = reply_of(chat.send("What's free Tuesday?", *steps))
@@ -331,8 +329,7 @@ def test_a_move_changes_nothing_until_confirmed(client, db, gym, chat) -> None:
     service, sam = gym
     booking = _booked(client, chat.headers, service, sam, at(TUESDAY, 10))
     steps = [
-        call("list_my_bookings", {}),
-        call("propose_reschedule", {"booking_id": booking["id"], "new_start": at(TUESDAY, 14)}),
+        call("move", {"on_date": TUESDAY.isoformat(), "query": "session", "new_time": "14:00"}),
         say("Press Confirm to move it to 2:00 PM."),
     ]
     [card] = reply_of(chat.send("Move my Tuesday session to 2pm", *steps))["cards"]
@@ -353,17 +350,18 @@ def test_a_move_to_a_time_that_is_not_free_is_refused_to_the_model(client, gym, 
     service, sam = gym
     booking = _booked(client, chat.headers, service, sam, at(TUESDAY, 10))
     steps = [
-        call("propose_reschedule", {"booking_id": booking["id"], "new_start": at(TUESDAY, 19)}),
+        call("move", {"booking_id": booking["id"], "new_time": "19:00"}),
         lambda messages: say(last_tool_results(messages)[0]["error"]),
     ]
     reply = reply_of(chat.send("Move it to 7pm", *steps))
     assert reply["text"] == "NOT_AVAILABLE" and reply["cards"] == []
+    assert "Tue 02 Mar, 4:00 PM" in reply["choices"]  # the nearest free times, as buttons
 
 
 def test_a_move_whose_new_time_was_taken_meanwhile_fails_cleanly(client, db, gym, chat) -> None:
     service, sam = gym
     booking = _booked(client, chat.headers, service, sam, at(TUESDAY, 10))
-    steps = [call("propose_reschedule", {"booking_id": booking["id"], "new_start": at(TUESDAY, 14)}), say("Press Confirm.")]
+    steps = [call("move", {"booking_id": booking["id"], "new_time": "14:00"}), say("Press Confirm.")]
     [card] = reply_of(chat.send("Move it to 2pm", *steps))["cards"]
     _booked(client, auth_headers(client, _other(db).email), service, sam, at(TUESDAY, 14))
 
@@ -376,7 +374,7 @@ def test_a_move_whose_new_time_was_taken_meanwhile_fails_cleanly(client, db, gym
 def test_a_cancellation_card_and_decline(client, db, gym, chat) -> None:
     service, sam = gym
     booking = _booked(client, chat.headers, service, sam, at(TUESDAY, 10))
-    steps = [call("propose_cancellation", {"booking_id": booking["id"]}), say("Press Confirm to cancel it.")]
+    steps = [call("cancel", {"booking_id": booking["id"]}), say("Press Confirm to cancel it.")]
     [card] = reply_of(chat.send("Cancel my Tuesday session", *steps))["cards"]
     assert card["kind"] == "CANCEL" and card["when"]["time"] == "10:00 AM – 11:00 AM"
 
@@ -385,7 +383,7 @@ def test_a_cancellation_card_and_decline(client, db, gym, chat) -> None:
     assert db.get(Booking, booking["id"]).status == BookingStatus.CONFIRMED
     assert chat.confirm(card["id"]).status_code == 409
 
-    steps = [call("propose_cancellation", {"booking_id": booking["id"]}), say("Press Confirm to cancel it.")]
+    steps = [call("cancel", {"booking_id": booking["id"]}), say("Press Confirm to cancel it.")]
     [card] = reply_of(chat.send("Actually, cancel it", *steps))["cards"]
     assert chat.confirm(card["id"]).json()["status"] == "CONFIRMED"
     db.expire_all()
@@ -398,7 +396,7 @@ def test_customers_only_ever_reach_their_own_bookings_and_cards(client, db, gym,
     other_headers = auth_headers(client, other.email)
     theirs = _booked(client, other_headers, service, sam, at(TUESDAY, 15))
     steps = [
-        call("get_booking", {"booking_id": theirs["id"]}, ("propose_cancellation", {"booking_id": theirs["id"]})),
+        call("cancel", {"booking_id": theirs["id"]}, ("move", {"booking_id": theirs["id"], "new_time": "16:00"})),
         lambda messages: say(" ".join(r["error"] for r in last_tool_results(messages))),
     ]
     reply = reply_of(chat.send("Show booking", *steps))
@@ -418,9 +416,9 @@ def test_history_is_append_only_and_the_customer_sees_only_the_conversation(db, 
     reply_of(chat.send("Book coaching with Sam Tuesday 10 for 2 hours", *hold_steps(service, sam)))
     reply_of(chat.send("Thanks!", say("You're welcome!")))
 
-    last_of_first_turn = chat.model.requests[3]["messages"]
-    second_turn = chat.model.requests[4]["messages"]
-    stored_reply = db.scalars(select(ChatMessage).where(ChatMessage.role == ChatRole.ASSISTANT).order_by(ChatMessage.seq)).all()[3]
+    last_of_first_turn = chat.model.requests[1]["messages"]
+    second_turn = chat.model.requests[2]["messages"]
+    stored_reply = db.scalars(select(ChatMessage).where(ChatMessage.role == ChatRole.ASSISTANT).order_by(ChatMessage.seq)).all()[1]
     # Everything the model saw before is sent again unchanged, the last reply after it.
     assert second_turn[: len(last_of_first_turn)] == last_of_first_turn
     assert second_turn[len(last_of_first_turn)] == stored_reply.content
@@ -479,7 +477,7 @@ def test_one_reply_at_a_time_per_conversation(db, gym, chat) -> None:
 
 def test_a_turn_that_keeps_calling_tools_stops_cleanly(gym, chat, settings) -> None:
     settings(chat_max_tool_rounds=3)
-    reply = reply_of(chat.send("Book something", *[call("list_services", {}) for _ in range(3)]))
+    reply = reply_of(chat.send("Book something", *[call("check_availability", {"date": TUESDAY.isoformat()}) for _ in range(3)]))
     assert "couldn't finish" in reply["text"]
     reply_of(chat.send("Hi", say("Hello!")))
     # The unfinished turn is never sent to the model again.
@@ -512,7 +510,7 @@ def test_a_rate_limited_turn_says_busy_releases_its_hold_and_is_not_a_strike(db,
 
     service, sam = gym
     steps = [
-        call("hold_booking", {"service_id": str(service.id), "resource_id": str(sam.id), "start": at(TUESDAY, 10)}),
+        book("10:00", None),
         _raise(RateLimited(30)),
     ]
     reply = reply_of(chat.send("Book Sam Tuesday 10", *steps))
@@ -545,30 +543,26 @@ def test_a_tool_call_the_server_could_not_read_is_asked_for_again_with_a_hint(gy
 
 
 def test_an_unfinished_turn_logs_why(gym, chat, caplog) -> None:
-    looping = [call("get_booking", {"booking_id": "not-a-uuid"}) for _ in range(8)]
+    looping = [call("cancel", {"booking_id": "not-a-uuid"}) for _ in range(8)]
     reply = reply_of(chat.send("Hi", *looping))
     assert "couldn't finish" in reply["text"]
-    assert "Chat turn unfinished" in caplog.text and "get_booking" in caplog.text and "INVALID_INPUT" in caplog.text
+    assert "Chat turn unfinished" in caplog.text and "cancel" in caplog.text and "INVALID_INPUT" in caplog.text
 
 
 def test_services_on_a_date_say_which_have_free_times(gym, chat) -> None:
     service, _ = gym
-    reply_of(chat.send("What can I book on Tuesday?", call("list_services", {"on_date": TUESDAY.isoformat()}), say("Strength coaching has times.")))
+    reply_of(chat.send("What can I book on Tuesday?", call("check_availability", {"date": TUESDAY.isoformat()}), say("Strength coaching has times.")))
     [result] = last_tool_results(chat.model.requests[-1]["messages"])
     [entry] = result["services"]
-    assert entry["id"] == str(service.id)
+    assert entry["name"] == service.name
     free = entry["free_times_on_date"]
     assert free["date"] == TUESDAY.isoformat() and free["count"] > 0 and free["first"][0] == "9:00 AM"
-
-    reply_of(chat.send("What do you offer?", call("list_services", {}), say("Strength coaching.")))
-    [plain] = last_tool_results(chat.model.requests[-1]["messages"])
-    assert "free_times_on_date" not in plain["services"][0]
 
 
 def test_only_the_last_turns_are_sent_and_never_cut_inside_a_tool_call(gym, chat, settings) -> None:
     settings(chat_history_turns=2)
     reply_of(chat.send("first", say("A")))
-    reply_of(chat.send("second", call("list_services", {}), say("B")))
+    reply_of(chat.send("second", call("check_availability", {"date": TUESDAY.isoformat()}), say("B")))
     reply_of(chat.send("third", say("C")))
     sent = chat.model.requests[-1]["messages"]
     assert [m["role"] for m in sent] == ["user", "system", "assistant", "tool", "assistant", "user", "system"]
@@ -577,9 +571,9 @@ def test_only_the_last_turns_are_sent_and_never_cut_inside_a_tool_call(gym, chat
 
 
 def test_older_turns_are_replayed_as_text_and_the_previous_turn_in_full(gym, chat) -> None:
-    reply_of(chat.send("first", call("list_services", {}), say("A")))
-    reply_of(chat.send("second", call("list_services", {}), say("B")))
-    reply_of(chat.send("third", call("list_services", {}), say("C")))
+    reply_of(chat.send("first", call("check_availability", {"date": TUESDAY.isoformat()}), say("A")))
+    reply_of(chat.send("second", call("check_availability", {"date": TUESDAY.isoformat()}), say("B")))
+    reply_of(chat.send("third", call("check_availability", {"date": TUESDAY.isoformat()}), say("C")))
     reply_of(chat.send("fourth", say("D")))
     sent = chat.model.requests[-1]["messages"]
     assert [m["role"] for m in sent] == [
@@ -598,66 +592,102 @@ def test_placeholders_for_unknown_ids_are_left_out_instead_of_failing(client, db
 
     service, sam = gym
     ctx = tools.ToolContext(user_id=user.id, conversation_id=_uuid.uuid4(), turn_id=_uuid.uuid4())
-    # An unknown optional id ("?") is simply not given...
-    content, failed = tools.run("list_services", {"query": "strength", "location_id": "?"}, ctx)
-    assert not failed and json.loads(content)["services"][0]["name"] == "Strength coaching"
+    # An unknown optional value ("?") is simply not given...
+    content, failed = tools.run("check_availability", {"date": TUESDAY.isoformat(), "service": "strength", "person": "?"}, ctx)
+    assert not failed and json.loads(content)["service"] == "Strength coaching"
     # ...and for a required one the model is told it is missing.
-    content, failed = tools.run("get_booking", {"booking_id": "?"}, ctx)
-    assert failed and "booking_id" in json.loads(content)["message"]
+    content, failed = tools.run("book", {"service": "?", "date": TUESDAY.isoformat(), "time": "10:00"}, ctx)
+    assert failed and "service" in json.loads(content)["message"]
     # Groq checks the schema before the server does, so it must not insist on a uuid format.
     assert all("format" not in p for t in tools.TOOLS for p in t.schema.get("properties", {}).values())
 
 
-def test_a_move_keeps_the_length_and_says_so(client, gym, chat) -> None:
+def test_a_move_to_another_length_holds_a_new_session_and_offers_to_cancel_the_old_one(client, db, gym, chat) -> None:
     service, sam = gym
     booking = _booked(client, chat.headers, service, sam, at(TUESDAY, 10))  # one hour
-    move = {"booking_id": booking["id"], "new_start": at(TUESDAY, 14)}
-    reply = reply_of(chat.send("Move it to 2pm for two hours", call("propose_reschedule", {**move, "duration_minutes": 120}), say("A move keeps one hour. Want a new session instead?")))
-    assert reply["cards"] == []
+    steps = [call("move", {"booking_id": booking["id"], "new_time": "14:00", "duration_minutes": 120}), say("Here are the two cards.")]
+    reply = reply_of(chat.send("Move it to 2pm for two hours", *steps))
+    hold, cancel = reply["cards"]
+    assert hold["kind"] == "HOLD" and hold["when"]["time"] == "2:00 PM – 4:00 PM"
+    assert cancel["kind"] == "CANCEL" and cancel["booking_id"] == booking["id"]
     [result] = last_tool_results(chat.model.requests[-1]["messages"])
-    assert result["error"] == "LENGTH_CANNOT_CHANGE" and "60 minutes" in result["message"] and "hold_booking" in result["message"]
+    assert "keeps a booking's length (60 minutes)" in result["next_step"]
 
-    reply = reply_of(chat.send("Then just move it", call("propose_reschedule", move), say("Press Confirm to move it to 2:00 PM.")))
-    [result] = last_tool_results(chat.model.requests[-1]["messages"])
-    assert len(reply["cards"]) == 1 and result["length_minutes"] == 60 and "length stays 60 minutes" in result["next_step"]
+    # Without a new length it is an ordinary move, which keeps the hour.
+    other = _booked(client, chat.headers, service, sam, at(TUESDAY + timedelta(days=1), 10))
+    reply = reply_of(chat.send("Move the Wednesday one to 2pm", call("move", {"booking_id": other["id"], "new_time": "14:00"}), say("Press Confirm.")))
+    [card] = reply["cards"]
+    assert card["kind"] == "RESCHEDULE" and card["when"]["time"] == "2:00 PM – 3:00 PM"
 
 
 def test_a_held_booking_is_changed_by_replacing_it(db, make, gym, client, chat) -> None:
     service, sam = gym
     pat = make.resource("Coach Pat", services=[service], location=sam.location, hours=make.weekdays(time(9), time(17)))
-
-    def hold(resource, start=10, **extra):
-        return call("hold_booking", {"service_id": str(service.id), "resource_id": str(resource.id), "start": at(TUESDAY, start), "duration_minutes": 120, **extra})
-
-    reply_of(chat.send("Book Sam Tuesday 10 for two hours", hold(sam), say("Held 10:00 AM – 12:00 PM.")))
+    reply_of(chat.send("Book Sam Tuesday 10 for two hours", book(), say("Held 10:00 AM – 12:00 PM.")))
     [held] = last_tool_results(chat.model.requests[-1]["messages"])
 
-    # A time that is not free leaves the held booking alone.
+    # A time that is not free leaves the held booking alone, and offers the nearest free ones.
     _booked(client, chat.headers, service, pat, at(TUESDAY, 14))
-    reply_of(chat.send("Make it 2pm with Pat", hold(pat, 14, replaces_booking_id=held["booking_id"]), say("Sorry, that is taken.")))
+    reply = reply_of(chat.send("Make it 2pm with Pat", call("move", {"booking_id": held["booking_id"], "person": "Pat", "new_time": "14:00"}), say("Sorry, that is taken.")))
     [failed] = last_tool_results(chat.model.requests[-1]["messages"])
-    assert failed["error"] == "NOT_AVAILABLE"
+    assert failed["error"] == "NOT_AVAILABLE" and reply["choices"]
     db.expire_all()
     assert db.get(Booking, uuid.UUID(held["booking_id"])).status == BookingStatus.PENDING
 
-    # Something already booked is moved, not replaced.
-    other = _booked(client, chat.headers, service, sam, at(TUESDAY, 15))
-    reply_of(chat.send("Change my 3pm", hold(pat, 11, replaces_booking_id=other["id"]), say("Use a move for that.")))
-    assert last_tool_results(chat.model.requests[-1]["messages"])[0]["error"] == "NOT_A_HOLD"
-
-    reply = reply_of(chat.send("Change that to Pat", hold(pat, replaces_booking_id=held["booking_id"]), say("Held with Pat, 10:00 AM – 12:00 PM.")))
+    # "Change that to Pat": the hold is swapped, keeping its time and length.
+    reply = reply_of(chat.send("Change that to Pat", call("move", {"booking_id": held["booking_id"], "person": "Pat"}), say("Held with Pat instead.")))
     db.expire_all()
     assert db.get(Booking, uuid.UUID(held["booking_id"])).status == BookingStatus.CANCELLED
     [card] = reply["cards"]
-    assert card["resource"] == "Coach Pat" and card["status"] == "PENDING"
-    new = db.get(Booking, uuid.UUID(card["booking_id"]))
-    assert new.status == BookingStatus.PENDING and new.end_datetime - new.start_datetime == timedelta(hours=2)
+    assert card["kind"] == "HOLD" and card["resource"] == "Coach Pat" and card["when"]["time"] == "10:00 AM – 12:00 PM"
+
+
+def test_book_resolves_names_and_asks_when_it_is_not_sure(db, make, gym, chat) -> None:
+    service, sam = gym
+    training = make.service("Personal Training", duration=60, price=Decimal("30"))
+    make.resource("Coach Pat", services=[training], location=sam.location, hours=make.weekdays(time(9), time(17)))
+    make.resource("Sam Lee", services=[service], location=sam.location, hours=make.weekdays(time(9), time(17)))
+
+    def result_of(text, args):
+        reply = reply_of(chat.send(text, call("book", {"date": TUESDAY.isoformat(), "time": "10:00", **args}), say("Which one?")))
+        return reply, last_tool_results(chat.model.requests[-1]["messages"])[0]
+
+    # A name that is not in the catalogue is never guessed: the closest names are offered.
+    reply, result = result_of("Book personal coaching", {"service": "personal coaching"})
+    assert result["needs"] == "service" and "Personal Training" in reply["choices"]
+    assert "does not exist" in result["next_step"]  # told never to deny that an option exists
+    # Two people with that name: both are offered.
+    reply, result = result_of("Strength coaching with Sam", {"service": "strength coaching", "person": "Sam"})
+    assert result["needs"] == "person" and sorted(reply["choices"]) == ["Coach Sam", "Sam Lee"]
+    # Someone who doesn't offer the service: the people who do are offered.
+    reply, result = result_of("Strength coaching with Pat", {"service": "strength coaching", "person": "Pat"})
+    assert result["needs"] == "person" and "Coach Pat does not offer Strength coaching" in result["next_step"]
+    assert sorted(reply["choices"]) == ["Coach Sam", "Sam Lee"]
+    assert db.scalars(select(Booking)).all() == []
+
+    # Typos in a name that is clearly meant are fine.
+    reply, result = result_of("Book strenght coaching with Lee", {"service": "strenght coaching", "person": "Lee"})
+    assert result["held"] is True and result["booking"]["resource"] == "Sam Lee"
+
+
+def test_a_change_asks_which_booking_when_several_match(client, gym, chat) -> None:
+    service, sam = gym
+    _booked(client, chat.headers, service, sam, at(TUESDAY, 10))
+    _booked(client, chat.headers, service, sam, at(TUESDAY, 14))
+    reply = reply_of(chat.send("Cancel my Tuesday session", call("cancel", {"on_date": TUESDAY.isoformat()}), say("Which one?")))
+    [result] = last_tool_results(chat.model.requests[-1]["messages"])
+    assert len(result["which"]) == 2 and reply["cards"] == []
+    assert reply["choices"] == ["Strength coaching, Tue 02 Mar 2027, 10:00 AM", "Strength coaching, Tue 02 Mar 2027, 2:00 PM"]
+
+    reply = reply_of(chat.send("The 2pm one", call("cancel", {"on_date": TUESDAY.isoformat(), "around_time": "14:00"}), say("Press Confirm to cancel it.")))
+    [card] = reply["cards"]
+    assert card["kind"] == "CANCEL" and card["when"]["time"] == "2:00 PM – 3:00 PM"
 
 
 def test_a_reply_that_contradicts_its_card_is_replaced_by_the_card_in_words(client, gym, chat) -> None:
     service, sam = gym
     booking = _booked(client, chat.headers, service, sam, at(TUESDAY, 10))
-    steps = [call("propose_reschedule", {"booking_id": booking["id"], "new_start": at(TUESDAY, 14)}), say("I'll move it to **2:00 PM – 4:00 PM**. Press Confirm.")]
+    steps = [call("move", {"booking_id": booking["id"], "new_time": "14:00"}), say("I'll move it to **2:00 PM – 4:00 PM**. Press Confirm.")]
     reply = reply_of(chat.send("Move it to 2pm", *steps))
     assert "4:00 PM" not in reply["text"] and "**" not in reply["text"]
     assert "2:00 PM" in reply["text"] and "3:00 PM" in reply["text"] and "Coach Sam" in reply["text"]
@@ -665,7 +695,7 @@ def test_a_reply_that_contradicts_its_card_is_replaced_by_the_card_in_words(clie
 
     # A reply that agrees with the card is kept, minus any Markdown.
     other = _booked(client, chat.headers, service, sam, at(TUESDAY + timedelta(days=1), 10))
-    steps = [call("propose_reschedule", {"booking_id": other["id"], "new_start": at(TUESDAY + timedelta(days=1), 14)}), say("Moving it to **2:00 PM**. Press Confirm.")]
+    steps = [call("move", {"booking_id": other["id"], "new_time": "14:00"}), say("Moving it to **2:00 PM**. Press Confirm.")]
     assert reply_of(chat.send("And this one to 2pm", *steps))["text"] == "Moving it to 2:00 PM. Press Confirm."
 
 
@@ -678,7 +708,7 @@ def _find(user, **filters) -> dict:
     from app.services.chat import tools
 
     ctx = tools.ToolContext(user_id=user.id, conversation_id=_uuid.uuid4(), turn_id=_uuid.uuid4())
-    content, _ = tools.run("list_my_bookings", filters, ctx)
+    content, _ = tools.run("my_bookings", filters, ctx)
     return json.loads(content)
 
 
