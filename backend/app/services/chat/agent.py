@@ -1,19 +1,24 @@
 """One turn of the booking assistant: from the customer's message to the reply they see.
 
-    check the message (guards) -> model <-> tools, a few rounds -> check the reply (guards)
+    quick checks (rules, Prompt Guard) -> policy guard, while the model reads the message
+    -> model <-> tools, a few rounds -> check the reply (guards)
     -> show it, or throw the whole turn away and show the fixed reply
+
+Nothing the model answers is stored or acted on before the policy guard allows the message.
 
 Every message the model sees is stored in the OpenAI chat format and sent again
 on later turns (the most recent turns only). A turn that is blocked is kept for
 review but never sent to the model again, and any booking it held is released.
 """
 
+import contextvars
 import json
 import logging
 import re
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -308,8 +313,7 @@ def _refuse(turn: _Turn, reason: str, message: str, emit: Emit, *, strike: bool)
 
 
 def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emit) -> None:
-    db, user, conversation = turn.db, turn.user, turn.conversation
-    settings = get_settings()
+    db, conversation = turn.db, turn.conversation
     now = utcnow()
     if conversation.title == "New chat":
         conversation.title = text[:80]
@@ -321,11 +325,34 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
 
     emit("status", {"label": "Reading your message…"})
     with turn.timing.step("guard in"):
-        verdict: Verdict = guard.screen_input(text, previous)
+        verdict: Verdict = guard.screen_injection(text)
     if not verdict.allowed:
-        message = UNAVAILABLE if verdict.unavailable else fixed_reply(db)
-        _refuse(turn, verdict.stored_reason, message, emit, strike=not verdict.unavailable)
+        _block(turn, verdict, emit)
         return
+    # The policy guard reads the message while the model does: nothing the model answers
+    # is stored or acted on until the guard has allowed the message.
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        policy = pool.submit(contextvars.copy_context().run, _screen_policy, guard, turn.timing, text, previous)
+        _converse(turn, model, guard, emit, policy)
+    finally:
+        pool.shutdown(wait=False)
+
+
+def _screen_policy(guard: GuardClient, timing: TurnTiming, text: str, previous: str | None) -> Verdict:
+    with timing.step("guard policy"):
+        return guard.screen_policy(text, previous)
+
+
+def _block(turn: _Turn, verdict: Verdict, emit: Emit) -> None:
+    message = UNAVAILABLE if verdict.unavailable else fixed_reply(turn.db)
+    _refuse(turn, verdict.stored_reason, message, emit, strike=not verdict.unavailable)
+
+
+def _converse(turn: _Turn, model: ChatModel, guard: GuardClient, emit: Emit, policy: Future[Verdict] | None) -> None:
+    db, user, conversation = turn.db, turn.user, turn.conversation
+    settings = get_settings()
+    now = utcnow()
 
     events = proposals.report(db, conversation.id, user, now)
     turn.add(ChatRole.SYSTEM, {"role": "system", "content": prompt.turn_note(db, user, now, events)})
@@ -343,22 +370,34 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
         messages = _history(db, conversation.id)
         if problem:
             messages.append({"role": "system", "content": f"{TOOL_CALL_HINT} Problem: {problem}"})
+        failure: Exception | None = None
         try:
             with turn.timing.step("model") as notes:
                 result = model.run_turn(system=system, tools=definitions, messages=messages)
                 notes.append(f"{result.input_tokens} in, {result.output_tokens} out tokens")
-        except ToolCallFailed as exc:
+        except Exception as exc:
+            failure = exc
+        if policy is not None:
+            # The first answer waits for the policy guard before anything is done with it.
+            verdict = policy.result()
+            policy = None
+            if not verdict.allowed:
+                _block(turn, verdict, emit)
+                return
+        if isinstance(failure, ToolCallFailed):
             # The model wrote a tool call the server couldn't read: ask again, with a hint.
             rejected += 1
-            problem = str(exc)
-            log.warning("Model tool call rejected (%s of %s): %s | %s", rejected, MAX_TOOL_CALL_RETRIES + 1, exc, exc.failed_generation)
+            problem = str(failure)
+            log.warning("Model tool call rejected (%s of %s): %s | %s", rejected, MAX_TOOL_CALL_RETRIES + 1, failure, failure.failed_generation)
             if rejected > MAX_TOOL_CALL_RETRIES:
                 _refuse(turn, "tool call failed", TOO_COMPLEX, emit, strike=False)
                 return
             continue
-        except RateLimited as exc:
-            _refuse(turn, "rate limited", BUSY if exc.retry_after <= 120 else OUT_FOR_TODAY, emit, strike=False)
+        if isinstance(failure, RateLimited):
+            _refuse(turn, "rate limited", BUSY if failure.retry_after <= 120 else OUT_FOR_TODAY, emit, strike=False)
             return
+        if failure is not None:
+            raise failure
         last_stop = result.stop_reason
         row = turn.add(ChatRole.ASSISTANT, result.message, input_tokens=result.input_tokens, output_tokens=result.output_tokens)
         conversation.input_tokens += result.input_tokens

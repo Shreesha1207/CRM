@@ -225,16 +225,29 @@ class GuardClient:
     # The two checks the assistant runs.
 
     def screen_input(self, text: str, previous_reply: str | None) -> Verdict:
+        verdict = self.screen_injection(text)
+        return self.screen_policy(text, previous_reply) if verdict.allowed else verdict
+
+    def screen_injection(self, text: str) -> Verdict:
+        """The quick checks: the rules, then Prompt Guard. Anything they stop never reaches the model."""
         verdict = rule_check_input(text, self.settings)
-        if not verdict.allowed:
+        if not verdict.allowed or not self.settings.guard_injection_model:
             return verdict
         try:
-            if self.settings.guard_injection_model:
-                score = self.injection_score(text)
-                if score is None:
-                    return Verdict(False, "injection", "unreadable answer", unavailable=True)
-                if score >= self.settings.guard_injection_threshold:
-                    return Verdict(False, "injection", f"score {score:.2f}")
+            score = self.injection_score(text)
+        except GuardError as exc:
+            log.warning("Input guard unavailable: %s", exc)
+            return Verdict(False, "policy", "unavailable", unavailable=True)
+        if score is None:
+            return Verdict(False, "injection", "unreadable answer", unavailable=True)
+        if score >= self.settings.guard_injection_threshold:
+            return Verdict(False, "injection", f"score {score:.2f}")
+        return ALLOW
+
+    def screen_policy(self, text: str, previous_reply: str | None) -> Verdict:
+        """The policy guard: is the message about the business's bookings? It may run while
+        the model reads the message, so it must not touch the database session."""
+        try:
             allowed = self.policy(_input_prompt(text, previous_reply))
         except GuardError as exc:
             log.warning("Input guard unavailable: %s", exc)
