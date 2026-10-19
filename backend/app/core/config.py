@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     chat_strike_limit: int = 3
     chat_strike_window_minutes: int = 10
     chat_pause_minutes: int = 60
+    # Contacting the admin from the chat: the reply customers are promised, and how often they can ask.
+    chat_help_response_hours: int = 6
+    chat_help_requests_per_week: int = 3
 
     @property
     def chat_configured(self) -> bool:

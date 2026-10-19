@@ -1,4 +1,5 @@
-"""Background jobs: reminder scheduling and notification delivery.
+"""Background jobs: reminder scheduling, notification delivery, expired chat holds
+and overdue help requests.
 
 Runs inside the API process on an interval. A PostgreSQL advisory lock makes
 sure only one process does the work when several replicas are running.
@@ -13,7 +14,7 @@ from app.core.config import get_settings
 from app.core.timeutils import utcnow
 from app.db.session import SessionLocal, engine
 from app.services import notifications
-from app.services.chat import holds
+from app.services.chat import help, holds
 
 log = logging.getLogger("jobs")
 JOB_LOCK_ID = 841_732_001
@@ -40,6 +41,7 @@ def run_once() -> None:
         try:
             with SessionLocal() as db:
                 holds.release_expired(db, utcnow())
+                help.remind_overdue(db, utcnow())
                 notifications.queue_reminders(db, utcnow())
                 notifications.dispatch_pending(db)
         finally:

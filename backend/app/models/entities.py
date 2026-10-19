@@ -26,6 +26,7 @@ from app.db.base import Base, Timestamps, UUIDPk
 from app.models.enums import (
     BookingStatus,
     BookingType,
+    ChatHelpStatus,
     ChatProposalKind,
     ChatProposalStatus,
     ChatRole,
@@ -346,6 +347,8 @@ class Notification(UUIDPk, Base):
     )
     # Unique so a reminder can never be recorded (and therefore sent) twice.
     dedupe_key: Mapped[str | None] = mapped_column(String(300), unique=True)
+    # Where the notification leads in the app, when not to a booking (e.g. a help request).
+    link: Mapped[str | None] = mapped_column(String(300))
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
@@ -456,6 +459,35 @@ class ChatMessage(UUIDPk, Base):
     __table_args__ = (
         Index("uq_chat_messages_conversation_seq", "conversation_id", "seq", unique=True),
         CheckConstraint("feedback IN (-1, 1)", name="feedback_valid"),
+    )
+
+
+class ChatHelpRequest(UUIDPk, Base):
+    """A customer asked the admin to contact them about a problem, from the chat.
+
+    `transcript` is the whole chat as it was when they asked, so the admin has the
+    context even if the conversation goes on. A customer has at most one open request.
+    """
+
+    __tablename__ = "chat_help_requests"
+
+    conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_conversations.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    transcript: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    status: Mapped[ChatHelpStatus] = mapped_column(_enum(ChatHelpStatus), default=ChatHelpStatus.OPEN)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # By when the customer was promised a reply.
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    resolution_note: Mapped[str | None] = mapped_column(Text)
+
+    user: Mapped["User"] = relationship(foreign_keys=[user_id])
+
+    __table_args__ = (
+        Index("uq_chat_help_requests_open", "user_id", unique=True, postgresql_where=text("status = 'OPEN'")),
     )
 
 

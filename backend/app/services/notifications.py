@@ -65,6 +65,7 @@ def notify(
     dedupe_key: str | None = None,
     channels=DEFAULT_CHANNELS,
     email_body: str | None = None,
+    link: str | None = None,
 ) -> None:
     recipient = db.get(User, user_id)
     if recipient is not None and recipient.status == UserStatus.INVITED:
@@ -75,6 +76,7 @@ def notify(
         values = dict(
             user_id=user_id,
             booking_id=booking_id,
+            link=link,
             type=type,
             channel=channel,
             title=title,

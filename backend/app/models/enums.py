@@ -100,6 +100,12 @@ class NotificationType(StrEnum):
     PASSWORD_RESET = "PASSWORD_RESET"
     INVITATION_ACCEPTED = "INVITATION_ACCEPTED"
     INVITATION_DECLINED = "INVITATION_DECLINED"
+    # A customer asked the admin to contact them from the booking assistant.
+    CHAT_HELP_REQUESTED = "CHAT_HELP_REQUESTED"
+    CHAT_HELP_OVERDUE = "CHAT_HELP_OVERDUE"
+    # To the customer: the request was received, and later resolved.
+    CHAT_HELP_RECEIVED = "CHAT_HELP_RECEIVED"
+    CHAT_HELP_RESOLVED = "CHAT_HELP_RESOLVED"
 
 
 class InvitationStatus(StrEnum):
@@ -141,6 +147,11 @@ class ChatProposalKind(StrEnum):
     # Changes to an existing booking, made only when the customer confirms.
     RESCHEDULE = "RESCHEDULE"
     CANCEL = "CANCEL"
+
+
+class ChatHelpStatus(StrEnum):
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
 
 
 class ChatProposalStatus(StrEnum):

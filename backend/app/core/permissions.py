@@ -23,6 +23,8 @@ class Permission(StrEnum):
     SETTINGS_MANAGE = "settings:manage"
     REPORTS_VIEW = "reports:view"
     AUDIT_VIEW = "audit:view"
+    # Read the chats customers sent to the admin, and close their requests.
+    CHAT_REVIEW = "chat:review"
     # Super admin only: grant or take away admin-console roles, change admin accounts.
     ADMINS_MANAGE = "admins:manage"
     # Super admin only: delete accounts outright.

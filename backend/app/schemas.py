@@ -613,6 +613,7 @@ class ConflictResolveIn(BaseModel):
 class NotificationOut(ORM):
     id: uuid.UUID
     booking_id: uuid.UUID | None
+    link: str | None = None
     type: NotificationType
     channel: NotificationChannel
     title: str
