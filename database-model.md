@@ -236,6 +236,7 @@ This is the **database-level backstop**: two active rows for the same resource m
 | `body` | text | |
 | `status` | enum `NotificationStatus` | `PENDING` → `SENT` / `FAILED` / `SKIPPED` (transactional outbox pattern) |
 | `dedupe_key` | varchar(300), nullable, **unique** | guarantees a reminder is never recorded — and therefore never sent — twice |
+| `link` | varchar(300), nullable | where it leads in the app when not to a booking, e.g. `/admin/help/:id` |
 | `read_at`, `sent_at` | timestamptz, nullable | |
 | `error` | text, nullable | delivery failure detail |
 | `created_at` | timestamptz | |
@@ -309,15 +310,30 @@ A booking the assistant holds for the customer (`HOLD`), or a change it offers (
 | `conversation_id` | uuid FK → `chat_conversations.id`, cascade | indexed |
 | `user_id` | uuid FK → `users.id`, cascade | indexed |
 | `turn_id` | uuid | indexed; a blocked turn's proposals are withdrawn |
-| `kind` | enum `ChatProposalKind` | `HOLD`, `RESCHEDULE`, `CANCEL` |
+| `kind` | enum `ChatProposalKind` | `HOLD`, `RESCHEDULE`, `CANCEL`, `HANDOFF` (send the customer's problem to the admin) |
 | `status` | enum `ChatProposalStatus` | `PENDING` (held / waiting for the customer) → `CONFIRMED` / `DECLINED` / `EXPIRED` / `FAILED` |
 | `booking_id` | uuid FK → `bookings.id`, `SET NULL`, nullable | HOLD: the held `PENDING` booking; otherwise the booking to change. Partial unique index `uq_chat_proposals_open_hold` on open HOLDs |
-| `payload` | jsonb | RESCHEDULE: `{new_start, resource_id}` |
+| `payload` | jsonb | RESCHEDULE: `{new_start, resource_id}`; HANDOFF: `{summary, request_id}` |
 | `result_booking_id` | uuid FK → `bookings.id`, `SET NULL`, nullable | the booking after a confirmed move |
 | `result_message` | text, nullable | why it failed or ended |
 | `expires_at` | timestamptz | a HOLD's time is released after this (`CHAT_HOLD_MINUTES`, default 10) |
 | `reported_at` | timestamptz, nullable | when the assistant was told how it ended |
 | `created_at`, `updated_at` | timestamptz | |
+
+### `chat_help_requests`
+A customer asked the admin to contact them about a problem, from the booking assistant. The only customer chats staff can read are those with a request.
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid PK | |
+| `conversation_id` | uuid FK → `chat_conversations.id`, cascade | indexed |
+| `user_id` | uuid FK → `users.id`, cascade | indexed; partial unique index `uq_chat_help_requests_open` on `status = 'OPEN'`: one open request per customer |
+| `summary` | text | the problem in the customer's words (20–500 characters) |
+| `transcript` | jsonb | the whole chat when it was sent, as the customer saw it, with blocked messages and their reason |
+| `status` | enum `ChatHelpStatus` | `OPEN` → `RESOLVED` |
+| `created_at` | timestamptz | |
+| `due_at` | timestamptz | indexed; `created_at` + `CHAT_HELP_RESPONSE_HOURS` (6): the reply time promised to the customer |
+| `reminded_at` | timestamptz, nullable | when the admins were reminded it is overdue (once) |
+| `resolved_at`, `resolved_by_id`, `resolution_note` | timestamptz / uuid FK → `users.id` `SET NULL` / text, nullable | who closed it, when, and the note the customer sees |
 
 ## 3. Enumerations (`app/models/enums.py`)
 

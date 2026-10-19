@@ -137,6 +137,18 @@ GROQ_API_KEY=gsk_...
 - The model never sees SQL, tables or other customers: its only access is six fixed tools that take names and times, return small JSON and run as the signed-in customer. The browser sends only the new message; the server keeps and replays the history, so nobody can plant fake turns.
 - Per-customer limits: `CHAT_MESSAGES_PER_MINUTE` (10), `CHAT_DAILY_MESSAGE_LIMIT` (60), `CHAT_DAILY_TOKEN_LIMIT` (500k), 40 messages per conversation, 8 tool rounds per message, one reply at a time per conversation.
 
+**Contacting the admin.** When a customer has a real problem the assistant can't solve (a double charge, a complaint, something that went wrong), they can pass it to the admin. Only the customer can start it, and only for a real problem:
+- *Through the assistant.* When they report such a problem or insist on a person, it shows a card with the problem in their words: "Send this to the admin? … They'll contact you within 6 hours", with **Send to admin** / **No thanks**. Nothing is sent before they press Send.
+- *After a failure.* When the assistant couldn't finish or was unavailable, a **Contact admin** button lets them describe what went wrong (20–500 characters).
+- *Limits:* one open request per customer, at most `CHAT_HELP_REQUESTS_PER_WEEK` (3) a week, none while paused for blocked messages, and the description goes through the same checks as messages. Failures, thumbs-down and blocked messages on their own notify no one.
+
+Once sent:
+- The customer sees **"Your issue has been passed to the admin. They will contact you by e-mail or phone within 6 hours (by Tue 20 Oct, 2:23 AM)"** (`CHAT_HELP_RESPONSE_HOURS`, default 6).
+- Admins, super admins and managers (permission `chat:review`) get it in the app and by e-mail, with the description, the customer's e-mail and phone, the due time and the **whole chat**.
+- The admin console's **Help requests** page lists open requests ("due in 3h", "overdue by 40m"). Each request shows the problem, the contact details, the customer's upcoming bookings, and the whole chat as they saw it (including anything said since). **Mark resolved** takes an optional note the customer sees. A request still open past its due time reminds the admins once.
+
+Staff can read only chats that a customer sent this way, and every opening is written to the audit log. The chat page tells customers so.
+
 **The paywall is a demo.** **Pay** just activates a `chat_subscriptions` row; nothing is charged. To take real payments, send **Pay** to a payment provider's checkout (e.g. Stripe Checkout) and set the row from its webhook (`status=ACTIVE` on payment, `CANCELLED` when the subscription ends).
 
 **Where the time goes.** The backend log has one line per message, for example `Chat turn 3120 ms: guard in 180 ms, model 1250 ms (2900 in, 60 out tokens), guard policy 640 ms, book 35 ms, model 820 ms (...), guard out 410 ms; waited 10 s for rate limits`, so a slow reply can be traced to the model, the guards, a tool or Groq's rate limits.
@@ -358,7 +370,8 @@ Interactive docs: `http://localhost:8000/api/docs` (development only).
 | Availability | `GET /api/availability?service_id&date[&resource_id][&location_id][&quantity][&duration_minutes]`, `GET /api/availability/alternatives` |
 | Bookings | `POST/GET /api/bookings`, `GET /api/bookings/:id`, `POST /api/bookings/:id/cancel · reschedule`, `POST /api/bookings/recurring[/preview]` |
 | Notifications | `GET /api/notifications`, `GET /api/notifications/unread-count`, `POST /api/notifications/:id/read · read-all` |
-| Booking assistant | `GET/POST/DELETE /api/chat/subscription` (demo paywall), `GET/POST /api/chat/conversations`, `GET /api/chat/conversations/:id`, `POST /api/chat/conversations/:id/messages` (server-sent events: `status`, then the checked `reply`), `POST /api/chat/proposals/:id/confirm · decline`, `POST /api/chat/messages/:id/feedback` |
+| Booking assistant | `GET/POST/DELETE /api/chat/subscription` (demo paywall), `GET/POST /api/chat/conversations`, `GET /api/chat/conversations/:id`, `POST /api/chat/conversations/:id/messages` (server-sent events: `status`, then the checked `reply`), `POST /api/chat/proposals/:id/confirm · decline`, `POST /api/chat/conversations/:id/help` (contact the admin), `POST /api/chat/messages/:id/feedback` |
+| Admin: help requests | `GET /api/admin/help-requests?status=open\|resolved`, `GET /api/admin/help-requests/count`, `GET /api/admin/help-requests/:id` (audited), `POST /api/admin/help-requests/:id/resolve` |
 | Booking invitations | `GET /api/invitations/:token`, `POST /api/invitations/:token/accept · decline` (public; the e-mailed token is the credential) |
 | Admin: bookings | `GET/POST /api/admin/bookings`, `POST /api/admin/bookings/invite` (book for an e-mail with no account: the booking goes on the calendar as pending and the person is e-mailed a link to create an account and confirm it; declining cancels it), `GET/PUT /api/admin/bookings/:id`, `POST …/:id/cancel · reschedule · reassign · confirm · complete · no-show`, `GET …/:id/history` |
 | Admin: conflicts | `GET /api/admin/conflicts[/:id]`, `POST /api/admin/conflicts/:id/resolve` |

@@ -225,6 +225,20 @@ The model has no tool that confirms, declines or cancels anything. Those are the
 
 **Where the time goes.** Each turn logs one line, for example `Chat turn 3120 ms: guard in 180 ms, model 1250 ms (2900 in, 60 out tokens), guard policy 640 ms, book 35 ms, model 820 ms (...), guard out 410 ms; waited 10 s for rate limits`. The policy guard runs in parallel with the first model call. The model talks on `gpt-oss-120b` and the guard on `gpt-oss-20b`, so each model uses its own share of Groq's per-model limits.
 
+#### 5.4.2 Contacting the admin
+
+Only the customer can start it, and only for a real problem:
+- through the assistant's `contact_admin` tool, which only shows a HANDOFF card the customer must confirm (**Send to admin**);
+- or, after a turn the assistant couldn't finish, with their own description (`POST /api/chat/conversations/:id/help`).
+
+`chat/help.request_help` then:
+1. Checks the gates: a plain-words description of 20–500 characters; one open request per customer (also a partial unique index); `CHAT_HELP_REQUESTS_PER_WEEK` a week; not while paused.
+2. Stores the description with a **snapshot of the whole chat** (`chat_help_requests`), due `CHAT_HELP_RESPONSE_HOURS` (6) later.
+3. Adds the confirmation to the chat ("…they will contact you by e-mail or phone within 6 hours (by …)").
+4. Notifies everyone with `chat:review` in the app and by e-mail. The e-mail carries the description, contact details, due time and the chat as text.
+
+The background job reminds them once when a request is overdue. The admin API (`/api/admin/help-requests`) is the only way staff read customer chats, and each opening is audited (`CHAT_VIEWED`).
+
 ## 6. Concurrency & data-integrity architecture
 
 Two independent layers, deliberately redundant:
@@ -261,7 +275,7 @@ graph LR
 
 ## 9. Background job architecture
 
-`run_once()` takes a PostgreSQL advisory lock before doing any work, so with N API replicas exactly one of them queues reminders and dispatches e-mail on any given tick — the others see the lock held and return immediately. This is the mechanism verified in `OPS-07` of the end-to-end test plan (two replicas, still exactly one reminder per booking).
+Each run releases chat holds nobody confirmed, reminds admins once about help requests past their due time, queues booking reminders and dispatches pending notifications. `run_once()` takes a PostgreSQL advisory lock before doing any work, so with N API replicas exactly one of them queues reminders and dispatches e-mail on any given tick — the others see the lock held and return immediately. This is the mechanism verified in `OPS-07` of the end-to-end test plan (two replicas, still exactly one reminder per booking).
 
 > A production incident class this design has to guard against: the lock and the work must run on the **same** database connection, or a connection-pooled `Session` can return the lock-holding connection to the pool mid-job and release the lock from a *different* connection, which silently fails and leaves the lock stuck. `runner.py` takes the lock on one dedicated connection (`engine.connect()`, autocommit) and does the actual work in its own `Session`, precisely to avoid this. This was found and fixed during end-to-end testing — see `docs/e2e-test-results.md`, case `NTF-08`.
 
