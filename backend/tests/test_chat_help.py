@@ -214,3 +214,47 @@ def _stranger(db):
     from tests.conftest import Factory
 
     return Factory(db).user("stranger@test.io", name="Stranger")
+
+
+# ---------------------------------------------------------------- the admin side
+
+
+def test_admins_see_only_the_chats_sent_to_them_and_every_opening_is_audited(client, db, user, chat, staff) -> None:
+    from app.models import AuditLog
+    from tests.conftest import auth_headers
+
+    admin, _, staff_member = staff
+    admin_headers = auth_headers(client, admin.email)
+    reply_of(chat.send("Hi", say("Hello! How can I help?")))
+    # A chat nobody sent: invisible.
+    assert client.get("/api/admin/help-requests", headers=admin_headers).json() == []
+
+    request = _send(db, user, chat)
+    reply_of(chat.send("Any news?", say("The admin will contact you soon.")))
+
+    # Customers and staff without the permission can't read them.
+    assert client.get("/api/admin/help-requests", headers=chat.headers).status_code == 403
+    assert client.get("/api/admin/help-requests", headers=auth_headers(client, staff_member.email)).status_code == 403
+
+    [listed] = client.get("/api/admin/help-requests", headers=admin_headers).json()
+    assert listed["summary"] == PROBLEM and listed["customer"]["email"] == user.email and listed["overdue"] is False
+    assert client.get("/api/admin/help-requests/count", headers=admin_headers).json() == {"open": 1, "overdue": 0}
+
+    detail = client.get(f"/api/admin/help-requests/{request.id}", headers=admin_headers).json()
+    assert [i["text"] for i in detail["transcript"]] == ["Hi", "Hello! How can I help?"]
+    assert [i["text"] for i in detail["since"]][-2:] == ["Any news?", "The admin will contact you soon."]
+    assert detail["since"][0]["text"].startswith("Your issue has been passed to the admin")
+    assert detail["bookings"] == []
+    db.expire_all()
+    [viewed] = db.scalars(select(AuditLog).where(AuditLog.action == "CHAT_VIEWED")).all()
+    assert viewed.actor_id == admin.id and str(viewed.entity_id) == str(request.id)
+    assert client.get(f"/api/admin/help-requests/{uuid.uuid4()}", headers=admin_headers).status_code == 404
+
+    freeze_time(NOW + timedelta(hours=7))
+    assert client.get("/api/admin/help-requests/count", headers=admin_headers).json() == {"open": 1, "overdue": 1}
+    resolved = client.post(f"/api/admin/help-requests/{request.id}/resolve", headers=admin_headers, json={"note": "Called them; refunded."})
+    assert resolved.json()["status"] == "RESOLVED" and resolved.json()["resolved_by"] == "Admin"
+    assert client.get("/api/admin/help-requests", headers=admin_headers).json() == []
+    [done] = client.get("/api/admin/help-requests", headers=admin_headers, params={"status": "resolved"}).json()
+    assert done["resolution_note"] == "Called them; refunded."
+    assert client.post(f"/api/admin/help-requests/{request.id}/resolve", headers=admin_headers, json={}).status_code == 409
