@@ -286,6 +286,8 @@ export interface ScheduleChange<T = unknown> {
 export interface NotificationItem {
   id: string;
   booking_id: string | null;
+  /** Where it leads, when not to a booking (e.g. a help request). */
+  link?: string | null;
   type: string;
   channel: string;
   title: string;
@@ -409,10 +411,11 @@ export interface ChatWhen {
 export type ChatCardStatus = "PENDING" | "CONFIRMED" | "DECLINED" | "EXPIRED" | "FAILED";
 
 /** A booking the assistant holds (HOLD), or a change it offers (RESCHEDULE, CANCEL),
- * with the same details as the booking e-mails. */
+ * with the same details as the booking e-mails; or an offer to send the customer's
+ * problem to the admin (HANDOFF). */
 export interface ChatCard {
   id: string;
-  kind: "HOLD" | "RESCHEDULE" | "CANCEL";
+  kind: "HOLD" | "RESCHEDULE" | "CANCEL" | "HANDOFF";
   status: ChatCardStatus;
   expires_at: string;
   result_message: string | null;
@@ -427,6 +430,9 @@ export interface ChatCard {
   map_url?: string | null;
   price?: string | null;
   booking_status?: BookingStatus;
+  /** HANDOFF: the problem in the customer's words, and the reply time promised. */
+  summary?: string;
+  response_hours?: number;
 }
 
 export interface ChatItem {
@@ -436,6 +442,8 @@ export interface ChatItem {
   choices: string[];
   cards: ChatCard[];
   paused: boolean;
+  /** The assistant failed: the customer may send their problem to the admin. */
+  contact_admin?: boolean;
   feedback: 1 | -1 | null;
   created_at: string;
 }
@@ -444,4 +452,41 @@ export interface ChatConversationDetail extends ChatConversation {
   items: ChatItem[];
   starters: string[];
   hold_minutes: number;
+}
+
+/** A problem a customer sent to the admin from the booking assistant. */
+export interface HelpRequest {
+  id: string;
+  conversation_id: string;
+  status: "OPEN" | "RESOLVED";
+  summary: string;
+  created_at: string;
+  due_at: string;
+  overdue: boolean;
+  customer: { id: string; name: string; email: string; phone: string | null };
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution_note: string | null;
+}
+
+/** One message of the chat the admin reads: what the customer saw, and what was blocked. */
+export interface HelpChatItem extends ChatItem {
+  kind: "user" | "assistant" | "notice";
+  blocked: string | null;
+}
+
+export interface HelpBooking {
+  id: string;
+  service: string;
+  resource: string;
+  date: string;
+  time: string;
+  timezone: string;
+  status: string;
+}
+
+export interface HelpRequestDetail extends HelpRequest {
+  transcript: HelpChatItem[];
+  since: HelpChatItem[];
+  bookings: HelpBooking[];
 }

@@ -7,6 +7,7 @@ import { BookingDetailPage, BookingsPage, DashboardPage, ProfilePage } from "./p
 import { AdminBookingsPage } from "./pages/admin/bookings";
 import { AdminCalendarPage } from "./pages/admin/calendar";
 import { AdminLocationsPage, AdminResourcesPage, AdminServicesPage } from "./pages/admin/catalog";
+import { AdminHelpPage, AdminHelpRequestPage } from "./pages/admin/help";
 import { AdminLoginPage } from "./pages/admin/login";
 import { AdminConflictsPage, AdminOverviewPage } from "./pages/admin/overview";
 import { AdminSchedulesPage } from "./pages/admin/schedules";
@@ -49,6 +50,8 @@ export function App() {
         <Route path="calendar" element={<AdminCalendarPage />} />
         <Route path="bookings" element={<AdminBookingsPage />} />
         <Route path="conflicts" element={<AdminConflictsPage />} />
+        <Route path="help" element={<AdminHelpPage />} />
+        <Route path="help/:id" element={<AdminHelpRequestPage />} />
         <Route path="resources" element={<AdminResourcesPage />} />
         <Route path="services" element={<AdminServicesPage />} />
         <Route path="schedules" element={<AdminSchedulesPage />} />

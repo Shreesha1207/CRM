@@ -157,7 +157,7 @@ export function NotificationBell({ bookingPath }: { bookingPath: (id: string) =>
             {list.data?.map((n) => (
               <Link
                 key={n.id}
-                to={n.booking_id ? bookingPath(n.booking_id) : "#"}
+                to={n.link ?? (n.booking_id ? bookingPath(n.booking_id) : "#")}
                 onClick={() => {
                   setOpen(false);
                   if (!n.read_at) readOne.mutate(n.id);

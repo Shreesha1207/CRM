@@ -101,7 +101,7 @@ function countdown(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-const KIND_LABEL = { HOLD: "Held for you", RESCHEDULE: "Move booking", CANCEL: "Cancel booking" } as const;
+const KIND_LABEL = { HOLD: "Held for you", RESCHEDULE: "Move booking", CANCEL: "Cancel booking", HANDOFF: "Contact admin" } as const;
 
 function outcome(card: ChatCard): string {
   if (card.status === "FAILED") return card.result_message ?? "That didn't work, so nothing changed.";
