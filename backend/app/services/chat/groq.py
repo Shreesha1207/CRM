@@ -3,6 +3,7 @@ model and its guards. Any OpenAI-compatible server (e.g. Ollama) works too."""
 
 import logging
 import time
+from contextvars import ContextVar
 from typing import Any
 
 import requests
@@ -15,6 +16,9 @@ log = logging.getLogger("chat.groq")
 # MAX_RATE_LIMIT_WAITS waits are made for one request.
 MAX_WAIT_SECONDS = 20.0
 MAX_RATE_LIMIT_WAITS = 2
+
+# The rate-limit waits of the current chat turn, for its timing log (None outside a turn).
+rate_limit_waits: ContextVar[list[float] | None] = ContextVar("rate_limit_waits", default=None)
 
 
 class GroqError(Exception):
@@ -82,6 +86,8 @@ class GroqClient:
                 if waits < MAX_RATE_LIMIT_WAITS and wait <= MAX_WAIT_SECONDS:
                     waits += 1
                     log.info("Rate limited by %s, waiting %.1f s", model, wait)
+                    if (waited := rate_limit_waits.get()) is not None:
+                        waited.append(wait)
                     time.sleep(wait)
                     continue
                 raise RateLimited(wait)

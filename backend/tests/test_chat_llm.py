@@ -78,6 +78,20 @@ def test_a_short_rate_limit_is_waited_out_and_a_long_one_is_reported(monkeypatch
     assert limited.value.retry_after == 3600
 
 
+def test_rate_limit_waits_are_counted_for_the_turn(monkeypatch) -> None:
+    from app.services.chat.groq import rate_limit_waits
+
+    m = model()
+    fake_http(monkeypatch, m.client, [FakeResponse(429, headers={"retry-after": "3"}), completion("Hi")])
+    waited: list[float] = []
+    token = rate_limit_waits.set(waited)
+    try:
+        m.run_turn(system="s", tools=[], messages=MESSAGES)
+    finally:
+        rate_limit_waits.reset(token)
+    assert waited == [3.0]
+
+
 def test_server_errors_are_retried_once_and_bad_tool_calls_are_reported(monkeypatch) -> None:
     m = model()
     answers = [FakeResponse(503), completion("Hi")]

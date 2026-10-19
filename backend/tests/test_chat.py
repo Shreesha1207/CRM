@@ -150,6 +150,16 @@ def test_the_prompt_lists_the_catalogue_and_the_next_days(gym, chat, monkeypatch
     assert "<catalogue>" not in chat.model.requests[-1]["system"] and "list_services" in chat.model.requests[-1]["system"]
 
 
+def test_each_turn_logs_where_its_time_went(gym, chat, caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.INFO, logger="chat")
+    reply_of(chat.send("Any coaching?", call("list_services", {}), say("Yes, Strength coaching.")))
+    [line] = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Chat turn")]
+    assert "guard in" in line and "guard out" in line and "list_services" in line
+    assert line.count("model ") == 2 and "100 in, 20 out tokens" in line
+
+
 def test_confirm_books_it_and_sends_the_normal_confirmation(client, db, gym, chat) -> None:
     service, sam = gym
     [card] = reply_of(chat.send("Book coaching with Sam Tuesday 10 for 2 hours", *hold_steps(service, sam)))["cards"]

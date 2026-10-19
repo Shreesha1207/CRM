@@ -11,9 +11,11 @@ review but never sent to the model again, and any booking it held is released.
 import json
 import logging
 import re
+import time
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -28,7 +30,7 @@ from app.db.session import SessionLocal
 from app.models import ChatConversation, ChatMessage, ChatProposal, ChatSubscription, User
 from app.models.enums import ChatRole
 from app.services import settings_service
-from app.services.chat import prompt, proposals, tools
+from app.services.chat import groq, prompt, proposals, tools
 from app.services.chat.groq import RateLimited, ToolCallFailed
 from app.services.chat.guard import GuardClient, Verdict
 from app.services.chat.llm import ChatModel
@@ -177,11 +179,37 @@ def last_reply(db: Session, conversation_id: uuid.UUID) -> str | None:
 
 
 @dataclass
+class TurnTiming:
+    """Where a turn's time went: logged as one line per turn."""
+
+    started: float = field(default_factory=time.perf_counter)
+    steps: list[str] = field(default_factory=list)
+    waits: list[float] = field(default_factory=list)
+
+    @contextmanager
+    def step(self, label: str) -> Iterator[list[str]]:
+        """Times the block; anything appended to the yielded list is shown after it."""
+        started = time.perf_counter()
+        notes: list[str] = []
+        try:
+            yield notes
+        finally:
+            ms = (time.perf_counter() - started) * 1000
+            self.steps.append(f"{label} {ms:.0f} ms" + (f" ({', '.join(notes)})" if notes else ""))
+
+    def summary(self) -> str:
+        total = (time.perf_counter() - self.started) * 1000
+        waited = f"; waited {sum(self.waits):.0f} s for rate limits" if self.waits else ""
+        return f"Chat turn {total:.0f} ms: " + ", ".join(self.steps) + waited
+
+
+@dataclass
 class _Turn:
     db: Session
     conversation: ChatConversation
     user: User
     turn_id: uuid.UUID
+    timing: TurnTiming = field(default_factory=TurnTiming)
 
     def add(self, role: ChatRole, content: Any, **fields) -> ChatMessage:
         seq = (self.db.scalar(select(func.max(ChatMessage.seq)).where(ChatMessage.conversation_id == self.conversation.id)) or 0) + 1
@@ -247,6 +275,7 @@ def run_turn(
         conversation = db.get(ChatConversation, conversation_id)
         user = db.get(User, user_id)
         turn = _Turn(db, conversation, user, uuid.uuid4())
+        waits = groq.rate_limit_waits.set(turn.timing.waits)
         try:
             _run(turn, text, model, guard, emit)
         except Exception:
@@ -257,6 +286,8 @@ def run_turn(
             notice = turn.add(ChatRole.NOTICE, None, display={"text": UNAVAILABLE})
             emit("reply", _reply(db, user, notice))
         finally:
+            groq.rate_limit_waits.reset(waits)
+            log.info(turn.timing.summary())
             db.rollback()
             db.execute(update(ChatConversation).where(ChatConversation.id == conversation_id).values(busy_until=None))
             db.commit()
@@ -289,7 +320,8 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
     turn.add(ChatRole.USER, {"role": "user", "content": text}, display={"text": text})
 
     emit("status", {"label": "Reading your message…"})
-    verdict: Verdict = guard.screen_input(text, previous)
+    with turn.timing.step("guard in"):
+        verdict: Verdict = guard.screen_input(text, previous)
     if not verdict.allowed:
         message = UNAVAILABLE if verdict.unavailable else fixed_reply(db)
         _refuse(turn, verdict.stored_reason, message, emit, strike=not verdict.unavailable)
@@ -312,7 +344,9 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
         if problem:
             messages.append({"role": "system", "content": f"{TOOL_CALL_HINT} Problem: {problem}"})
         try:
-            result = model.run_turn(system=system, tools=definitions, messages=messages)
+            with turn.timing.step("model") as notes:
+                result = model.run_turn(system=system, tools=definitions, messages=messages)
+                notes.append(f"{result.input_tokens} in, {result.output_tokens} out tokens")
         except ToolCallFailed as exc:
             # The model wrote a tool call the server couldn't read: ask again, with a hint.
             rejected += 1
@@ -344,7 +378,8 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
                     content = json.dumps({"error": "INVALID_JSON", "message": "The tool arguments were not valid JSON."})
                     failed = True
                 else:
-                    content, failed = tools.run(call["name"], args, ctx)
+                    with turn.timing.step(call["name"]):
+                        content, failed = tools.run(call["name"], args, ctx)
                 if failed:
                     tool_errors.append(f"{call['name']}: {content[:200]}")
                 turn.add(ChatRole.TOOL, {"role": "tool", "tool_call_id": call["id"], "content": content})
@@ -361,7 +396,8 @@ def _run(turn: _Turn, text: str, model: ChatModel, guard: GuardClient, emit: Emi
 
     reply_text = consistent_reply(db, user, ctx.proposal_ids, model_text(final.content))
     emit("status", {"label": "Checking the reply…"})
-    verdict = guard.screen_output(reply_text, ctx.choices)
+    with turn.timing.step("guard out"):
+        verdict = guard.screen_output(reply_text, ctx.choices)
     if not verdict.allowed:
         message = UNAVAILABLE if verdict.unavailable else fixed_reply(db)
         _refuse(turn, verdict.stored_reason, message, emit, strike=not verdict.unavailable)
