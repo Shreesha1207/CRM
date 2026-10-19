@@ -872,6 +872,12 @@ def contact_admin(db: Session, user: User, ctx: ToolContext, args: ContactAdminI
     """Offer to send the customer's problem to the admin. Nothing is sent until they press Send."""
     from app.services.chat import help
 
+    if help.is_only_a_request_for_contact(args.summary):
+        return _error(
+            "NEEDS_DESCRIPTION",
+            "The customer hasn't said what the problem is. Ask them what happened in one short question, "
+            "then call contact_admin again with their answer.",
+        )
     summary = help.check_description(args.summary)
     help.check_allowed(db, user)
     now = utcnow()

@@ -9,6 +9,9 @@ import { Check, ChatBubble, Lock, Send, ThumbDown, ThumbUp } from "../components
 import { Alert, Button, Card, Loading, MapLink, Select, Spinner, Textarea, buttonClass, cx, linkClass } from "../components/ui";
 
 const MAX_CHARS = 1000;
+// A description for the admin: long enough to say what went wrong.
+const HELP_MIN = 20;
+const HELP_MAX = 500;
 
 function useSubscription() {
   return useQuery({ queryKey: ["chat", "subscription"], queryFn: () => api.get<ChatSubscription>("/api/chat/subscription") });
@@ -124,8 +127,11 @@ export function BookingCard({ card, onAnswered }: { card: ChatCard; onAnswered: 
   const now = useNow(card.status === "PENDING");
   const open = card.status === "PENDING" && now < expiresAt;
   const status = card.status === "PENDING" && !open ? "EXPIRED" : card.status;
+  // HANDOFF: the customer checks or writes the description before it goes to the admin.
+  const [description, setDescription] = useState(card.summary ?? "");
   const answer = useMutation({
-    mutationFn: (action: "confirm" | "decline") => api.post<ChatCard>(`/api/chat/proposals/${card.id}/${action}`),
+    mutationFn: (action: "confirm" | "decline") =>
+      api.post<ChatCard>(`/api/chat/proposals/${card.id}/${action}`, action === "confirm" && card.kind === "HANDOFF" ? { summary: description.trim() } : undefined),
     onSuccess: (updated) => {
       onAnswered(updated);
       queryClient.invalidateQueries({ queryKey: ["bookings"] });
@@ -178,15 +184,32 @@ export function BookingCard({ card, onAnswered }: { card: ChatCard; onAnswered: 
           )}
         </>
       )}
-      {card.kind === "HANDOFF" && (
-        <>
-          <p className="text-sm font-medium text-fg">Send this to the admin?</p>
-          <blockquote className="mt-2 whitespace-pre-wrap border-l-2 border-line pl-3 text-sm text-fg">{card.summary}</blockquote>
-          <p className="mt-2 text-xs text-muted">
-            They'll read this chat and contact you by e-mail or phone within {card.response_hours ?? 6} hours.
-          </p>
-        </>
-      )}
+      {card.kind === "HANDOFF" &&
+        (open ? (
+          <>
+            <label htmlFor={`handoff-${card.id}`} className="text-sm font-medium text-fg">
+              Tell the admin what happened
+            </label>
+            <Textarea
+              id={`handoff-${card.id}`}
+              rows={3}
+              maxLength={HELP_MAX}
+              value={description}
+              placeholder="e.g. I was charged twice for my session on 20 Oct"
+              onChange={(e) => setDescription(e.target.value)}
+              className="mt-2"
+            />
+            <p className="mt-1 flex justify-between gap-2 text-xs text-muted">
+              <span>They'll read it with this chat and contact you by e-mail or phone within {card.response_hours ?? 6} hours.</span>
+              <span className="tabular shrink-0">{description.trim().length < HELP_MIN ? `${HELP_MIN}+ characters` : `${description.trim().length}/${HELP_MAX}`}</span>
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-sm font-medium text-fg">Your message to the admin</p>
+            <blockquote className="mt-2 whitespace-pre-wrap border-l-2 border-line pl-3 text-sm text-fg">{card.summary}</blockquote>
+          </>
+        ))}
       {answer.error && (
         <div className="mt-3">
           <Alert>{errorMessage(answer.error)}</Alert>
@@ -194,7 +217,12 @@ export function BookingCard({ card, onAnswered }: { card: ChatCard; onAnswered: 
       )}
       {open ? (
         <div className="mt-4 flex gap-2">
-          <Button size="sm" loading={answer.isPending && answer.variables === "confirm"} disabled={answer.isPending} onClick={() => answer.mutate("confirm")}>
+          <Button
+            size="sm"
+            loading={answer.isPending && answer.variables === "confirm"}
+            disabled={answer.isPending || (card.kind === "HANDOFF" && description.trim().length < HELP_MIN)}
+            onClick={() => answer.mutate("confirm")}
+          >
             {card.kind === "HANDOFF" ? "Send to admin" : "Confirm"}
           </Button>
           <Button size="sm" variant="secondary" loading={answer.isPending && answer.variables === "decline"} disabled={answer.isPending} onClick={() => answer.mutate("decline")}>
@@ -216,9 +244,6 @@ export function BookingCard({ card, onAnswered }: { card: ChatCard; onAnswered: 
 }
 
 // ---------------------------------------------------------------- contacting the admin
-
-const HELP_MIN = 20;
-const HELP_MAX = 500;
 
 /** After the assistant failed: the customer describes the problem and sends it, with this chat, to the admin. */
 function ContactAdmin({ conversationId }: { conversationId: string }) {

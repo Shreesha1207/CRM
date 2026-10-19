@@ -33,7 +33,7 @@ from app.core.security import rate_limiter
 from app.core.timeutils import utcnow
 from app.db.session import SessionLocal
 from app.models import ChatConversation, ChatMessage, ChatProposal, ChatSubscription, User
-from app.models.enums import ChatRole
+from app.models.enums import ChatProposalKind, ChatRole
 from app.services import settings_service
 from app.services.chat import groq, prompt, proposals, tools
 from app.services.chat.groq import RateLimited, ToolCallFailed
@@ -57,6 +57,10 @@ def fixed_reply(db: Session) -> str:
     )
 
 
+HANDOFF_REPLY = (
+    "Tell the admin what happened in the box below and press Send to admin. They'll contact you by e-mail or phone "
+    "within {hours} hours. Nothing is sent until you press Send."
+)
 UNAVAILABLE = "The assistant is unavailable right now. Please try again in a moment, or use the booking page."
 # Added to the request (not stored) when the model's last tool call could not be read.
 TOOL_CALL_HINT = (
@@ -487,6 +491,9 @@ def consistent_reply(db: Session, user: User, proposal_ids: list[uuid.UUID], tex
     if not proposal_ids:
         return text
     found = db.scalars(select(ChatProposal).where(ChatProposal.id.in_(proposal_ids)).order_by(ChatProposal.created_at)).all()
+    if any(p.kind == ChatProposalKind.HANDOFF for p in found):
+        # Nothing has been sent yet, whatever the model says: the customer checks the text and presses Send.
+        return HANDOFF_REPLY.format(hours=get_settings().chat_help_response_hours)
     cards = [c for c in (proposals.card(db, p, user) for p in found) if "when" in c]
     shown = set().union(*(_clocks(f"{c['when']['time']} {(c.get('was') or {}).get('time', '')}") for c in cards)) if cards else set()
     if cards and _clocks(text) - shown:

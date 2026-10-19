@@ -24,6 +24,7 @@ from app.schemas import (
     ChatFeedbackIn,
     ChatHelpIn,
     ChatMessageIn,
+    ChatProposalConfirmIn,
     ChatSubscriptionOut,
 )
 from app.services.chat import agent, help, proposals
@@ -207,8 +208,10 @@ def contact_admin(conversation_id: uuid.UUID, body: ChatHelpIn, user: Subscriber
 
 
 @router.post("/proposals/{proposal_id}/confirm")
-def confirm_proposal(proposal_id: uuid.UUID, user: Subscriber, db: DB, background: BackgroundTasks) -> dict:
-    proposal = proposals.confirm(db, proposal_id, user)
+def confirm_proposal(
+    proposal_id: uuid.UUID, user: Subscriber, db: DB, background: BackgroundTasks, body: ChatProposalConfirmIn | None = None
+) -> dict:
+    proposal = proposals.confirm(db, proposal_id, user, body.summary if body else None)
     background.add_task(dispatch_notifications)
     return proposals.card(db, proposal, user)
 

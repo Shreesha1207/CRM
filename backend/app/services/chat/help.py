@@ -7,6 +7,7 @@ and a few a week; automatic failures, thumbs-down and blocked messages never
 reach the admin. Admins contact the customer themselves, by e-mail or phone.
 """
 
+import re
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -87,8 +88,25 @@ def open_request(db: Session, user_id: uuid.UUID) -> ChatHelpRequest | None:
     return db.scalar(select(ChatHelpRequest).where(ChatHelpRequest.user_id == user_id, ChatHelpRequest.status == ChatHelpStatus.OPEN))
 
 
+# Words that only ask for someone, without saying what is wrong.
+_WHO = {"admin", "administrator", "someone", "somebody", "person", "human", "team", "staff", "manager", "support", "agent", "owner"}
+_ASKING = _WHO | {
+    "customer", "user", "wants", "want", "would", "like", "to", "the", "a", "an", "i", "please", "contact", "talk", "speak",
+    "reach", "call", "message", "connect", "get", "with", "in", "touch", "me", "can", "could", "you", "need", "needs", "asks",
+    "asked", "asking", "for", "help", "let", "my", "is", "be", "and", "them", "they", "real", "now", "urgent", "hi", "hello",
+}  # fmt: skip
+
+
+def is_only_a_request_for_contact(summary: str) -> bool:
+    """ "contact admin", "Customer wants to contact admin", "I want to talk to someone": no problem in it."""
+    words = re.findall(r"[a-z']+", summary.lower())
+    return any(w in _WHO for w in words) and len([w for w in words if w not in _ASKING]) <= 2
+
+
 def check_description(summary: str) -> str:
     summary = " ".join(summary.split())
+    if is_only_a_request_for_contact(summary):
+        raise AppError("HELP_DESCRIPTION", "Please say what went wrong, so the admin can help.", status_code=422)
     if not MIN_CHARS <= len(summary) <= MAX_CHARS:
         raise AppError("HELP_DESCRIPTION", f"Please describe the problem in {MIN_CHARS} to {MAX_CHARS} characters.", status_code=422)
     if looks_like_code(summary):

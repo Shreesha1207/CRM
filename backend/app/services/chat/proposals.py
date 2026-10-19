@@ -131,7 +131,8 @@ def _expire(db: Session, proposal: ChatProposal, user: User) -> None:
     _close(db, db.get(ChatProposal, proposal.id), P.EXPIRED, "Not confirmed in time")
 
 
-def confirm(db: Session, proposal_id: uuid.UUID, user: User) -> ChatProposal:
+def confirm(db: Session, proposal_id: uuid.UUID, user: User, summary: str | None = None) -> ChatProposal:
+    """Confirm a card. For a HANDOFF, `summary` is the description as the customer finally wrote it."""
     proposal = _own(db, proposal_id, user)
     if proposal.status != P.PENDING:
         raise BookingRejected("ALREADY_ANSWERED", "This card has already been answered", status_code=409)
@@ -142,7 +143,7 @@ def confirm(db: Session, proposal_id: uuid.UUID, user: User) -> ChatProposal:
     engine = BookingEngine(db, user)
     pid = proposal.id
     if proposal.kind == K.HANDOFF:
-        return _send_to_admin(db, proposal, user)
+        return _send_to_admin(db, proposal, user, summary)
     try:
         if proposal.kind == K.HOLD:
             engine.confirm_chat_hold(proposal.booking_id)  # closes the card in the same transaction
@@ -166,18 +167,20 @@ def confirm(db: Session, proposal_id: uuid.UUID, user: User) -> ChatProposal:
     return db.get(ChatProposal, pid)
 
 
-def _send_to_admin(db: Session, proposal: ChatProposal, user: User) -> ChatProposal:
+def _send_to_admin(db: Session, proposal: ChatProposal, user: User, summary: str | None) -> ChatProposal:
     from app.services.chat import help
 
     pid = proposal.id
+    # A description that isn't good enough is refused with the card left open, so it can be fixed.
+    text = help.check_description(summary if summary is not None else proposal.payload["summary"])
     try:
-        request = help.request_help(db, user, db.get(ChatConversation, proposal.conversation_id), proposal.payload["summary"])
+        request = help.request_help(db, user, db.get(ChatConversation, proposal.conversation_id), text)
     except AppError as exc:
         db.rollback()
         _close(db, db.get(ChatProposal, pid), P.FAILED, exc.message)
         return db.get(ChatProposal, pid)
     proposal = db.get(ChatProposal, pid)
-    proposal.payload = {**proposal.payload, "request_id": str(request.id)}
+    proposal.payload = {**proposal.payload, "summary": text, "request_id": str(request.id)}
     _close(db, proposal, P.CONFIRMED, help.confirmation(db, request))
     return db.get(ChatProposal, pid)
 

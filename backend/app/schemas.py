@@ -684,6 +684,11 @@ class ChatMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
+class ChatProposalConfirmIn(BaseModel):
+    # A HANDOFF card: the description as the customer finally wrote it.
+    summary: str | None = Field(default=None, max_length=600)
+
+
 class ChatHelpIn(BaseModel):
     summary: str = Field(min_length=1, max_length=600)
 

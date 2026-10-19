@@ -258,3 +258,40 @@ def test_admins_see_only_the_chats_sent_to_them_and_every_opening_is_audited(cli
     [done] = client.get("/api/admin/help-requests", headers=admin_headers, params={"status": "resolved"}).json()
     assert done["resolution_note"] == "Called them; refunded."
     assert client.post(f"/api/admin/help-requests/{request.id}/resolve", headers=admin_headers, json={}).status_code == 409
+
+
+# ---------------------------------------------------------------- the customer says what went wrong
+
+
+def test_the_assistant_must_ask_what_the_problem_is_first(db, user, chat, staff) -> None:
+    from tests.chat_fakes import last_tool_results
+
+    for vague in ["contact admin", "Customer wants to contact admin", "I want to talk to someone"]:
+        assert help.is_only_a_request_for_contact(vague)
+        reply = reply_of(chat.send("contact admin", call("contact_admin", {"summary": vague}), say("What happened?")))
+        assert reply["cards"] == []
+        assert last_tool_results(chat.model.requests[-1]["messages"])[0]["error"] == "NEEDS_DESCRIPTION"
+    assert not help.is_only_a_request_for_contact("I was charged twice and want to talk to a person")
+    # The same goes for a customer's own description.
+    with pytest.raises(AppError) as vague:
+        _send(db, user, chat, "Please let me talk to the admin")
+    assert vague.value.code == "HELP_DESCRIPTION" and "what went wrong" in vague.value.message
+
+
+def test_the_customer_checks_the_text_and_nothing_is_claimed_as_sent(db, user, chat, staff) -> None:
+    steps = [call("contact_admin", {"summary": PROBLEM}), say("I've sent your message to the admin.")]
+    reply = reply_of(chat.send("I was charged twice", *steps))
+    # Whatever the model said, the reply says nothing has been sent yet.
+    assert reply["text"].startswith("Tell the admin what happened in the box below") and "Nothing is sent until you press Send" in reply["text"]
+    [card] = reply["cards"]
+
+    # Too short: refused, and the card stays open to fix it.
+    short = chat.client.post(f"/api/chat/proposals/{card['id']}/confirm", headers=chat.headers, json={"summary": "charged"})
+    assert short.status_code == 422 and short.json()["code"] == "HELP_DESCRIPTION"
+    assert db.scalars(select(ChatHelpRequest)).all() == []
+
+    edited = "I was charged twice (2 x 40.00) for my Tuesday 10 AM session with John."
+    sent = chat.client.post(f"/api/chat/proposals/{card['id']}/confirm", headers=chat.headers, json={"summary": edited})
+    assert sent.json()["status"] == "CONFIRMED" and sent.json()["summary"] == edited
+    [request] = db.scalars(select(ChatHelpRequest)).all()
+    assert request.summary == edited
