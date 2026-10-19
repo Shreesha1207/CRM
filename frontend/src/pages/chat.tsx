@@ -73,6 +73,7 @@ export function ChatUpgradePage() {
           <Lock className="h-4 w-4" /> Pay {price}
         </Button>
         <p className="mt-3 text-center text-xs text-muted">Demo checkout: no card is needed and nothing is charged.</p>
+        <p className="mt-1 text-center text-xs text-muted">Your chats are private. If you contact the admin about a problem, they can read that chat to help you.</p>
       </Card>
       <p className="mt-5 text-center text-sm text-muted">
         Prefer to book yourself?{" "}
@@ -104,6 +105,11 @@ function countdown(ms: number): string {
 const KIND_LABEL = { HOLD: "Held for you", RESCHEDULE: "Move booking", CANCEL: "Cancel booking", HANDOFF: "Contact admin" } as const;
 
 function outcome(card: ChatCard): string {
+  if (card.kind === "HANDOFF") {
+    if (card.status === "CONFIRMED") return card.result_message ?? "Sent to the admin.";
+    if (card.status === "FAILED") return card.result_message ?? "That didn't work, so nothing was sent.";
+    return card.status === "EXPIRED" ? "Not sent: this offer expired." : "Not sent.";
+  }
   if (card.status === "FAILED") return card.result_message ?? "That didn't work, so nothing changed.";
   if (card.status === "EXPIRED") return card.kind === "HOLD" ? "Not confirmed in time, so the time was released." : "This offer expired; nothing changed.";
   if (card.status === "DECLINED") return card.kind === "HOLD" ? "Deleted. The time is free again." : "Kept as it was.";
@@ -172,6 +178,15 @@ export function BookingCard({ card, onAnswered }: { card: ChatCard; onAnswered: 
           )}
         </>
       )}
+      {card.kind === "HANDOFF" && (
+        <>
+          <p className="text-sm font-medium text-fg">Send this to the admin?</p>
+          <blockquote className="mt-2 whitespace-pre-wrap border-l-2 border-line pl-3 text-sm text-fg">{card.summary}</blockquote>
+          <p className="mt-2 text-xs text-muted">
+            They'll read this chat and contact you by e-mail or phone within {card.response_hours ?? 6} hours.
+          </p>
+        </>
+      )}
       {answer.error && (
         <div className="mt-3">
           <Alert>{errorMessage(answer.error)}</Alert>
@@ -180,10 +195,10 @@ export function BookingCard({ card, onAnswered }: { card: ChatCard; onAnswered: 
       {open ? (
         <div className="mt-4 flex gap-2">
           <Button size="sm" loading={answer.isPending && answer.variables === "confirm"} disabled={answer.isPending} onClick={() => answer.mutate("confirm")}>
-            Confirm
+            {card.kind === "HANDOFF" ? "Send to admin" : "Confirm"}
           </Button>
           <Button size="sm" variant="secondary" loading={answer.isPending && answer.variables === "decline"} disabled={answer.isPending} onClick={() => answer.mutate("decline")}>
-            {card.kind === "HOLD" ? "Delete" : "Decline"}
+            {card.kind === "HOLD" ? "Delete" : card.kind === "HANDOFF" ? "No thanks" : "Decline"}
           </Button>
         </div>
       ) : (
@@ -197,6 +212,64 @@ export function BookingCard({ card, onAnswered }: { card: ChatCard; onAnswered: 
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- contacting the admin
+
+const HELP_MIN = 20;
+const HELP_MAX = 500;
+
+/** After the assistant failed: the customer describes the problem and sends it, with this chat, to the admin. */
+function ContactAdmin({ conversationId }: { conversationId: string }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const send = useMutation({
+    mutationFn: () => api.post(`/api/chat/conversations/${conversationId}/help`, { summary: text.trim() }),
+    onSuccess: () => {
+      setOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["chat", "conversation", conversationId] });
+    },
+  });
+  if (!open) {
+    return (
+      <button className={buttonClass("secondary", "sm", "rounded-full")} onClick={() => setOpen(true)}>
+        Contact admin
+      </button>
+    );
+  }
+  const length = text.trim().length;
+  return (
+    <form
+      className="w-full max-w-md rounded-lg border border-line bg-surface p-4 shadow-sm"
+      onSubmit={(e) => {
+        e.preventDefault();
+        send.mutate();
+      }}
+    >
+      <label htmlFor="help-text" className="text-sm font-medium text-fg">
+        What went wrong?
+      </label>
+      <p className="mt-0.5 text-xs text-muted">The admin gets this and the chat, and contacts you by e-mail or phone.</p>
+      <Textarea id="help-text" rows={3} maxLength={HELP_MAX} value={text} onChange={(e) => setText(e.target.value)} className="mt-2" />
+      <p className="tabular mt-1 text-right text-xs text-muted">
+        {length < HELP_MIN ? `At least ${HELP_MIN} characters` : `${length}/${HELP_MAX}`}
+      </p>
+      {send.error && (
+        <div className="mt-2">
+          <Alert>{errorMessage(send.error)}</Alert>
+        </div>
+      )}
+      <div className="mt-3 flex gap-2">
+        <Button type="submit" size="sm" disabled={length < HELP_MIN} loading={send.isPending}>
+          Send to admin
+        </Button>
+        <Button type="button" size="sm" variant="secondary" onClick={() => setOpen(false)} disabled={send.isPending}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -226,12 +299,14 @@ function Message({
   item,
   last,
   busy,
+  conversationId,
   onChoose,
   onCard,
 }: {
   item: ChatItem;
   last: boolean;
   busy: boolean;
+  conversationId: string | null;
   onChoose: (text: string) => void;
   onCard: (card: ChatCard) => void;
 }) {
@@ -250,6 +325,7 @@ function Message({
       {item.cards.map((card) => (
         <BookingCard key={card.id} card={card} onAnswered={onCard} />
       ))}
+      {last && item.contact_admin && conversationId && <ContactAdmin conversationId={conversationId} />}
       {last && item.choices.length > 0 && (
         <div className="flex max-w-full flex-wrap gap-2">
           {item.choices.map((choice) => (
@@ -344,10 +420,13 @@ export function ChatPage() {
     }
   };
 
-  const replaceCard = (card: ChatCard) =>
+  const replaceCard = (card: ChatCard) => {
     queryClient.setQueryData<ChatConversationDetail>(["chat", "conversation", selected], (old) =>
       old ? { ...old, items: old.items.map((i) => ({ ...i, cards: i.cards.map((c) => (c.id === card.id ? card : c)) })) } : old,
     );
+    // Sending a problem to the admin adds its confirmation to the chat.
+    if (card.kind === "HANDOFF" && card.status === "CONFIRMED") queryClient.invalidateQueries({ queryKey: ["chat", "conversation", selected] });
+  };
 
   const starters = detail.data?.starters ?? ["Book an appointment", "What's free this week?", "My upcoming bookings", "Move a booking"];
   const business = config.data?.business_name ?? "us";
@@ -422,11 +501,19 @@ export function ChatPage() {
               </div>
             )}
             {items.map((item, i) => (
-              <Message key={item.id} item={item} last={i === items.length - 1 && !pending} busy={!!pending} onChoose={send} onCard={replaceCard} />
+              <Message
+                key={item.id}
+                item={item}
+                last={i === items.length - 1 && !pending}
+                busy={!!pending}
+                conversationId={selected}
+                onChoose={send}
+                onCard={replaceCard}
+              />
             ))}
             {pending && (
               <>
-                <Message item={placeholder(pending)} last={false} busy onChoose={send} onCard={replaceCard} />
+                <Message item={placeholder(pending)} last={false} busy conversationId={selected} onChoose={send} onCard={replaceCard} />
                 <div className="flex items-center gap-2 text-sm text-muted" role="status">
                   <Spinner className="h-4 w-4" /> {status ?? "Thinking…"}
                 </div>
@@ -477,6 +564,7 @@ export function ChatPage() {
                 <Link to="/book" className={linkClass}>
                   Open the booking page
                 </Link>
+                <span className="mt-0.5 block">If you contact the admin, they can read this chat to help you.</span>
               </span>
               <span className="tabular">
                 {draft.length}/{MAX_CHARS}
