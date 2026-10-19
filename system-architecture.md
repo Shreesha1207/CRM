@@ -168,7 +168,7 @@ sequenceDiagram
     participant C as Customer (chat)
     participant API as POST /api/chat/conversations/:id/messages
     participant G as Guards (rules, Prompt Guard, policy guard)
-    participant M as Model on Groq (gpt-oss-20b)
+    participant M as Model on Groq (gpt-oss-120b)
     participant T as Tools (fixed functions, as the customer)
     participant BE as BookingEngine
 
@@ -286,7 +286,7 @@ nginx (`frontend/nginx.conf`) also sets the SPA's own strict `Content-Security-P
 | Auth | argon2id (via `passlib`/`argon2-cffi`), PyJWT |
 | Deployment | Docker Compose (3 services), nginx (static frontend + reverse proxy) |
 | Testing | pytest (backend, against a real PostgreSQL database), Playwright (end-to-end, both API-driven and browser-driven passes) |
-| Booking assistant | Groq's OpenAI-compatible chat API over `requests`, one key for everything: `gpt-oss-20b` as the model (`CHAT_MODEL`) and the policy guard, Prompt Guard 2 as the first filter. Any OpenAI-compatible server (e.g. Ollama) can stand in. |
+| Booking assistant | Groq's OpenAI-compatible chat API over `requests`, one key for everything: `gpt-oss-120b` as the model (`CHAT_MODEL`), `gpt-oss-20b` as the policy guard, Prompt Guard 2 as the first filter. Any OpenAI-compatible server (e.g. Ollama) can stand in. |
 
 ## 12. Non-functional characteristics
 

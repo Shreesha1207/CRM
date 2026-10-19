@@ -26,7 +26,7 @@ def test_the_request_uses_the_system_prompt_tools_and_reasoning_effort(monkeypat
     url, body, headers = sent[0]
     assert url == "https://api.groq.com/openai/v1/chat/completions"
     assert headers["Authorization"] == "Bearer gsk_test"
-    assert body["model"] == "openai/gpt-oss-20b"
+    assert body["model"] == "openai/gpt-oss-120b"
     assert body["messages"] == [{"role": "system", "content": "You are the booking assistant."}, *MESSAGES]
     assert body["tool_choice"] == "auto" and body["parallel_tool_calls"] is True
     assert body["reasoning_effort"] == "low"

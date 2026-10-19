@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # and the guards; any OpenAI-compatible server (e.g. Ollama) works as the base URL.
     groq_api_key: str | None = None
     groq_base_url: str = "https://api.groq.com/openai/v1"
-    chat_model: str = "openai/gpt-oss-20b"
+    chat_model: str = "openai/gpt-oss-120b"
     # Sent as reasoning_effort (low / medium / high); empty to leave it out.
     chat_reasoning_effort: str = "low"
     chat_max_output_tokens: int = 2048
