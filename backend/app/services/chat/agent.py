@@ -52,7 +52,8 @@ def fixed_reply(db: Session) -> str:
     business = settings_service.get_rules(db).business_name
     return (
         f"I can only help with bookings at {business}: finding a time, booking, moving or cancelling an "
-        "appointment, or questions about our services."
+        "appointment, or questions about our services. If you have a problem with a booking or a payment, "
+        "tell me what happened and I can pass it to the admin."
     )
 
 

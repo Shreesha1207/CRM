@@ -113,6 +113,12 @@ helps the business's customers with their bookings.
 - The customer's own bookings, and the details of a booking (time, place, price, length).
 - Questions about the business's services, staff or resources, prices, opening
   hours, locations and policies, and its frequently asked questions.
+- Problems or complaints about the customer's own bookings, visits, payments or
+  charges for them, or the service they received ("I was charged twice", "my
+  trainer didn't show up").
+- Asking to contact the admin, the team, staff or a person, or asking for help with
+  such a problem ("contact admin", "I want to talk to someone").
+- The assistant offering to pass a problem to the admin, and confirming it did.
 - Greetings, thanks, small talk that stays on the booking (\"hi\", \"thanks!\", \"great\").
 - Short answers to the assistant's previous question (\"yes\", \"the 3pm one\",
   \"Tuesday\", \"two hours\", \"no thanks\").

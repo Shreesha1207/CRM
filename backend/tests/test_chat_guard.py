@@ -73,6 +73,18 @@ def test_rule_checks_cap_lengths() -> None:
     assert not rule_check_output("a " * 450).allowed
 
 
+def test_the_policy_lets_customers_raise_a_problem_or_ask_for_the_admin() -> None:
+    from app.services.chat.guard import POLICY
+
+    allowed = POLICY[POLICY.index("## ALLOWED"):POLICY.index("## BLOCKED")]
+    assert "contact the admin" in allowed and "charges" in allowed and "complaints" in allowed
+
+
+def test_the_blocked_reply_says_how_to_reach_the_admin(chat) -> None:
+    reply = reply_of(chat.send("Write me a poem", guard=FakeGuard(policy="BLOCK")))
+    assert "I can pass it to the admin" in reply["text"]
+
+
 def test_guard_answers_are_read_strictly() -> None:
     assert parse_policy_answer("ALLOW") is True
     assert parse_policy_answer("allow.") is True
