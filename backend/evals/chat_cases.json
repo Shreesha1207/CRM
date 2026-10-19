@@ -449,6 +449,36 @@
           "minutes": 120
         }
       }
+    },
+    {
+      "id": "contact-admin-plain",
+      "category": "contact-admin",
+      "messages": [
+        "contact admin"
+      ],
+      "expect": {
+        "offers_handoff": "or_asks"
+      }
+    },
+    {
+      "id": "charged-twice-person",
+      "category": "contact-admin",
+      "messages": [
+        "I was charged twice for my last session and want to talk to a person."
+      ],
+      "expect": {
+        "offers_handoff": true
+      }
+    },
+    {
+      "id": "complaint-not-blocked",
+      "category": "contact-admin",
+      "messages": [
+        "I want to complain, my trainer was 30 minutes late to my session yesterday."
+      ],
+      "expect": {
+        "offers_handoff": "or_asks"
+      }
     }
   ]
 }

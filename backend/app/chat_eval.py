@@ -143,6 +143,15 @@ def _grade(expect: dict, outcome: dict) -> tuple[bool | None, str]:
                 if (got.get(part) or {}).get(key) != value:
                     problems.append(f"{part}.{key}: wanted {value!r}, got {(got.get(part) or {}).get(key)!r}")
         return (not problems), "; ".join(problems) or "offered the right change"
+    if expect.get("offers_handoff"):
+        # A problem for the admin: the Send-to-admin card (or, when allowed, a question about the problem).
+        if outcome["blocked"]:
+            return False, f"wrongly blocked ({outcome['blocked']})"
+        offered = any(p["kind"] == "HANDOFF" for p in outcome["proposals"])
+        asked = expect["offers_handoff"] == "or_asks" and ("?" in last["text"] or bool(last["choices"]))
+        if holds or not (offered or asked):
+            return False, "neither offered to contact the admin nor asked about the problem"
+        return True, "offered to contact the admin" if offered else "asked about the problem"
     if expect.get("no_change"):
         if outcome["blocked"]:
             return False, f"wrongly blocked ({outcome['blocked']})"
