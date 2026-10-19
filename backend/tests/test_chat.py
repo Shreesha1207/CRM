@@ -132,6 +132,24 @@ def test_the_model_resolves_names_with_tools_and_sees_the_turn_note(db, gym, cha
     assert {t["function"]["name"] for t in first["tools"]} >= {"hold_booking", "find_available_slots", "propose_reschedule", "offer_choices"}
 
 
+def test_the_prompt_lists_the_catalogue_and_the_next_days(gym, chat, monkeypatch) -> None:
+    from app.services.chat import tools
+
+    service, sam = gym
+    reply_of(chat.send("Hi", say("Hello!")))
+    request = chat.model.requests[-1]
+    # Every name that exists, with its id, so the model never has to guess one.
+    assert "<catalogue>" in request["system"]
+    assert f'"id":"{service.id}","name":"Strength coaching"' in request["system"]
+    assert '"provided_by":["Coach Sam"]' in request["system"] and f'"id":"{sam.id}","name":"Coach Sam"' in request["system"]
+    assert "Next days: Fri 26 Feb = 2027-02-26, Sat 27 Feb = 2027-02-27" in request["messages"][-1]["content"]
+
+    # A catalogue too large for the prompt is left to the tools.
+    monkeypatch.setattr(tools, "MAX_CATALOGUE_SERVICES", 0)
+    reply_of(chat.send("Hi again", say("Hello!")))
+    assert "<catalogue>" not in chat.model.requests[-1]["system"] and "list_services" in chat.model.requests[-1]["system"]
+
+
 def test_confirm_books_it_and_sends_the_normal_confirmation(client, db, gym, chat) -> None:
     service, sam = gym
     [card] = reply_of(chat.send("Book coaching with Sam Tuesday 10 for 2 hours", *hold_steps(service, sam)))["cards"]

@@ -93,6 +93,47 @@ def _active_links(service: Service) -> list:
 # ---------------------------------------------------------------- catalogue
 
 
+# Above this the catalogue is left out of the prompt and found with the tools instead.
+MAX_CATALOGUE_SERVICES = 40
+MAX_CATALOGUE_RESOURCES = 60
+
+
+def catalogue(db: Session) -> dict[str, Any] | None:
+    """Everything that can be booked, for the prompt: the only names that exist."""
+    services = catalog.list_services(db, q=None, resource_id=None, location_id=None, max_price=None)
+    resources = db.scalars(select(Resource).where(Resource.status == RecordStatus.ACTIVE).order_by(Resource.name)).unique().all()
+    if len(services) > MAX_CATALOGUE_SERVICES or len(resources) > MAX_CATALOGUE_RESOURCES:
+        return None
+    rules = settings_service.get_rules(db)
+    return {
+        "services": [
+            {
+                "id": str(s.id),
+                "name": s.name,
+                "description": (s.description or "")[:120] or None,
+                "length_minutes": s.duration_minutes,
+                "max_length_minutes": s.max_duration_minutes if s.booking_type == BookingType.INDIVIDUAL else None,
+                "rate_per_hour": _money(s.price),
+                "group_session": s.booking_type == BookingType.CAPACITY,
+                "provided_by": [l.resource.name for l in _active_links(s)],
+            }
+            for s in services
+        ],
+        "resources": [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "type": r.type.value.lower(),
+                "location": r.location.name if r.location else None,
+                "timezone": resource_timezone(r, rules).key,
+            }
+            for r in resources
+        ],
+        "locations": [{"id": str(l.id), "name": l.name, "address": l.address} for l in catalog.list_locations(db)],
+    }
+
+
+
 class ListServicesIn(_In):
     query: str | None = Field(default=None, max_length=100)
     location_id: uuid.UUID | None = None
