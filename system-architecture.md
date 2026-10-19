@@ -173,13 +173,17 @@ sequenceDiagram
     participant BE as BookingEngine
 
     C->>API: "Book strength coaching with Sam next Tuesday at 10 for two hours"
-    API->>G: check the message
+    API->>G: quick checks (rules, Prompt Guard)
     G-->>API: BLOCK -> fixed reply, the model is never called
-    API->>M: history (replayed unchanged) + message + turn note (current time)
-    M->>T: list_services / list_resources / find_available_slots / list_my_bookings (filtered by what was said)
-    T-->>M: small JSON (times and prices already formatted)
-    M->>T: hold_booking(service, resource, start, 120 min)
-    T->>BE: create(awaiting the customer): PENDING, slot held, no e-mail yet
+    par policy guard
+        API->>G: is it about this business's bookings?
+    and the model reads the message
+        API->>M: catalogue + history + message + turn note (current time, next 14 days)
+    end
+    Note over API,M: the model's answer is used only once the policy guard allows the message
+    M->>T: book(service "strength coaching", person "Sam", 2027-03-02, 10:00, 120 min)
+    T->>BE: names resolved, slot checked, create(awaiting the customer): PENDING, no e-mail yet
+    T-->>M: the held booking (or a question / the nearest free times, shown as buttons)
     M-->>API: "I've held it for you; press Confirm"
     API->>G: check the reply (and button labels)
     G-->>API: BLOCK -> the whole turn is thrown away and the hold released
@@ -187,25 +191,29 @@ sequenceDiagram
     C->>BE: Confirm -> CONFIRMED, normal confirmation e-mail and calendar invite
 ```
 
-The model never sees SQL or other customers' data and never changes anything itself: it can only fill in the pieces for the tools, which run the same catalogue queries and booking engine as the website, as the signed-in customer. A hold that is neither confirmed nor deleted is released by the background job after `CHAT_HOLD_MINUTES`. Moves and cancellations are only offered (a card), and change nothing until the customer confirms.
+The model never sees SQL or other customers' data and never changes anything itself: it can only fill in names, dates and times for the tools, which run the same catalogue queries and booking engine as the website, as the signed-in customer. A hold that is neither confirmed nor deleted is released by the background job after `CHAT_HOLD_MINUTES`. Moves and cancellations are only offered (a card), and change nothing until the customer confirms.
 
 #### 5.4.1 How the assistant reads and changes bookings (CRUD)
 
-The model has no database access, and no bookings in its prompt: the prompt holds the rules, the business FAQ and the current time. It gets data only as tool results.
+The model has no database access and no bookings in its prompt. The prompt holds the rules, the business FAQ and the **catalogue**: every active service, person, room and location by name, with lengths, prices and who provides what (left out above 40 services or 60 resources). It changes only when an admin edits the catalogue, so the prompt prefix still caches. The turn note adds the current time and the next 14 days with their dates. Everything else comes as tool results.
 
 Each tool call takes the same path:
 1. The model's arguments are validated against the tool's schema. Bad input goes back to the model as `INVALID_INPUT`, so it can correct itself.
 2. The handler runs in its own database session, as the customer in the chat (`ctx.user_id`).
 3. Its result is serialized to JSON and returned to the model as a `tool` message. Errors come back as `{code, message}`. An unexpected exception is logged, and the model gets only a generic `INTERNAL` message.
 
-| Operation | Tools | What happens |
+The model passes **names and wall-clock times**, as the customer said them; the server resolves them. One tool call does the whole job:
+
+| Operation | Tool | What happens |
 | --- | --- | --- |
-| Read: catalogue | `list_services`, `list_resources`, `list_locations`, `find_available_slots`, `suggest_alternatives` | Read-only, with the same availability rules as the website. `list_services` with `on_date` also lists each service's free times that day. |
-| Read: own bookings | `list_my_bookings`, `get_booking` | Only the customer's own bookings. Another customer's ID returns `NOT_FOUND`. |
-| Create | `hold_booking` | Creates a PENDING booking with no e-mail. At most `CHAT_MAX_OPEN_HOLDS` open holds per customer. With `replaces_booking_id` it swaps a still-unconfirmed hold for a new one: the new time is checked first, then the old hold is released. |
-| Update | `propose_reschedule` | Checks that the new time is free, then stores a card. The move happens only when the customer presses Confirm. A move keeps the booking's length: a different `duration_minutes` is refused, and the model is told to offer a new hold plus a cancellation instead. |
-| Delete | `propose_cancellation` | Checks the cancellation window, then stores a card. The cancellation happens only on Confirm. Delete on a held booking frees the time with no e-mail. |
-| UI only | `offer_choices` | Shows buttons under the reply. Writes nothing. |
+| Read: free times | `check_availability` | With a service (and optionally a person): its free start times for up to 7 days. Without one: every service with its free times that day. Read-only, with the same availability rules as the website. |
+| Read: own bookings | `my_bookings` | Only the customer's own bookings, filtered by date, time and name. |
+| Create | `book` | Resolves the service and person, then creates a PENDING booking with no e-mail (a hold). At most `CHAT_MAX_OPEN_HOLDS` open holds per customer. A time that isn't free comes back with the nearest free times as buttons. |
+| Update | `move` | Finds the booking. A booking still waiting for Confirm is swapped for the new one (the new time is checked first). A booked one gets a move card, which changes nothing until Confirm. A move keeps the length: for a new length it holds a new session and offers to cancel the old booking, two cards to confirm. |
+| Delete | `cancel` | Finds the booking, checks the cancellation window, then stores a card; the cancellation happens only on Confirm. Delete on a held booking frees the time with no e-mail. |
+| UI only | `offer_choices` | Shows the model's own buttons under the reply. Writes nothing. |
+
+**Names are matched in code, not by the model** (`tools._pick`). An exact name, or every word of it in a name or description (typos allowed), is a match. Anything less is never guessed: the tool returns `needs` with the closest catalogue names as buttons, and tells the model never to say one of them doesn't exist. Two people with the same name get both offered; a person who doesn't provide the service gets the people who do. Under these tools, the fine-grained handlers (`hold_booking`, `propose_reschedule`, `propose_cancellation`, `find_available_slots`, `list_my_bookings`) do the work; they are no longer offered to the model.
 
 The model has no tool that confirms, declines or cancels anything. Those are the customer's button presses, which call `POST /api/chat/proposals/:id/confirm` or `/decline` directly.
 
@@ -213,7 +221,9 @@ The model has no tool that confirms, declines or cancels anything. Those are the
 
 **Replies match the cards.** The card is what gets booked. If the model's reply names a clock time that is on none of this turn's cards (for example "11:00 AM – 1:00 PM" over a card for 11:00 AM – 12:00 PM), the server replaces the reply with the cards described in words, and removes any Markdown (`agent.consistent_reply`).
 
-**Finding the booking a customer means.** `list_my_bookings` takes optional `on_date`, `around_time` (within 60 minutes, in the booking's own time zone) and `query` (names and descriptions, with typo tolerance). The filtering happens in code, and the result includes `match_count`. The model can act only on ids returned for this customer in an earlier result.
+**Finding the booking a customer means.** `move`, `cancel` and `my_bookings` take `on_date`, `around_time` (within 60 minutes, in the booking's own time zone) and `query` (names and descriptions, with typo tolerance), or a `booking_id` from an earlier result. The filtering happens in code. One match is used; several come back as buttons to choose from; none come back with the customer's upcoming bookings.
+
+**Where the time goes.** Each turn logs one line, for example `Chat turn 3120 ms: guard in 180 ms, model 1250 ms (2900 in, 60 out tokens), guard policy 640 ms, book 35 ms, model 820 ms (...), guard out 410 ms; waited 10 s for rate limits`. The policy guard runs in parallel with the first model call. The model talks on `gpt-oss-120b` and the guard on `gpt-oss-20b`, so each model uses its own share of Groq's per-model limits.
 
 ## 6. Concurrency & data-integrity architecture
 
