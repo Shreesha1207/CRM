@@ -12,9 +12,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.errors import AppError, BookingRejected, NotFound
 from app.core.timeutils import utcnow
-from app.models import Booking, ChatProposal, Resource, User
+from app.models import Booking, ChatConversation, ChatProposal, Resource, User
 from app.models.enums import BookingStatus, ChatProposalKind, ChatProposalStatus
 from app.services import booking_mail, settings_service
 from app.services.availability import resource_timezone
@@ -61,6 +62,9 @@ def card(db: Session, proposal: ChatProposal, user: User, now: datetime | None =
         "result_message": proposal.result_message,
         "booking_id": str(proposal.result_booking_id or proposal.booking_id) if (proposal.result_booking_id or proposal.booking_id) else None,
     }
+    if proposal.kind == K.HANDOFF:
+        out.update(summary=proposal.payload.get("summary", ""), response_hours=get_settings().chat_help_response_hours)
+        return out
     booking = db.get(Booking, proposal.booking_id) if proposal.booking_id else None
     if booking is None:
         return out
@@ -137,6 +141,8 @@ def confirm(db: Session, proposal_id: uuid.UUID, user: User) -> ChatProposal:
         raise BookingRejected("HOLD_EXPIRED", "This has expired, so nothing was changed. Ask the assistant again.", status_code=409)
     engine = BookingEngine(db, user)
     pid = proposal.id
+    if proposal.kind == K.HANDOFF:
+        return _send_to_admin(db, proposal, user)
     try:
         if proposal.kind == K.HOLD:
             engine.confirm_chat_hold(proposal.booking_id)  # closes the card in the same transaction
@@ -157,6 +163,22 @@ def confirm(db: Session, proposal_id: uuid.UUID, user: User) -> ChatProposal:
     except BookingRejected as exc:
         db.rollback()
         _close(db, db.get(ChatProposal, pid), P.FAILED, exc.message)
+    return db.get(ChatProposal, pid)
+
+
+def _send_to_admin(db: Session, proposal: ChatProposal, user: User) -> ChatProposal:
+    from app.services.chat import help
+
+    pid = proposal.id
+    try:
+        request = help.request_help(db, user, db.get(ChatConversation, proposal.conversation_id), proposal.payload["summary"])
+    except AppError as exc:
+        db.rollback()
+        _close(db, db.get(ChatProposal, pid), P.FAILED, exc.message)
+        return db.get(ChatProposal, pid)
+    proposal = db.get(ChatProposal, pid)
+    proposal.payload = {**proposal.payload, "request_id": str(request.id)}
+    _close(db, proposal, P.CONFIRMED, help.confirmation(db, request))
     return db.get(ChatProposal, pid)
 
 
@@ -205,7 +227,14 @@ def report(db: Session, conversation_id: uuid.UUID, user: User, now: datetime) -
             continue
         what = summary(card(db, proposal, user, now))
         message = f": {proposal.result_message}" if proposal.result_message and status == P.FAILED else ""
-        if proposal.kind == K.HOLD:
+        if proposal.kind == K.HANDOFF:
+            text = {
+                P.CONFIRMED: f"The customer sent their problem to the admin. {proposal.result_message}",
+                P.DECLINED: "The customer chose not to contact the admin.",
+                P.EXPIRED: "The offer to contact the admin expired without an answer.",
+                P.FAILED: f"Sending the problem to the admin failed{message}.",
+            }[status]
+        elif proposal.kind == K.HOLD:
             text = {
                 P.CONFIRMED: f"The customer confirmed the held booking {what}. It is booked.",
                 P.DECLINED: f"The customer deleted the held booking {what}; its time was released.",

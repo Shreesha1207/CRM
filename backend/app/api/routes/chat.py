@@ -22,10 +22,11 @@ from app.schemas import (
     ChatConversationDetailOut,
     ChatConversationOut,
     ChatFeedbackIn,
+    ChatHelpIn,
     ChatMessageIn,
     ChatSubscriptionOut,
 )
-from app.services.chat import agent, proposals
+from app.services.chat import agent, help, proposals
 from app.services.chat.guard import GuardClient, get_guard
 from app.services.chat.llm import ChatModel, get_chat_model
 
@@ -190,6 +191,16 @@ def send_message(
             yield _event(*item)
 
     return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
+
+
+@router.post("/conversations/{conversation_id}/help", status_code=201)
+def contact_admin(conversation_id: uuid.UUID, body: ChatHelpIn, user: Subscriber, db: DB, background: BackgroundTasks) -> dict:
+    """After the assistant failed: the customer sends their own description of the problem,
+    with this chat, to the admin. The confirmation is added to the chat."""
+    conversation = _conversation(db, user, conversation_id)
+    request = help.request_help(db, user, conversation, body.summary)
+    background.add_task(dispatch_notifications)
+    return {"id": str(request.id), "due_at": request.due_at.isoformat(), "message": help.confirmation(db, request)}
 
 
 # ---------------------------------------------------------------- cards and feedback

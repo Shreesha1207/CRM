@@ -144,3 +144,73 @@ def test_failures_thumbs_down_and_blocked_messages_tell_no_one(db, user, chat, s
     reply_of(chat.send("Write me a poem", guard=FakeGuard(policy="BLOCK")))
     assert db.scalars(select(ChatHelpRequest)).all() == []
     assert _sent(db, NotificationType.CHAT_HELP_REQUESTED) == []
+
+
+# ---------------------------------------------------------------- the two ways in
+
+
+def test_the_assistant_offers_a_card_and_nothing_is_sent_until_the_customer_presses_send(db, user, chat, staff) -> None:
+    steps = [call("contact_admin", {"summary": PROBLEM}), say("I've written it down. Press Send to admin and they'll contact you within 6 hours.")]
+    reply = reply_of(chat.send("I was charged twice, I want to talk to someone", *steps))
+    [card] = reply["cards"]
+    assert card["kind"] == "HANDOFF" and card["summary"] == PROBLEM and card["response_hours"] == 6
+    assert db.scalars(select(ChatHelpRequest)).all() == []
+    assert _sent(db, NotificationType.CHAT_HELP_REQUESTED) == []
+
+    sent = chat.confirm(card["id"]).json()
+    assert sent["status"] == "CONFIRMED" and sent["result_message"].startswith("Your issue has been passed to the admin")
+    [request] = db.scalars(select(ChatHelpRequest)).all()
+    assert request.summary == PROBLEM
+    assert [i["text"] for i in request.transcript][:1] == ["I was charged twice, I want to talk to someone"]
+    assert len(_sent(db, NotificationType.CHAT_HELP_REQUESTED, NotificationChannel.EMAIL)) == 2
+    assert chat.transcript()[-1]["text"].startswith("Your issue has been passed to the admin")
+
+    # The assistant is told next turn.
+    reply_of(chat.send("Thanks", say("You're welcome.")))
+    assert "sent their problem to the admin" in chat.model.requests[-1]["messages"][-1]["content"]
+
+
+def test_no_thanks_sends_nothing(db, user, chat, staff) -> None:
+    [card] = reply_of(chat.send("I want a person", call("contact_admin", {"summary": PROBLEM}), say("Press Send to admin.")))["cards"]
+    assert chat.decline(card["id"]).json()["status"] == "DECLINED"
+    assert db.scalars(select(ChatHelpRequest)).all() == []
+    assert _sent(db, NotificationType.CHAT_HELP_REQUESTED) == []
+
+
+def test_the_assistant_is_told_when_a_request_is_already_open(db, user, chat, staff) -> None:
+    from tests.chat_fakes import last_tool_results
+
+    _send(db, user, chat)
+    reply = reply_of(chat.send("Another problem", call("contact_admin", {"summary": "Another problem with my booking please."}), say("It's already with the admin.")))
+    assert reply["cards"] == []
+    [result] = last_tool_results(chat.model.requests[-1]["messages"])
+    assert result["error"] == "HELP_ALREADY_OPEN"
+
+
+def test_after_the_assistant_failed_the_customer_can_send_their_own_description(client, db, user, chat, staff, settings) -> None:
+    settings(chat_max_tool_rounds=1)
+    failed = reply_of(chat.send("Book something", call("my_bookings", {})))
+    assert "couldn't finish" in failed["text"] and failed["contact_admin"] is True
+    assert reply_of(chat.send("Hi", say("Hello!")))["contact_admin"] is False
+
+    url = f"/api/chat/conversations/{chat.conversation}/help"
+    short = client.post(url, headers=chat.headers, json={"summary": "help"})
+    assert short.status_code == 422 and short.json()["code"] == "HELP_DESCRIPTION"
+    sent = client.post(url, headers=chat.headers, json={"summary": PROBLEM})
+    assert sent.status_code == 201 and sent.json()["message"].startswith("Your issue has been passed to the admin")
+    again = client.post(url, headers=chat.headers, json={"summary": PROBLEM})
+    assert again.status_code == 409 and again.json()["code"] == "HELP_ALREADY_OPEN"
+    assert chat.transcript()[-1]["text"].startswith("Your issue has been passed to the admin")
+
+    # Nobody can send another customer's chat.
+    from tests.conftest import auth_headers
+
+    stranger = auth_headers(client, _stranger(db).email)
+    client.post("/api/chat/subscription", headers=stranger)
+    assert client.post(url, headers=stranger, json={"summary": PROBLEM}).status_code == 404
+
+
+def _stranger(db):
+    from tests.conftest import Factory
+
+    return Factory(db).user("stranger@test.io", name="Stranger")

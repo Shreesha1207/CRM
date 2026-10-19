@@ -147,6 +147,8 @@ class ChatProposalKind(StrEnum):
     # Changes to an existing booking, made only when the customer confirms.
     RESCHEDULE = "RESCHEDULE"
     CANCEL = "CANCEL"
+    # Send the customer's problem to the admin, only when the customer confirms.
+    HANDOFF = "HANDOFF"
 
 
 class ChatHelpStatus(StrEnum):

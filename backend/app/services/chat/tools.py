@@ -860,6 +860,44 @@ def check_availability(db: Session, user: User, ctx: ToolContext, args: Availabi
     return {"service": service.name, "person": resource.name if resource else None, **found}
 
 
+class ContactAdminIn(_In):
+    summary: str = Field(max_length=600)
+
+
+# How long the customer has to press Send on the card.
+HANDOFF_MINUTES = 60
+
+
+def contact_admin(db: Session, user: User, ctx: ToolContext, args: ContactAdminIn) -> dict[str, Any]:
+    """Offer to send the customer's problem to the admin. Nothing is sent until they press Send."""
+    from app.services.chat import help
+
+    summary = help.check_description(args.summary)
+    help.check_allowed(db, user)
+    now = utcnow()
+    proposal = ChatProposal(
+        conversation_id=ctx.conversation_id,
+        user_id=user.id,
+        turn_id=ctx.turn_id,
+        kind=ChatProposalKind.HANDOFF,
+        status=ChatProposalStatus.PENDING,
+        payload={"summary": summary},
+        expires_at=now + timedelta(minutes=HANDOFF_MINUTES),
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(proposal)
+    db.commit()
+    ctx.proposal_ids.append(proposal.id)
+    hours = get_settings().chat_help_response_hours
+    return {
+        "card_shown": True,
+        "summary": summary,
+        "next_step": f"Say you have written down their problem: when they press Send to admin on the card, the admin "
+        f"will contact them by e-mail or phone within {hours} hours. Nothing is sent before that.",
+    }
+
+
 # ---------------------------------------------------------------- definitions
 
 
@@ -979,6 +1017,17 @@ TOOLS = [
         ListBookingsIn,
         list_my_bookings,
         "Looking at your bookings…",
+    ),
+    Tool(
+        "contact_admin",
+        "Offer to send the customer's problem to the admin, who then contacts them. Only for a real problem you cannot "
+        "solve with your other tools (a payment, a complaint, something that went wrong), or when the customer insists on "
+        "talking to a person. summary: the problem in one or two sentences, in the customer's words. The customer sees a "
+        "card and must press Send; nothing is sent before.",
+        {"properties": {"summary": {"type": "string"}}, "required": ["summary"]},
+        ContactAdminIn,
+        contact_admin,
+        "Writing down your problem…",
     ),
     Tool(
         "offer_choices",

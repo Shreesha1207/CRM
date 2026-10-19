@@ -684,5 +684,9 @@ class ChatMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
+class ChatHelpIn(BaseModel):
+    summary: str = Field(min_length=1, max_length=600)
+
+
 class ChatFeedbackIn(BaseModel):
     value: Literal[1, -1] | None

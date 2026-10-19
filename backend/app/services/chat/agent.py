@@ -288,7 +288,7 @@ def run_turn(
             db.rollback()
             turn.block("error")
             proposals.withdraw_turn(db, turn.turn_id, user)
-            notice = turn.add(ChatRole.NOTICE, None, display={"text": UNAVAILABLE})
+            notice = turn.add(ChatRole.NOTICE, None, display={"text": UNAVAILABLE, "contact_admin": True})
             emit("reply", _reply(db, user, notice))
         finally:
             groq.rate_limit_waits.reset(waits)
@@ -308,7 +308,9 @@ def _refuse(turn: _Turn, reason: str, message: str, emit: Emit, *, strike: bool)
     proposals.withdraw_turn(db, turn.turn_id, turn.user)
     paused = _strike(db, turn.user, turn.conversation) if strike else False
     choices = [] if paused else STARTERS
-    notice = turn.add(ChatRole.NOTICE, None, display={"text": message, "choices": choices, "paused": paused})
+    # When the assistant itself failed, the customer may send their problem to the admin.
+    offer_help = message in (TOO_COMPLEX, UNAVAILABLE) and not paused
+    notice = turn.add(ChatRole.NOTICE, None, display={"text": message, "choices": choices, "paused": paused, "contact_admin": offer_help})
     emit("reply", _reply(db, turn.user, notice))
 
 
@@ -509,6 +511,7 @@ def display_item(db: Session, user: User, row: ChatMessage) -> dict[str, Any]:
         "choices": display.get("choices", []),
         "cards": cards,
         "paused": bool(display.get("paused")),
+        "contact_admin": bool(display.get("contact_admin")),
         "feedback": row.feedback,
         "created_at": row.created_at.isoformat(),
     }
