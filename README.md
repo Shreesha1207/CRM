@@ -138,14 +138,14 @@ GROQ_API_KEY=gsk_...
 - Per-customer limits: `CHAT_MESSAGES_PER_MINUTE` (10), `CHAT_DAILY_MESSAGE_LIMIT` (60), `CHAT_DAILY_TOKEN_LIMIT` (500k), 40 messages per conversation, 8 tool rounds per message, one reply at a time per conversation.
 
 **Contacting the admin.** When a customer has a real problem the assistant can't solve (a double charge, a complaint, something that went wrong), they can pass it to the admin. Only the customer can start it, and only for a real problem:
-- *Through the assistant.* When they report such a problem or insist on a person, it shows a card with the problem in their words: "Send this to the admin? … They'll contact you within 6 hours", with **Send to admin** / **No thanks**. Nothing is sent before they press Send.
+- *Through the assistant.* When they report such a problem or insist on a person, it shows a card: **"Tell the admin what happened"**, with a box filled with its summary for the customer to check or rewrite, the 6-hour promise, and **Send to admin** / **No thanks**. If they only said "contact admin", it first asks what happened; a summary that says nothing about the problem is refused. Nothing is sent before they press Send.
 - *After a failure.* When the assistant couldn't finish or was unavailable, a **Contact admin** button lets them describe what went wrong (20–500 characters).
 - *Limits:* one open request per customer, at most `CHAT_HELP_REQUESTS_PER_WEEK` (3) a week, none while paused for blocked messages, and the description goes through the same checks as messages. Failures, thumbs-down and blocked messages on their own notify no one.
 
 Once sent:
 - The customer sees **"Your issue has been passed to the admin. They will contact you by e-mail or phone within 6 hours (by Tue 20 Oct, 2:23 AM)"** (`CHAT_HELP_RESPONSE_HOURS`, default 6).
 - Admins, super admins and managers (permission `chat:review`) get it in the app and by e-mail, with the description, the customer's e-mail and phone, the due time and the **whole chat**.
-- The admin console's **Help requests** page lists open requests ("due in 3h", "overdue by 40m"). Each request shows the problem, the contact details, the customer's upcoming bookings, and the whole chat as they saw it (including anything said since). **Mark resolved** takes an optional note the customer sees. A request still open past its due time reminds the admins once.
+- The admin console's **Help requests** page lists open requests ("due in 3h", "overdue by 40m"). Each request shows the problem, the contact details, the customer's upcoming bookings, and the whole chat as they saw it (including anything said since). **Mark resolved** takes an optional note. The customer sees it at the end of the chat they asked from ('The admin has resolved your request (…). Their note: "…"'), on the card they sent, and by e-mail. A request still open past its due time reminds the admins once.
 
 Staff can read only chats that a customer sent this way, and every opening is written to the audit log. The chat page tells customers so.
 
