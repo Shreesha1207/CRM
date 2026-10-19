@@ -123,12 +123,14 @@ def test_overdue_requests_are_reminded_once(db, user, chat, staff) -> None:
     assert reminders[0].title == "Overdue: Test User is still waiting"
 
 
-def test_resolving_tells_the_customer(db, user, chat, staff) -> None:
+def test_resolving_tells_the_customer_in_the_chat_and_by_e_mail(db, user, chat, staff) -> None:
     request = _send(db, user, chat)
     help.resolve(db, request, staff[0], "Refunded the second charge.")
     assert request.status == ChatHelpStatus.RESOLVED and request.resolved_by_id == staff[0].id
-    [note] = _sent(db, NotificationType.CHAT_HELP_RESOLVED)
-    assert note.user_id == user.id and "Refunded the second charge." in note.body
+    assert chat.transcript()[-1]["text"] == f'The admin has resolved your request ("{PROBLEM}"). Their note: "Refunded the second charge."'
+    for channel in (NotificationChannel.IN_APP, NotificationChannel.EMAIL):
+        [note] = _sent(db, NotificationType.CHAT_HELP_RESOLVED, channel)
+        assert note.user_id == user.id and "Refunded the second charge." in note.body
     with pytest.raises(AppError):
         help.resolve(db, request, staff[0], None)
 
@@ -295,3 +297,14 @@ def test_the_customer_checks_the_text_and_nothing_is_claimed_as_sent(db, user, c
     assert sent.json()["status"] == "CONFIRMED" and sent.json()["summary"] == edited
     [request] = db.scalars(select(ChatHelpRequest)).all()
     assert request.summary == edited
+
+
+def test_the_card_they_sent_shows_it_was_resolved(db, user, chat, staff) -> None:
+    [card] = reply_of(chat.send("I was charged twice", call("contact_admin", {"summary": PROBLEM}), say("ok")))["cards"]
+    chat.confirm(card["id"])
+    [request] = db.scalars(select(ChatHelpRequest)).all()
+    help.resolve(db, request, staff[0], None)
+    items = chat.transcript()
+    assert items[-1]["text"] == f'The admin has resolved your request ("{PROBLEM}").'
+    [shown] = [c for i in items for c in i["cards"] if c["id"] == card["id"]]
+    assert shown["result_message"] == "Resolved by the admin."

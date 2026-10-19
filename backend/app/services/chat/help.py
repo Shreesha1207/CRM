@@ -20,8 +20,15 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.permissions import ROLE_PERMISSIONS, Permission
 from app.core.timeutils import get_zone, utcnow
-from app.models import ChatConversation, ChatHelpRequest, ChatMessage, ChatSubscription, User
-from app.models.enums import ChatHelpStatus, ChatRole, NotificationChannel, NotificationType, UserStatus
+from app.models import ChatConversation, ChatHelpRequest, ChatMessage, ChatProposal, ChatSubscription, User
+from app.models.enums import (
+    ChatHelpStatus,
+    ChatProposalKind,
+    ChatRole,
+    NotificationChannel,
+    NotificationType,
+    UserStatus,
+)
 from app.services import settings_service
 from app.services.chat.guard import looks_like_code
 from app.services.notifications import _clock, notify
@@ -248,6 +255,12 @@ def remind_overdue(db: Session, now: datetime) -> int:
     return len(overdue)
 
 
+def resolution_text(request: ChatHelpRequest) -> str:
+    wrote = request.summary if len(request.summary) <= 120 else request.summary[:117].rstrip() + "…"
+    text = f'The admin has resolved your request ("{wrote}").'
+    return f'{text} Their note: "{request.resolution_note}"' if request.resolution_note else text
+
+
 def resolve(db: Session, request: ChatHelpRequest, admin: User, note: str | None) -> ChatHelpRequest:
     if request.status != ChatHelpStatus.OPEN:
         raise AppError("ALREADY_RESOLVED", "This request is already resolved", status_code=409)
@@ -255,13 +268,21 @@ def resolve(db: Session, request: ChatHelpRequest, admin: User, note: str | None
     request.resolved_at = utcnow()
     request.resolved_by_id = admin.id
     request.resolution_note = (note or "").strip() or None
+    text = resolution_text(request)
+    # The customer sees it in the chat they asked from, on the card they sent, and by e-mail.
+    _add_notice(db, db.get(ChatConversation, request.conversation_id), text, request)
+    card = db.scalar(
+        select(ChatProposal).where(ChatProposal.kind == ChatProposalKind.HANDOFF, ChatProposal.payload["request_id"].astext == str(request.id))
+    )
+    if card is not None:
+        card.result_message = "Resolved by the admin." + (f" Their note: {request.resolution_note}" if request.resolution_note else "")
     notify(
         db,
         user_id=request.user_id,
         type=NotificationType.CHAT_HELP_RESOLVED,
         title="Your request to the admin was resolved",
-        body=f"You wrote: {request.summary}" + (f"\nThe admin's note: {request.resolution_note}" if request.resolution_note else ""),
-        channels=IN_APP,
+        body=f"{text}\nYou wrote: {request.summary}",
+        channels=BOTH,
         link=f"/chat?c={request.conversation_id}",
         dedupe_key=f"chat-help-resolved:{request.id}",
     )

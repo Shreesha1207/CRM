@@ -190,7 +190,7 @@ export function AdminHelpRequestPage() {
                 }}
                 className="space-y-3"
               >
-                <Field label="What was done (optional)" hint="The customer sees this note.">
+                <Field label="What was done (optional)" hint="The customer sees this note in their chat and by e-mail.">
                   <Textarea rows={3} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
                 </Field>
                 {resolve.error && <Alert>{errorMessage(resolve.error)}</Alert>}
