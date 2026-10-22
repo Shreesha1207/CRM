@@ -111,8 +111,16 @@ def update_user(
             raise HTTPException(status.HTTP_403_FORBIDDEN, _cannot_give(changes["role"]))
     if changes.get("status") == UserStatus.INVITED and user.status != UserStatus.INVITED:
         raise HTTPException(422, "Accounts are only invited by booking for an e-mail address")
-    if "status" in changes and changes["status"] != UserStatus.ACTIVE and user.id == actor.id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot deactivate your own account")
+    if "status" in changes and changes["status"] != user.status:
+        if user.id == actor.id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot change the status of your own account")
+        # An invited account follows what the person does: it becomes active when they set it up.
+        if user.status == UserStatus.INVITED:
+            raise AppError(
+                "STILL_INVITED",
+                f"{user.name} has not set up their account yet. It becomes active when they accept the invitation",
+                status_code=409,
+            )
 
     old = audit.snapshot(user, "name", "phone", "role", "status")
     password = changes.pop("password", None)

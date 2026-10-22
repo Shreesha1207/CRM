@@ -290,7 +290,10 @@ def test_admin_user_management_guards(client, admin, admin_headers, user) -> Non
     )
     assert r.status_code == 403
     assert client.put(f"/api/admin/users/{admin.id}", headers=admin_headers, json={"role": "USER"}).status_code == 400
-    assert client.put(f"/api/admin/users/{admin.id}", headers=admin_headers, json={"status": "SUSPENDED"}).status_code == 400
+    for status in ("SUSPENDED", "INACTIVE"):
+        assert client.put(f"/api/admin/users/{admin.id}", headers=admin_headers, json={"status": status}).status_code == 400
+    # Sending their own status back unchanged (as the edit screen does) is fine.
+    assert client.put(f"/api/admin/users/{admin.id}", headers=admin_headers, json={"name": "Me", "status": "ACTIVE"}).status_code == 200
     suspended = client.put(f"/api/admin/users/{user.id}", headers=admin_headers, json={"status": "SUSPENDED"})
     assert suspended.json()["status"] == "SUSPENDED"
     login = client.post("/api/auth/login", json={"email": user.email, "password": "password123"})

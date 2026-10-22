@@ -355,6 +355,18 @@ def test_an_admin_cannot_hand_out_the_invited_status(client, db, basic, admin_he
     assert made.status_code == 422
 
 
+def test_an_invited_users_status_follows_what_they_do(client, db, basic, admin_headers) -> None:
+    service, resource = basic
+    invite(client, admin_headers, service, resource)
+    guest = db.scalar(select(User).where(User.email == GUEST))
+    # They have done nothing yet, so the admin cannot make them active, suspended or inactive.
+    for status in ("ACTIVE", "SUSPENDED", "INACTIVE"):
+        refused = client.put(f"/api/admin/users/{guest.id}", headers=admin_headers, json={"status": status})
+        assert refused.status_code == 409 and refused.json()["code"] == "STILL_INVITED", refused.text
+    db.expire_all()
+    assert db.get(User, guest.id).status == UserStatus.INVITED
+
+
 # ------------------------------------------------------------------ a booking waiting for its customer is moved
 
 

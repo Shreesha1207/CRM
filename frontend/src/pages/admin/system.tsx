@@ -12,11 +12,15 @@ import { formatStamp, titleCase } from "../../lib/format";
 function UserForm({ user, onClose }: { user: User | null; onClose: () => void }) {
   const queryClient = useQueryClient();
   // Only a super admin decides who gets into the admin console.
-  const grantsRoles = useAuth().can("admins:manage");
+  const { can, user: me } = useAuth();
+  const grantsRoles = can("admins:manage");
   // The roles this person may hand out: a super admin every one below their own, an admin only "User".
   // Nobody is made a super admin from here.
   const assignable = grantsRoles ? ROLES.filter((r) => r !== "SUPER_ADMIN") : (["USER"] as Role[]);
   const roleLocked = !assignable.includes(user?.role ?? "USER");
+  // An invited account becomes active when its owner sets it up, and nobody changes their own status.
+  const isMe = !!user && user.id === me?.id;
+  const statusLocked = isMe || user?.status === "INVITED";
   const [form, setForm] = useState({
     name: user?.name ?? "",
     email: user?.email ?? "",
@@ -77,8 +81,17 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
               ))}
             </Select>
           </Field>
-          <Field label="Status">
-            <Select value={form.status} onChange={set("status")}>
+          <Field
+            label="Status"
+            hint={
+              isMe
+                ? "You cannot change the status of your own account."
+                : user?.status === "INVITED"
+                  ? "Becomes Active when they accept the invitation."
+                  : undefined
+            }
+          >
+            <Select value={form.status} onChange={set("status")} disabled={statusLocked}>
               <option value="ACTIVE">Active</option>
               <option value="INACTIVE">Inactive</option>
               <option value="SUSPENDED">Suspended</option>
