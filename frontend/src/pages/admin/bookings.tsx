@@ -124,6 +124,7 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
             </div>
           </div>
           {b.conflict_reason && <Alert tone="warning">Conflict: {b.conflict_reason}</Alert>}
+          {b.status === "COMPLETED" && b.completed_at && <p className="text-sm text-muted">Completed {formatDateTime(b.completed_at, b.timezone)}</p>}
           {action.error && <Alert>{errorMessage(action.error)}</Alert>}
           {b.awaiting_customer && (
             <Alert tone="info">
@@ -153,6 +154,9 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
                   <Button size="sm" variant="secondary" onClick={() => action.mutate("no-show")}>Mark no-show</Button>
                 </>
               )}
+              {/* Past bookings complete by themselves, so either can be corrected. */}
+              {b.status === "COMPLETED" && <Button size="sm" variant="secondary" onClick={() => action.mutate("no-show")}>Mark no-show instead</Button>}
+              {b.status === "NO_SHOW" && <Button size="sm" variant="secondary" onClick={() => action.mutate("complete")}>Mark completed instead</Button>}
               {open && !b.held_in_chat && <Button size="sm" variant="secondary" onClick={() => setSub("reschedule")}>Reschedule</Button>}
               {open && !b.held_in_chat && <Button size="sm" variant="secondary" onClick={() => setSub("reassign")}>Reassign resource</Button>}
               {(open || b.status === "WAITLISTED") && <Button size="sm" variant="danger" onClick={() => setSub("cancel")}>Cancel</Button>}

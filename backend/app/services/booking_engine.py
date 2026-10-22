@@ -72,10 +72,11 @@ ALLOWED_TRANSITIONS: dict[BookingStatus, frozenset[BookingStatus]] = {
     S.CONFIRMED: frozenset({S.COMPLETED, S.NO_SHOW, S.CANCELLED, S.RESCHEDULED, S.CONFLICTED}),
     S.CONFLICTED: frozenset({S.CONFIRMED, S.CANCELLED, S.RESCHEDULED}),
     S.WAITLISTED: frozenset({S.CONFIRMED, S.PENDING, S.CANCELLED}),
-    S.COMPLETED: frozenset(),
+    # Past bookings are completed automatically, so an admin can still correct it either way.
+    S.COMPLETED: frozenset({S.NO_SHOW}),
     S.CANCELLED: frozenset(),
     S.RESCHEDULED: frozenset(),
-    S.NO_SHOW: frozenset(),
+    S.NO_SHOW: frozenset({S.COMPLETED}),
 }
 
 
@@ -917,8 +918,9 @@ class BookingEngine:
             raise BookingRejected("NOT_STARTED", "This booking has not started yet", status_code=422)
         old = booking.status
         transition(booking, status)
-        if status == S.COMPLETED:
-            booking.completed_at = self.now
+        # It finished when it was due to, not when someone got round to marking it
+        # (or earlier, if it is marked while still running).
+        booking.completed_at = min(self.now, booking.end_datetime) if status == S.COMPLETED else None
         self._flush()
         audit.record(self.db, actor_id=self.actor.id, action=action, entity_type="booking", entity_id=booking.id, old={"status": old}, new={"status": status})
         self._commit()
@@ -1057,6 +1059,29 @@ class BookingEngine:
             events.publish(self.db, "booking.created", booking=booking)
         self._commit()
         return series, created, conflicts
+
+
+def complete_finished(db: Session, now: datetime) -> int:
+    """Mark confirmed bookings whose time is over as completed, at their scheduled end.
+
+    Run by the background job, so the calendar never shows a past booking as still
+    open. An admin can still turn one into a no-show. Returns how many were completed."""
+    finished = db.scalars(
+        select(Booking)
+        .where(Booking.status == S.CONFIRMED, Booking.end_datetime <= now)
+        .order_by(Booking.end_datetime)
+        .limit(500)
+        .with_for_update(skip_locked=True, of=Booking)
+    ).unique().all()
+    for booking in finished:
+        transition(booking, S.COMPLETED)
+        booking.completed_at = booking.end_datetime
+        audit.record(
+            db, actor_id=None, action="BOOKING_COMPLETED", entity_type="booking", entity_id=booking.id,
+            old={"status": S.CONFIRMED}, new={"status": S.COMPLETED, "automatic": True},
+        )
+    db.commit()
+    return len(finished)
 
 
 def suggest_alternatives(

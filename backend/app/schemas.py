@@ -594,6 +594,7 @@ class BookingOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     confirmed_at: datetime | None
+    completed_at: datetime | None = None
     cancelled_at: datetime | None
     cancellation_reason: str | None
     conflict_reason: str | None

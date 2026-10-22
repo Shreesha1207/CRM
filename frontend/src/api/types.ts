@@ -235,6 +235,8 @@ export interface Booking {
   created_at: string;
   updated_at: string;
   confirmed_at: string | null;
+  /** When it finished: its scheduled end, or when it was marked if that was earlier. */
+  completed_at: string | null;
   cancelled_at: string | null;
   cancellation_reason: string | null;
   conflict_reason: string | null;

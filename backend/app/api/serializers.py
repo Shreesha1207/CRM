@@ -178,6 +178,7 @@ def bookings_out(
                 created_at=b.created_at,
                 updated_at=b.updated_at,
                 confirmed_at=b.confirmed_at,
+                completed_at=b.completed_at,
                 cancelled_at=b.cancelled_at,
                 cancellation_reason=b.cancellation_reason,
                 conflict_reason=b.conflict_reason,

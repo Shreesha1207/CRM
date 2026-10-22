@@ -400,10 +400,42 @@ def test_complete_and_no_show_only_after_start(client, basic, user_headers, admi
     service, resource = basic
     booking = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
     assert client.post(f"/api/admin/bookings/{booking['id']}/complete", headers=admin_headers).json()["code"] == "NOT_STARTED"
-    freeze_time(NOW.replace(day=1, month=3, hour=11))
-    assert client.post(f"/api/admin/bookings/{booking['id']}/complete", headers=admin_headers).json()["status"] == "COMPLETED"
-    again = client.post(f"/api/admin/bookings/{booking['id']}/no-show", headers=admin_headers)
-    assert again.status_code == 409 and again.json()["code"] == "INVALID_STATUS_TRANSITION"
+    freeze_time(NOW.replace(day=1, month=3, hour=10, minute=30))
+    done = client.post(f"/api/admin/bookings/{booking['id']}/complete", headers=admin_headers).json()
+    # Marked while still running: it ended when it was marked.
+    assert done["status"] == "COMPLETED" and done["completed_at"].startswith("2027-03-01T10:30")
+    # A completed booking can be corrected to a no-show (and back), nothing else.
+    assert client.post(f"/api/admin/bookings/{booking['id']}/no-show", headers=admin_headers).json()["status"] == "NO_SHOW"
+    assert client.post(f"/api/admin/bookings/{booking['id']}/confirm", headers=admin_headers).json()["code"] == "INVALID_STATUS_TRANSITION"
+
+
+def test_completed_is_stamped_with_the_scheduled_end_not_the_click(client, basic, user_headers, admin_headers) -> None:
+    service, resource = basic
+    booking = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
+    freeze_time(NOW.replace(day=3, month=3, hour=16))  # two days later
+    done = client.post(f"/api/admin/bookings/{booking['id']}/complete", headers=admin_headers).json()
+    assert done["status"] == "COMPLETED" and done["completed_at"] == done["end_datetime"]
+
+
+def test_bookings_whose_time_is_over_complete_by_themselves(client, db, make, basic, user, user_headers, admin_headers) -> None:
+    service, resource = basic
+    past = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
+    later = book(client, user_headers, service, resource, at(MONDAY, 14)).json()
+    make.settings(require_admin_confirmation=True)
+    pending = book(client, user_headers, service, resource, at(MONDAY, 11)).json()
+    assert pending["status"] == "PENDING"
+
+    freeze_time(NOW.replace(day=1, month=3, hour=13))
+    from app.jobs import runner
+
+    runner.run_once()
+    got = {b["id"]: b for b in client.get("/api/admin/bookings", headers=admin_headers).json()["items"]}
+    assert got[past["id"]]["status"] == "COMPLETED" and got[past["id"]]["completed_at"] == got[past["id"]]["end_datetime"]
+    # Not over yet, or never confirmed: left alone.
+    assert got[later["id"]]["status"] == "CONFIRMED"
+    assert got[pending["id"]]["status"] == "PENDING"
+    # It did not happen after all: the admin can still say so.
+    assert client.post(f"/api/admin/bookings/{past['id']}/no-show", headers=admin_headers).json()["status"] == "NO_SHOW"
 
 
 def test_admin_override_books_outside_hours_but_never_double_books(client, basic, user, admin_headers, user_headers) -> None:
