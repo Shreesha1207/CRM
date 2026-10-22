@@ -581,6 +581,8 @@ class BookingOut(BaseModel):
     can_reschedule: bool
     # Made for a customer who has not confirmed it yet: only they can, the admin cannot.
     awaiting_customer: bool = False
+    # Held by the booking assistant until the customer confirms or deletes it in the chat.
+    held_in_chat: bool = False
 
 
 class RecurringCreatedOut(BaseModel):
@@ -611,6 +613,7 @@ class ConflictResolveIn(BaseModel):
 class NotificationOut(ORM):
     id: uuid.UUID
     booking_id: uuid.UUID | None
+    link: str | None = None
     type: NotificationType
     channel: NotificationChannel
     title: str
@@ -650,3 +653,45 @@ class PublicConfigOut(BaseModel):
     minimum_booking_notice: int
     cancellation_window: int
     rescheduling_window: int
+
+
+# ---------------------------------------------------------------- booking assistant
+
+
+class ChatSubscriptionOut(BaseModel):
+    active: bool
+    activated_at: datetime | None = None
+    paused_until: datetime | None = None
+    # False until the operator has set the model and guard keys.
+    configured: bool
+    price_label: str = "9.99 / month"
+    demo: bool = True
+
+
+class ChatConversationOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    updated_at: datetime
+
+
+class ChatConversationDetailOut(ChatConversationOut):
+    items: list[dict[str, Any]]
+    starters: list[str]
+    hold_minutes: int
+
+
+class ChatMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class ChatProposalConfirmIn(BaseModel):
+    # A HANDOFF card: the description as the customer finally wrote it.
+    summary: str | None = Field(default=None, max_length=600)
+
+
+class ChatHelpIn(BaseModel):
+    summary: str = Field(min_length=1, max_length=600)
+
+
+class ChatFeedbackIn(BaseModel):
+    value: Literal[1, -1] | None

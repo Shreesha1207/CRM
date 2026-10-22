@@ -100,6 +100,12 @@ class NotificationType(StrEnum):
     PASSWORD_RESET = "PASSWORD_RESET"
     INVITATION_ACCEPTED = "INVITATION_ACCEPTED"
     INVITATION_DECLINED = "INVITATION_DECLINED"
+    # A customer asked the admin to contact them from the booking assistant.
+    CHAT_HELP_REQUESTED = "CHAT_HELP_REQUESTED"
+    CHAT_HELP_OVERDUE = "CHAT_HELP_OVERDUE"
+    # To the customer: the request was received, and later resolved.
+    CHAT_HELP_RECEIVED = "CHAT_HELP_RECEIVED"
+    CHAT_HELP_RESOLVED = "CHAT_HELP_RESOLVED"
 
 
 class InvitationStatus(StrEnum):
@@ -116,3 +122,43 @@ class RecurrenceFrequency(StrEnum):
     DAILY = "DAILY"
     WEEKLY = "WEEKLY"
     MONTHLY = "MONTHLY"
+
+
+class ChatSubscriptionStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    CANCELLED = "CANCELLED"
+
+
+class ChatRole(StrEnum):
+    # The roles of the model's conversation, spelled as the API spells them.
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    # A tool's result, answering one of the model's tool calls.
+    TOOL = "tool"
+    # Shown to the customer but never sent to the model (e.g. the fixed reply
+    # to a blocked message).
+    NOTICE = "notice"
+
+
+class ChatProposalKind(StrEnum):
+    # A booking the assistant made and holds for the customer to confirm or delete.
+    HOLD = "HOLD"
+    # Changes to an existing booking, made only when the customer confirms.
+    RESCHEDULE = "RESCHEDULE"
+    CANCEL = "CANCEL"
+    # Send the customer's problem to the admin, only when the customer confirms.
+    HANDOFF = "HANDOFF"
+
+
+class ChatHelpStatus(StrEnum):
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+
+
+class ChatProposalStatus(StrEnum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    DECLINED = "DECLINED"
+    EXPIRED = "EXPIRED"
+    FAILED = "FAILED"

@@ -223,6 +223,8 @@ export interface Booking {
   can_reschedule: boolean;
   /** Made for a customer who has not confirmed it yet: only they can, the admin cannot. */
   awaiting_customer: boolean;
+  /** Held by the booking assistant until the customer confirms or deletes it in the chat. */
+  held_in_chat: boolean;
 }
 
 export interface Occurrence {
@@ -284,6 +286,8 @@ export interface ScheduleChange<T = unknown> {
 export interface NotificationItem {
   id: string;
   booking_id: string | null;
+  /** Where it leads, when not to a booking (e.g. a help request). */
+  link?: string | null;
   type: string;
   channel: string;
   title: string;
@@ -378,4 +382,111 @@ export interface SettingDefinition {
   key: string;
   default: unknown;
   description: string;
+}
+
+// ---------------------------------------------------------------- booking assistant
+
+export interface ChatSubscription {
+  active: boolean;
+  activated_at: string | null;
+  paused_until: string | null;
+  /** False until the operator has set the model and guard keys. */
+  configured: boolean;
+  price_label: string;
+  demo: boolean;
+}
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  updated_at: string;
+}
+
+export interface ChatWhen {
+  date: string;
+  time: string;
+  zone: string;
+}
+
+export type ChatCardStatus = "PENDING" | "CONFIRMED" | "DECLINED" | "EXPIRED" | "FAILED";
+
+/** A booking the assistant holds (HOLD), or a change it offers (RESCHEDULE, CANCEL),
+ * with the same details as the booking e-mails; or an offer to send the customer's
+ * problem to the admin (HANDOFF). */
+export interface ChatCard {
+  id: string;
+  kind: "HOLD" | "RESCHEDULE" | "CANCEL" | "HANDOFF";
+  status: ChatCardStatus;
+  expires_at: string;
+  result_message: string | null;
+  booking_id: string | null;
+  business?: string;
+  service?: string;
+  resource?: string;
+  quantity?: number;
+  when?: ChatWhen;
+  was?: ChatWhen | null;
+  place?: string | null;
+  map_url?: string | null;
+  price?: string | null;
+  booking_status?: BookingStatus;
+  /** HANDOFF: the problem in the customer's words, and the reply time promised. */
+  summary?: string;
+  response_hours?: number;
+}
+
+export interface ChatItem {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  choices: string[];
+  cards: ChatCard[];
+  paused: boolean;
+  /** The assistant failed: the customer may send their problem to the admin. */
+  contact_admin?: boolean;
+  feedback: 1 | -1 | null;
+  created_at: string;
+}
+
+export interface ChatConversationDetail extends ChatConversation {
+  items: ChatItem[];
+  starters: string[];
+  hold_minutes: number;
+}
+
+/** A problem a customer sent to the admin from the booking assistant. */
+export interface HelpRequest {
+  id: string;
+  conversation_id: string;
+  status: "OPEN" | "RESOLVED";
+  summary: string;
+  created_at: string;
+  due_at: string;
+  overdue: boolean;
+  customer: { id: string; name: string; email: string; phone: string | null };
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution_note: string | null;
+}
+
+/** One message of the chat the admin reads: what the customer saw, and what was blocked. */
+export interface HelpChatItem extends ChatItem {
+  kind: "user" | "assistant" | "notice";
+  blocked: string | null;
+}
+
+export interface HelpBooking {
+  id: string;
+  service: string;
+  resource: string;
+  date: string;
+  time: string;
+  timezone: string;
+  status: string;
+}
+
+export interface HelpRequestDetail extends HelpRequest {
+  transcript: HelpChatItem[];
+  since: HelpChatItem[];
+  bookings: HelpBooking[];
 }

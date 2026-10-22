@@ -178,3 +178,34 @@ export function Mark({ className = "h-5 w-5" }: IconProps) {
     </svg>
   );
 }
+
+export const ChatBubble = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 4.5h12a1 1 0 011 1v7a1 1 0 01-1 1H9l-4 3v-3H4a1 1 0 01-1-1v-7a1 1 0 011-1z" />
+  </Icon>
+);
+
+export const Send = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3.5 10L16.5 4l-4 12-3-5-6-1z" />
+  </Icon>
+);
+
+export const ThumbUp = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M6.5 9v7.5H4V9h2.5zM6.5 9l3-5.5c1.2 0 2 .8 2 2V8h3.6a1.4 1.4 0 011.4 1.6l-.9 5.6a1.5 1.5 0 01-1.5 1.3H6.5" />
+  </Icon>
+);
+
+export const ThumbDown = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M6.5 11V3.5H4V11h2.5zM6.5 11l3 5.5c1.2 0 2-.8 2-2V12h3.6a1.4 1.4 0 001.4-1.6l-.9-5.6a1.5 1.5 0 00-1.5-1.3H6.5" />
+  </Icon>
+);
+
+export const Lock = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="4.5" y="9" width="11" height="8" rx="1.5" />
+    <path d="M7 9V6.5a3 3 0 016 0V9" />
+  </Icon>
+);

@@ -26,6 +26,11 @@ from app.db.base import Base, Timestamps, UUIDPk
 from app.models.enums import (
     BookingStatus,
     BookingType,
+    ChatHelpStatus,
+    ChatProposalKind,
+    ChatProposalStatus,
+    ChatRole,
+    ChatSubscriptionStatus,
     ExceptionType,
     InvitationStatus,
     NotificationChannel,
@@ -342,6 +347,8 @@ class Notification(UUIDPk, Base):
     )
     # Unique so a reminder can never be recorded (and therefore sent) twice.
     dedupe_key: Mapped[str | None] = mapped_column(String(300), unique=True)
+    # Where the notification leads in the app, when not to a booking (e.g. a help request).
+    link: Mapped[str | None] = mapped_column(String(300))
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
@@ -393,3 +400,127 @@ class SettingEntry(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class ChatSubscription(UUIDPk, Timestamps, Base):
+    """Access to the booking assistant.
+
+    The paywall is a demo: "Pay" only activates this row. A payment provider's
+    webhook would set the same fields.
+    """
+
+    __tablename__ = "chat_subscriptions"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    status: Mapped[ChatSubscriptionStatus] = mapped_column(_enum(ChatSubscriptionStatus))
+    provider: Mapped[str] = mapped_column(String(32), default="demo")
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set after repeated blocked messages: the assistant refuses until then.
+    paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ChatConversation(UUIDPk, Timestamps, Base):
+    __tablename__ = "chat_conversations"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="New chat")
+    # A turn in progress leases the conversation until then, so two turns never interleave.
+    busy_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    flagged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ChatMessage(UUIDPk, Base):
+    """One message of a conversation.
+
+    `content` is exactly what goes to (or came from) the model, replayed
+    unchanged on later turns. `display` is what the customer sees, set only on
+    the rows that are shown. Rows of a blocked turn keep `blocked_reason` and
+    are never sent to the model again.
+    """
+
+    __tablename__ = "chat_messages"
+
+    conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_conversations.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    turn_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    seq: Mapped[int] = mapped_column(Integer)
+    role: Mapped[ChatRole] = mapped_column(_enum(ChatRole))
+    content: Mapped[Any] = mapped_column(JSONB)
+    display: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    feedback: Mapped[int | None] = mapped_column(Integer)
+    blocked_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("uq_chat_messages_conversation_seq", "conversation_id", "seq", unique=True),
+        CheckConstraint("feedback IN (-1, 1)", name="feedback_valid"),
+    )
+
+
+class ChatHelpRequest(UUIDPk, Base):
+    """A customer asked the admin to contact them about a problem, from the chat.
+
+    `transcript` is the whole chat as it was when they asked, so the admin has the
+    context even if the conversation goes on. A customer has at most one open request.
+    """
+
+    __tablename__ = "chat_help_requests"
+
+    conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_conversations.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    transcript: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    status: Mapped[ChatHelpStatus] = mapped_column(_enum(ChatHelpStatus), default=ChatHelpStatus.OPEN)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # By when the customer was promised a reply.
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    resolution_note: Mapped[str | None] = mapped_column(Text)
+
+    user: Mapped["User"] = relationship(foreign_keys=[user_id])
+
+    __table_args__ = (
+        Index("uq_chat_help_requests_open", "user_id", unique=True, postgresql_where=text("status = 'OPEN'")),
+    )
+
+
+class ChatProposal(UUIDPk, Timestamps, Base):
+    """A booking the assistant holds for the customer, or a change it offers.
+
+    HOLD: `booking_id` is a PENDING booking holding its slot until the customer
+    confirms or deletes it, or `expires_at` passes. RESCHEDULE / CANCEL:
+    `booking_id` is the existing booking, and nothing changes until the
+    customer confirms.
+    """
+
+    __tablename__ = "chat_proposals"
+
+    conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_conversations.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    turn_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    kind: Mapped[ChatProposalKind] = mapped_column(_enum(ChatProposalKind))
+    status: Mapped[ChatProposalStatus] = mapped_column(_enum(ChatProposalStatus), default=ChatProposalStatus.PENDING)
+    booking_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("bookings.id", ondelete="SET NULL"), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    result_booking_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("bookings.id", ondelete="SET NULL"))
+    result_message: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # When the assistant was told how it ended (confirmed, deleted, expired...).
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        # A booking is held by at most one open chat hold.
+        Index(
+            "uq_chat_proposals_open_hold",
+            "booking_id",
+            unique=True,
+            postgresql_where=text("kind = 'HOLD' AND status = 'PENDING'"),
+        ),
+    )

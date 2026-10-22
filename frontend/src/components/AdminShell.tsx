@@ -5,7 +5,7 @@ import { api } from "../api/client";
 import type { NotificationItem } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { titleCase } from "../lib/format";
-import { Calendar, Clock, ExternalLink, FileText, Grid, List, MapPin, Mark, Menu, People, Person, SignOut, Sliders, Tag, Warning } from "./icons";
+import { Calendar, ChatBubble, Clock, ExternalLink, FileText, Grid, List, MapPin, Mark, Menu, People, Person, SignOut, Sliders, Tag, Warning } from "./icons";
 import { NotificationBell, ThemeToggle, iconButton, useConfig } from "./Layout";
 import { Button, Modal, cx } from "./ui";
 
@@ -54,6 +54,7 @@ const ADMIN_NAV: { label: string; links: AdminLink[] }[] = [
       { to: "/admin/calendar", label: "Calendar", permission: "bookings:view_all", icon: Calendar },
       { to: "/admin/bookings", label: "Bookings", permission: "bookings:view_all", icon: List },
       { to: "/admin/conflicts", label: "Conflicts", permission: "conflicts:manage", icon: Warning },
+      { to: "/admin/help", label: "Help requests", permission: "chat:review", icon: ChatBubble },
     ],
   },
   {
@@ -81,6 +82,13 @@ function Sidebar({ onSignOut }: { onSignOut: () => void }) {
   const { user, can } = useAuth();
   const config = useConfig();
   const groups = ADMIN_NAV.map((g) => ({ ...g, links: g.links.filter((l) => can(l.permission)) })).filter((g) => g.links.length);
+  // Customers waiting for the admin, shown next to Help requests.
+  const help = useQuery({
+    queryKey: ["admin", "help-count"],
+    queryFn: () => api.get<{ open: number; overdue: number }>("/api/admin/help-requests/count"),
+    enabled: can("chat:review"),
+    refetchInterval: 60_000,
+  });
   const initials = (user?.name ?? "")
     .split(/\s+/)
     .map((w) => w[0])
@@ -114,6 +122,17 @@ function Sidebar({ onSignOut }: { onSignOut: () => void }) {
                     <>
                       <Icon className={cx("h-[18px] w-[18px] shrink-0", isActive && "text-side-accent")} />
                       {label}
+                      {to === "/admin/help" && !!help.data?.open && (
+                        <span
+                          className={cx(
+                            "tabular ml-auto rounded-full px-1.5 text-[11px] font-semibold",
+                            help.data.overdue ? "bg-danger-soft text-danger-text" : "bg-side-active text-side-fg",
+                          )}
+                          aria-label={`${help.data.open} open${help.data.overdue ? `, ${help.data.overdue} overdue` : ""}`}
+                        >
+                          {help.data.open}
+                        </span>
+                      )}
                     </>
                   )}
                 </NavLink>

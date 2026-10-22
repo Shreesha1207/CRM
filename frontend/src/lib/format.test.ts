@@ -1,7 +1,7 @@
 // Unit tests for the booking length and price helpers: `npm test`.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { bookingPrice, formatClock, formatDateTime, formatDayTimes, formatDuration, formatLengthRange, formatRate, formatTime, lengthOptions } from "./format.ts";
+import { bookingPrice, dueLabel, formatClock, formatDateTime, formatDayTimes, formatDuration, formatLengthRange, formatRate, formatTime, lengthOptions } from "./format.ts";
 
 describe("bookingPrice", () => {
   // Expected totals were computed with the server's formula (Decimal
@@ -113,4 +113,15 @@ describe("12-hour times", () => {
       assert.equal(formatClock(time, { short: true }), short);
     });
   }
+});
+
+describe("dueLabel", () => {
+  const now = Date.parse("2026-10-19T08:00:00Z");
+  it("counts down to the promised time, then up", () => {
+    assert.equal(dueLabel("2026-10-19T14:00:00Z", now), "due in 6h");
+    assert.equal(dueLabel("2026-10-19T11:20:00Z", now), "due in 3h 20m");
+    assert.equal(dueLabel("2026-10-19T08:45:00Z", now), "due in 45m");
+    assert.equal(dueLabel("2026-10-19T07:20:00Z", now), "overdue by 40m");
+    assert.equal(dueLabel("2026-10-19T05:30:00Z", now), "overdue by 2h 30m");
+  });
 });

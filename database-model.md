@@ -32,6 +32,12 @@ erDiagram
     BOOKINGS ||--o{ NOTIFICATIONS : "about"
     USERS ||--o{ AUDIT_LOGS : "acts as actor"
     USERS ||--o{ SETTINGS : "last updated by"
+
+    USERS ||--o| CHAT_SUBSCRIPTIONS : "has access via"
+    USERS ||--o{ CHAT_CONVERSATIONS : "talks to the assistant in"
+    CHAT_CONVERSATIONS ||--o{ CHAT_MESSAGES : "contains"
+    CHAT_CONVERSATIONS ||--o{ CHAT_PROPOSALS : "offers"
+    BOOKINGS ||--o{ CHAT_PROPOSALS : "held by / changed by"
 ```
 
 *(Relationship cardinalities shown as declared; several foreign keys are nullable — e.g. a resource's `location_id`, a booking's `location_id` — so the "one" side is effectively optional throughout.)*
@@ -230,6 +236,7 @@ This is the **database-level backstop**: two active rows for the same resource m
 | `body` | text | |
 | `status` | enum `NotificationStatus` | `PENDING` → `SENT` / `FAILED` / `SKIPPED` (transactional outbox pattern) |
 | `dedupe_key` | varchar(300), nullable, **unique** | guarantees a reminder is never recorded — and therefore never sent — twice |
+| `link` | varchar(300), nullable | where it leads in the app when not to a booking, e.g. `/admin/help/:id` |
 | `read_at`, `sent_at` | timestamptz, nullable | |
 | `error` | text, nullable | delivery failure detail |
 | `created_at` | timestamptz | |
@@ -254,6 +261,80 @@ Single-row-per-key store for runtime-configurable booking rules (see `SETTING_DE
 | `updated_at` | timestamptz | |
 | `updated_by` | uuid FK → `users.id`, `SET NULL`, nullable | |
 
+### `chat_subscriptions`
+Access to the booking assistant. The paywall is a demo: "Pay" activates the row; a payment provider's webhook would set the same fields.
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid PK | |
+| `user_id` | uuid FK → `users.id`, cascade, **unique** | one per customer |
+| `status` | enum `ChatSubscriptionStatus` | `ACTIVE`, `CANCELLED` |
+| `provider` | varchar(32) | `demo` for now |
+| `activated_at` | timestamptz | |
+| `cancelled_at` | timestamptz, nullable | |
+| `paused_until` | timestamptz, nullable | set after repeated blocked messages; the assistant refuses until then |
+| `created_at`, `updated_at` | timestamptz | |
+
+### `chat_conversations`
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid PK | |
+| `user_id` | uuid FK → `users.id`, cascade | indexed |
+| `title` | varchar(200) | the first message, shortened |
+| `busy_until` | timestamptz, nullable | lease taken while a turn runs, so two turns of one conversation never interleave |
+| `input_tokens`, `output_tokens` | int | the main model's usage, for cost tracking |
+| `flagged_at` | timestamptz, nullable | set when repeated blocked messages paused the assistant |
+| `created_at`, `updated_at` | timestamptz | |
+
+### `chat_messages`
+One message of a conversation. `content` is the message exactly as it was sent to, or came back from, the model, in the OpenAI chat format (`{role, content}`, plus `tool_calls` on the model's messages and `tool_call_id` on tool results); the most recent turns are sent again on later turns. `display` is what the customer sees, set only on rows that are shown.
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid PK | |
+| `conversation_id` | uuid FK → `chat_conversations.id`, cascade | indexed |
+| `user_id` | uuid FK → `users.id`, cascade | indexed; for per-customer limits |
+| `turn_id` | uuid | indexed; groups the rows of one customer message and its reply |
+| `seq` | int | order within the conversation; unique with `conversation_id` |
+| `role` | enum `ChatRole` | `user`, `assistant`, `system` (the per-turn note), `tool` (a tool's result), `notice` (shown, never sent to the model) |
+| `content` | jsonb | the whole message, in the OpenAI chat format |
+| `display` | jsonb, nullable | `{text, choices, proposal_ids}` for shown rows |
+| `input_tokens`, `output_tokens` | int | on the model's replies |
+| `feedback` | int, nullable | +1 / −1 from the customer (check constraint) |
+| `blocked_reason` | text, nullable | set on every row of a blocked turn, which is kept for review but never sent to the model again; `strike …` when it counts towards a pause |
+| `created_at` | timestamptz | indexed |
+
+### `chat_proposals`
+A booking the assistant holds for the customer (`HOLD`), or a change it offers (`RESCHEDULE`, `CANCEL`).
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid PK | |
+| `conversation_id` | uuid FK → `chat_conversations.id`, cascade | indexed |
+| `user_id` | uuid FK → `users.id`, cascade | indexed |
+| `turn_id` | uuid | indexed; a blocked turn's proposals are withdrawn |
+| `kind` | enum `ChatProposalKind` | `HOLD`, `RESCHEDULE`, `CANCEL`, `HANDOFF` (send the customer's problem to the admin) |
+| `status` | enum `ChatProposalStatus` | `PENDING` (held / waiting for the customer) → `CONFIRMED` / `DECLINED` / `EXPIRED` / `FAILED` |
+| `booking_id` | uuid FK → `bookings.id`, `SET NULL`, nullable | HOLD: the held `PENDING` booking; otherwise the booking to change. Partial unique index `uq_chat_proposals_open_hold` on open HOLDs |
+| `payload` | jsonb | RESCHEDULE: `{new_start, resource_id}`; HANDOFF: `{summary, request_id}` |
+| `result_booking_id` | uuid FK → `bookings.id`, `SET NULL`, nullable | the booking after a confirmed move |
+| `result_message` | text, nullable | why it failed or ended |
+| `expires_at` | timestamptz | a HOLD's time is released after this (`CHAT_HOLD_MINUTES`, default 10) |
+| `reported_at` | timestamptz, nullable | when the assistant was told how it ended |
+| `created_at`, `updated_at` | timestamptz | |
+
+### `chat_help_requests`
+A customer asked the admin to contact them about a problem, from the booking assistant. The only customer chats staff can read are those with a request.
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid PK | |
+| `conversation_id` | uuid FK → `chat_conversations.id`, cascade | indexed |
+| `user_id` | uuid FK → `users.id`, cascade | indexed; partial unique index `uq_chat_help_requests_open` on `status = 'OPEN'`: one open request per customer |
+| `summary` | text | the problem in the customer's words (20–500 characters) |
+| `transcript` | jsonb | the whole chat when it was sent, as the customer saw it, with blocked messages and their reason |
+| `status` | enum `ChatHelpStatus` | `OPEN` → `RESOLVED` |
+| `created_at` | timestamptz | |
+| `due_at` | timestamptz | indexed; `created_at` + `CHAT_HELP_RESPONSE_HOURS` (6): the reply time promised to the customer |
+| `reminded_at` | timestamptz, nullable | when the admins were reminded it is overdue (once) |
+| `resolved_at`, `resolved_by_id`, `resolution_note` | timestamptz / uuid FK → `users.id` `SET NULL` / text, nullable | who closed it, when, and the note the customer sees |
+
 ## 3. Enumerations (`app/models/enums.py`)
 
 | Enum | Values |
@@ -269,6 +350,10 @@ Single-row-per-key store for runtime-configurable booking rules (see `SETTING_DE
 | `NotificationStatus` | `PENDING`, `SENT`, `FAILED`, `SKIPPED` |
 | `NotificationType` | `BOOKING_CREATED`, `BOOKING_CONFIRMED`, `BOOKING_RESCHEDULED`, `BOOKING_CANCELLED`, `BOOKING_REMINDER`, `WAITLIST_PROMOTION`, `RESOURCE_CHANGED`, `BOOKING_CONFLICTED`, `PASSWORD_RESET` |
 | `RecurrenceFrequency` | `DAILY`, `WEEKLY`, `MONTHLY` |
+| `ChatSubscriptionStatus` | `ACTIVE`, `CANCELLED` |
+| `ChatRole` | `user`, `assistant`, `system`, `tool`, `notice` |
+| `ChatProposalKind` | `HOLD`, `RESCHEDULE`, `CANCEL` |
+| `ChatProposalStatus` | `PENDING`, `CONFIRMED`, `DECLINED`, `EXPIRED`, `FAILED` |
 
 All enums are stored as `VARCHAR` (`native_enum=False` in `_enum()`), not native PostgreSQL `ENUM` types — so adding a new value is a data-only change, never an `ALTER TYPE` migration.
 

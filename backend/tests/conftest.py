@@ -48,6 +48,9 @@ NOW = datetime(2027, 2, 26, 8, 0, tzinfo=UTC)
 
 PASSWORD = "password123"
 
+# The booking assistant's fakes and fixtures (chat, settings).
+pytest_plugins = ["tests.chat_fakes"]
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _migrate() -> None:

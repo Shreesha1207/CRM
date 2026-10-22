@@ -29,10 +29,21 @@ from sqlalchemy.orm import Session
 from app.core.errors import BookingRejected, Forbidden, NotFound
 from app.core.permissions import Permission, has_permission
 from app.core.timeutils import ensure_aware, localize, utcnow
-from app.models import Booking, BookingInvitation, BookingResource, RecurringSeries, Resource, Service, User
+from app.models import (
+    Booking,
+    BookingInvitation,
+    BookingResource,
+    ChatProposal,
+    RecurringSeries,
+    Resource,
+    Service,
+    User,
+)
 from app.models.enums import (
     BookingStatus,
     BookingType,
+    ChatProposalKind,
+    ChatProposalStatus,
     InvitationStatus,
     RecordStatus,
     RecurrenceFrequency,
@@ -94,6 +105,16 @@ class BookingRequest:
     # Made for an invited customer who has not answered yet: held as PENDING on the
     # calendar, whatever the settings say, until they accept (or decline, which cancels it).
     awaiting_customer: bool = False
+    # Made by the booking assistant: held the same way, without telling anyone yet,
+    # until the customer confirms or deletes it in the chat (or the hold expires).
+    chat_hold: "ChatHold | None" = None
+
+
+@dataclass(frozen=True)
+class ChatHold:
+    conversation_id: uuid.UUID
+    turn_id: uuid.UUID
+    expires_at: datetime
 
 
 @dataclass
@@ -445,7 +466,8 @@ class BookingEngine:
         self._lock_resources([offering.resource.id, *(e.id for e in extras)])
         waitlist = self._evaluate(offering, extras, start, **check_kwargs)
 
-        status = S.WAITLISTED if waitlist else (S.PENDING if req.awaiting_customer else self._initial_status())
+        held = req.awaiting_customer or req.chat_hold is not None
+        status = S.WAITLISTED if waitlist else (S.PENDING if held else self._initial_status())
         booking = self._insert(
             user_id=user.id,
             offering=offering,
@@ -454,9 +476,22 @@ class BookingEngine:
             quantity=req.quantity,
             notes=req.notes,
             status=status,
-            hold=req.awaiting_customer,
+            hold=held,
         )
         self._flush()
+        if req.chat_hold is not None:
+            self.db.add(
+                ChatProposal(
+                    conversation_id=req.chat_hold.conversation_id,
+                    user_id=user.id,
+                    turn_id=req.chat_hold.turn_id,
+                    kind=ChatProposalKind.HOLD,
+                    status=ChatProposalStatus.PENDING,
+                    booking_id=booking.id,
+                    payload={},
+                    expires_at=req.chat_hold.expires_at,
+                )
+            )
         audit.record(
             self.db,
             actor_id=self.actor.id,
@@ -474,7 +509,99 @@ class BookingEngine:
                 entity_id=booking.id,
                 new={"override": "booking rules", "start": start},
             )
-        events.publish(self.db, "booking.created", booking=booking)
+        # A chat hold tells nobody yet: the confirmation goes out when the customer confirms.
+        events.publish(self.db, "booking.created", booking=booking, silent=req.chat_hold is not None)
+        self._commit()
+        return booking
+
+    # ------------------------------------------------------------------
+    # Bookings the assistant holds for the customer
+    # ------------------------------------------------------------------
+
+    def open_chat_hold(self, booking_id: uuid.UUID, *, lock: bool = False) -> ChatProposal | None:
+        stmt = select(ChatProposal).where(
+            ChatProposal.booking_id == booking_id,
+            ChatProposal.kind == ChatProposalKind.HOLD,
+            ChatProposal.status == ChatProposalStatus.PENDING,
+        )
+        return self.db.scalar(stmt.with_for_update() if lock else stmt)
+
+    def _open_hold_locked(self, booking_id: uuid.UUID) -> tuple[Booking, ChatProposal]:
+        booking = self._get_modifiable(booking_id)
+        booking = self._locked(booking)
+        hold = self.open_chat_hold(booking.id, lock=True)
+        if hold is None or booking.status != S.PENDING:
+            raise BookingRejected("HOLD_CLOSED", "This booking is no longer waiting to be confirmed", status_code=409)
+        return booking, hold
+
+    def confirm_chat_hold(self, booking_id: uuid.UUID) -> Booking:
+        """The customer confirms a booking the assistant held for them."""
+        booking = self.get_visible_booking(booking_id)
+        if booking.user_id != self.actor.id:
+            raise NotFound("Booking")
+        booking, hold = self._open_hold_locked(booking_id)
+        if hold.expires_at <= self.now:
+            raise BookingRejected("HOLD_EXPIRED", "This hold has expired, so the time was released", status_code=409)
+        if self.rules.require_admin_confirmation:
+            # It still needs an administrator: from now on it is an ordinary pending booking.
+            for allocation in booking.allocations:
+                allocation.active = self._consumes(S.PENDING)
+            event = "booking.created"
+        else:
+            transition(booking, S.CONFIRMED)
+            booking.confirmed_at = self.now
+            event = "booking.confirmed"
+        hold.status = ChatProposalStatus.CONFIRMED
+        hold.result_booking_id = booking.id
+        self._flush()
+        audit.record(
+            self.db,
+            actor_id=self.actor.id,
+            action="CHAT_HOLD_CONFIRMED",
+            entity_type="booking",
+            entity_id=booking.id,
+            old={"status": S.PENDING},
+            new={"status": booking.status},
+        )
+        events.publish(self.db, event, booking=booking)
+        self._commit()
+        return booking
+
+    def release_chat_hold(
+        self,
+        booking_id: uuid.UUID,
+        *,
+        outcome: ChatProposalStatus = ChatProposalStatus.DECLINED,
+        reason: str = "Deleted in the chat",
+    ) -> Booking:
+        """Take a held booking off the calendar: the customer deleted it, or it expired.
+
+        The customer never confirmed it, so the cancellation window does not
+        apply and nobody is notified.
+        """
+        booking, hold = self._open_hold_locked(booking_id)
+        transition(booking, S.CANCELLED)
+        booking.cancelled_at = self.now
+        booking.cancelled_by = self.actor.id
+        booking.cancellation_reason = reason
+        released = any(a.active for a in booking.allocations)
+        for allocation in booking.allocations:
+            allocation.active = False
+        hold.status = outcome
+        hold.result_message = reason
+        self._flush()
+        audit.record(
+            self.db,
+            actor_id=self.actor.id,
+            action="CHAT_HOLD_RELEASED",
+            entity_type="booking",
+            entity_id=booking.id,
+            old={"status": S.PENDING},
+            new={"status": booking.status, "reason": reason},
+        )
+        events.publish(self.db, "booking.cancelled", booking=booking, actor_id=self.actor.id, silent=True)
+        if released and booking.service.booking_type == BookingType.CAPACITY:
+            self._promote_waitlist(booking.primary_resource, booking.service, booking.start_datetime)
         self._commit()
         return booking
 
@@ -483,6 +610,9 @@ class BookingEngine:
     # ------------------------------------------------------------------
 
     def cancel(self, booking_id: uuid.UUID, *, reason: str | None = None) -> Booking:
+        if self.open_chat_hold(booking_id) is not None:
+            # Never confirmed: cancelling it anywhere is the same as deleting it in the chat.
+            return self.release_chat_hold(booking_id, reason=reason or "Cancelled")
         booking = self._get_modifiable(booking_id)
         booking = self._locked(booking)
 
@@ -598,6 +728,12 @@ class BookingEngine:
         booking = self._get_modifiable(booking_id)
         if booking.status not in OPEN_STATUSES:
             raise BookingRejected("INVALID_STATUS_TRANSITION", f"A {booking.status.value.lower()} booking cannot be rescheduled")
+        if self.open_chat_hold(booking.id) is not None:
+            raise BookingRejected(
+                "AWAITING_CUSTOMER",
+                "This booking is waiting for the customer to confirm or delete it in the booking assistant",
+                status_code=409,
+            )
 
         target = self._resource(new_resource_id or booking.primary_resource_id)
         service = self.db.get(Service, booking.service_id)
@@ -725,6 +861,12 @@ class BookingEngine:
             raise BookingRejected(
                 "AWAITING_CUSTOMER",
                 "This booking is waiting for the customer to confirm it. Resend the invitation if they need the link again",
+                status_code=409,
+            )
+        if self.open_chat_hold(booking_id) is not None:
+            raise BookingRejected(
+                "AWAITING_CUSTOMER",
+                "This booking is waiting for the customer to confirm or delete it in the booking assistant",
                 status_code=409,
             )
         booking = self._locked(self.get_visible_booking(booking_id))

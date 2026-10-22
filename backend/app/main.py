@@ -10,11 +10,13 @@ from fastapi.responses import JSONResponse
 from app.api.routes import (
     admin_bookings,
     admin_catalog,
+    admin_help,
     admin_schedules,
     admin_system,
     auth,
     bookings,
     catalog,
+    chat,
     invitations,
     notifications,
 )
@@ -86,7 +88,7 @@ def create_app() -> FastAPI:
     def health() -> dict:
         return {"status": "ok"}
 
-    for module in (auth, catalog, bookings, invitations, notifications, admin_catalog, admin_schedules, admin_bookings, admin_system):
+    for module in (auth, catalog, bookings, invitations, notifications, chat, admin_catalog, admin_schedules, admin_bookings, admin_system, admin_help):
         app.include_router(module.router)
     return app
 

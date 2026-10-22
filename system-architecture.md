@@ -48,7 +48,8 @@ graph TB
 | **Booking Engine** | All writes that touch a booking: create, cancel, reschedule, reassign, confirm/complete/no-show, recurring, waitlist promotion. Owns the lock → re-validate → write sequence. | `backend/app/services/booking_engine.py` |
 | **Admin services** | Catalogue CRUD, schedule-change dry-run/apply, conflict resolution, utilization reports, audit trail. | `backend/app/api/routes/admin_*.py`, `backend/app/services/schedule.py`, `reports.py`, `audit.py` |
 | **Notifications** | Subscribes to domain events; writes in-app + queued e-mail rows in the same transaction as the triggering change. | `backend/app/services/notifications.py`, `events.py` |
-| **Background jobs** | Every `JOB_INTERVAL_SECONDS` (default 60s): queue due reminders, dispatch pending notifications. Runs inside the API process; a PostgreSQL advisory lock makes sure only one replica does the work at a time. | `backend/app/jobs/runner.py` |
+| **Booking assistant** | The customers' chat (behind a demo paywall). Turns a sentence into a booking the customer confirms; every create, confirm, cancel or move goes through the Booking Engine as the customer. Guards outside the model check every message and reply. | `backend/app/services/chat/`, `backend/app/api/routes/chat.py`, `frontend/src/pages/chat.tsx` |
+| **Background jobs** | Every `JOB_INTERVAL_SECONDS` (default 60s): release expired chat holds, queue due reminders, dispatch pending notifications. Runs inside the API process; a PostgreSQL advisory lock makes sure only one replica does the work at a time. | `backend/app/jobs/runner.py` |
 | **PostgreSQL** | System of record, and the final enforcement point for "never double-book" via an exclusion constraint — true even if every layer above it were bypassed. | schema in `backend/app/models/entities.py`, migrations in `backend/alembic/` |
 
 ## 3. Backend layout
@@ -66,10 +67,13 @@ backend/app/
     notifications.py      domain-event handlers, reminder scheduling, delivery
     settings_service.py   runtime-configurable booking rules
     events.py, audit.py, reports.py
+    chat/                 the booking assistant: groq.py (the one API client), guard.py (checks outside the model), llm.py (the model),
+                          prompt.py, tools.py (the only way the model sees or changes data),
+                          proposals.py + holds.py (held bookings and offered changes), agent.py (one turn)
   api/
     deps.py        auth/permission dependencies, DB session, rate-limit dependency
     serializers.py response-shaping helpers
-    routes/         auth.py, catalog.py, bookings.py, notifications.py, admin_bookings.py,
+    routes/         auth.py, catalog.py, bookings.py, notifications.py, chat.py, admin_bookings.py,
                      admin_catalog.py, admin_schedules.py, admin_system.py
   jobs/runner.py  background loop
   seed.py         demo data
@@ -83,7 +87,8 @@ frontend/src/
   api/          fetch client (client.ts: CSRF header, typed ApiError) + generated-by-hand TS types (types.ts)
   auth/         AuthContext: session state, permission checks, RequireAuth route guard
   components/   ui.tsx (design-system primitives), Layout.tsx (nav + notification bell), booking.tsx (slot picker, booking cards)
-  pages/        public.tsx (home/services/resources/auth), account.tsx (dashboard, my bookings, profile), book.tsx (booking wizard)
+  pages/        public.tsx (home/services/resources/auth), account.tsx (dashboard, my bookings, profile), book.tsx (booking wizard),
+                chat.tsx (the booking assistant and its demo paywall)
   pages/admin/  overview, calendar, bookings, catalog (resources/services/locations), schedules, system (users/settings/audit), scheduleChange.tsx (the dry-run/apply modal shared by every admin screen that can shrink availability)
 ```
 
@@ -156,6 +161,84 @@ sequenceDiagram
 
 Every admin action that can shrink availability — resource/location hours, a new block, resource deactivation, a location timezone change — goes through this one shared mechanism (`useScheduleChange` on the frontend, `apply_schedule_change`-style dry-run/apply on the backend).
 
+### 5.4 Booking from a sentence (the booking assistant)
+
+```mermaid
+sequenceDiagram
+    participant C as Customer (chat)
+    participant API as POST /api/chat/conversations/:id/messages
+    participant G as Guards (rules, Prompt Guard, policy guard)
+    participant M as Model on Groq (gpt-oss-120b)
+    participant T as Tools (fixed functions, as the customer)
+    participant BE as BookingEngine
+
+    C->>API: "Book strength coaching with Sam next Tuesday at 10 for two hours"
+    API->>G: quick checks (rules, Prompt Guard)
+    G-->>API: BLOCK -> fixed reply, the model is never called
+    par policy guard
+        API->>G: is it about this business's bookings?
+    and the model reads the message
+        API->>M: catalogue + history + message + turn note (current time, next 14 days)
+    end
+    Note over API,M: the model's answer is used only once the policy guard allows the message
+    M->>T: book(service "strength coaching", person "Sam", 2027-03-02, 10:00, 120 min)
+    T->>BE: names resolved, slot checked, create(awaiting the customer): PENDING, no e-mail yet
+    T-->>M: the held booking (or a question / the nearest free times, shown as buttons)
+    M-->>API: "I've held it for you; press Confirm"
+    API->>G: check the reply (and button labels)
+    G-->>API: BLOCK -> the whole turn is thrown away and the hold released
+    API-->>C: reply + card with the e-mail's details, Confirm / Delete
+    C->>BE: Confirm -> CONFIRMED, normal confirmation e-mail and calendar invite
+```
+
+The model never sees SQL or other customers' data and never changes anything itself: it can only fill in names, dates and times for the tools, which run the same catalogue queries and booking engine as the website, as the signed-in customer. A hold that is neither confirmed nor deleted is released by the background job after `CHAT_HOLD_MINUTES`. Moves and cancellations are only offered (a card), and change nothing until the customer confirms.
+
+#### 5.4.1 How the assistant reads and changes bookings (CRUD)
+
+The model has no database access and no bookings in its prompt. The prompt holds the rules, the business FAQ and the **catalogue**: every active service, person, room and location by name, with lengths, prices and who provides what (left out above 40 services or 60 resources). It changes only when an admin edits the catalogue, so the prompt prefix still caches. The turn note adds the current time and the next 14 days with their dates. Everything else comes as tool results.
+
+Each tool call takes the same path:
+1. The model's arguments are validated against the tool's schema. Bad input goes back to the model as `INVALID_INPUT`, so it can correct itself.
+2. The handler runs in its own database session, as the customer in the chat (`ctx.user_id`).
+3. Its result is serialized to JSON and returned to the model as a `tool` message. Errors come back as `{code, message}`. An unexpected exception is logged, and the model gets only a generic `INTERNAL` message.
+
+The model passes **names and wall-clock times**, as the customer said them; the server resolves them. One tool call does the whole job:
+
+| Operation | Tool | What happens |
+| --- | --- | --- |
+| Read: free times | `check_availability` | With a service (and optionally a person): its free start times for up to 7 days. Without one: every service with its free times that day. Read-only, with the same availability rules as the website. |
+| Read: own bookings | `my_bookings` | Only the customer's own bookings, filtered by date, time and name. |
+| Create | `book` | Resolves the service and person, then creates a PENDING booking with no e-mail (a hold). At most `CHAT_MAX_OPEN_HOLDS` open holds per customer. A time that isn't free comes back with the nearest free times as buttons. |
+| Update | `move` | Finds the booking. A booking still waiting for Confirm is swapped for the new one (the new time is checked first). A booked one gets a move card, which changes nothing until Confirm. A move keeps the length: for a new length it holds a new session and offers to cancel the old booking, two cards to confirm. |
+| Delete | `cancel` | Finds the booking, checks the cancellation window, then stores a card; the cancellation happens only on Confirm. Delete on a held booking frees the time with no e-mail. |
+| UI only | `offer_choices` | Shows the model's own buttons under the reply. Writes nothing. |
+
+**Names are matched in code, not by the model** (`tools._pick`). An exact name, or every word of it in a name or description (typos allowed), is a match. Anything less is never guessed: the tool returns `needs` with the closest catalogue names as buttons, and tells the model never to say one of them doesn't exist. Two people with the same name get both offered; a person who doesn't provide the service gets the people who do. Under these tools, the fine-grained handlers (`hold_booking`, `propose_reschedule`, `propose_cancellation`, `find_available_slots`, `list_my_bookings`) do the work; they are no longer offered to the model.
+
+The model has no tool that confirms, declines or cancels anything. Those are the customer's button presses, which call `POST /api/chat/proposals/:id/confirm` or `/decline` directly.
+
+**Rows to JSON.** `tools._booking_json` builds each booking from `booking_mail.facts()`, the same function that writes the confirmation e-mails. The chat card and the e-mail therefore show identical details. The model receives the booking's id, service, resource, date, time and time zone, place, places, status, price, and flags such as `can_cancel`, `can_reschedule` and `waiting_for_confirmation_in_chat`.
+
+**Replies match the cards.** The card is what gets booked. If the model's reply names a clock time that is on none of this turn's cards (for example "11:00 AM – 1:00 PM" over a card for 11:00 AM – 12:00 PM), the server replaces the reply with the cards described in words, and removes any Markdown (`agent.consistent_reply`).
+
+**Finding the booking a customer means.** `move`, `cancel` and `my_bookings` take `on_date`, `around_time` (within 60 minutes, in the booking's own time zone) and `query` (names and descriptions, with typo tolerance), or a `booking_id` from an earlier result. The filtering happens in code. One match is used; several come back as buttons to choose from; none come back with the customer's upcoming bookings.
+
+**Where the time goes.** Each turn logs one line, for example `Chat turn 3120 ms: guard in 180 ms, model 1250 ms (2900 in, 60 out tokens), guard policy 640 ms, book 35 ms, model 820 ms (...), guard out 410 ms; waited 10 s for rate limits`. The policy guard runs in parallel with the first model call. The model talks on `gpt-oss-120b` and the guard on `gpt-oss-20b`, so each model uses its own share of Groq's per-model limits.
+
+#### 5.4.2 Contacting the admin
+
+Only the customer can start it, and only for a real problem:
+- through the assistant's `contact_admin` tool, which only shows a HANDOFF card the customer must confirm (**Send to admin**);
+- or, after a turn the assistant couldn't finish, with their own description (`POST /api/chat/conversations/:id/help`).
+
+`chat/help.request_help` then:
+1. Checks the gates: a plain-words description of 20–500 characters; one open request per customer (also a partial unique index); `CHAT_HELP_REQUESTS_PER_WEEK` a week; not while paused.
+2. Stores the description with a **snapshot of the whole chat** (`chat_help_requests`), due `CHAT_HELP_RESPONSE_HOURS` (6) later.
+3. Adds the confirmation to the chat ("…they will contact you by e-mail or phone within 6 hours (by …)").
+4. Notifies everyone with `chat:review` in the app and by e-mail. The e-mail carries the description, contact details, due time and the chat as text.
+
+The background job reminds them once when a request is overdue. The admin API (`/api/admin/help-requests`) is the only way staff read customer chats, and each opening is audited (`CHAT_VIEWED`).
+
 ## 6. Concurrency & data-integrity architecture
 
 Two independent layers, deliberately redundant:
@@ -192,7 +275,7 @@ graph LR
 
 ## 9. Background job architecture
 
-`run_once()` takes a PostgreSQL advisory lock before doing any work, so with N API replicas exactly one of them queues reminders and dispatches e-mail on any given tick — the others see the lock held and return immediately. This is the mechanism verified in `OPS-07` of the end-to-end test plan (two replicas, still exactly one reminder per booking).
+Each run releases chat holds nobody confirmed, reminds admins once about help requests past their due time, queues booking reminders and dispatches pending notifications. `run_once()` takes a PostgreSQL advisory lock before doing any work, so with N API replicas exactly one of them queues reminders and dispatches e-mail on any given tick — the others see the lock held and return immediately. This is the mechanism verified in `OPS-07` of the end-to-end test plan (two replicas, still exactly one reminder per booking).
 
 > A production incident class this design has to guard against: the lock and the work must run on the **same** database connection, or a connection-pooled `Session` can return the lock-holding connection to the pool mid-job and release the lock from a *different* connection, which silently fails and leaves the lock stuck. `runner.py` takes the lock on one dedicated connection (`engine.connect()`, autocommit) and does the actual work in its own `Session`, precisely to avoid this. This was found and fixed during end-to-end testing — see `docs/e2e-test-results.md`, case `NTF-08`.
 
@@ -227,6 +310,7 @@ nginx (`frontend/nginx.conf`) also sets the SPA's own strict `Content-Security-P
 | Auth | argon2id (via `passlib`/`argon2-cffi`), PyJWT |
 | Deployment | Docker Compose (3 services), nginx (static frontend + reverse proxy) |
 | Testing | pytest (backend, against a real PostgreSQL database), Playwright (end-to-end, both API-driven and browser-driven passes) |
+| Booking assistant | Groq's OpenAI-compatible chat API over `requests`, one key for everything: `gpt-oss-120b` as the model (`CHAT_MODEL`), `gpt-oss-20b` as the policy guard, Prompt Guard 2 as the first filter. Any OpenAI-compatible server (e.g. Ollama) can stand in. |
 
 ## 12. Non-functional characteristics
 

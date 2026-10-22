@@ -20,6 +20,16 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-no-reply@example.com}
+      # Booking assistant (see README): one Groq key for the model and the guards.
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      CHAT_MODEL: ${CHAT_MODEL:-openai/gpt-oss-120b}
+      CHAT_REASONING_EFFORT: ${CHAT_REASONING_EFFORT-low}
+      GUARD_TOPIC_MODEL: ${GUARD_TOPIC_MODEL:-openai/gpt-oss-20b}
+      GUARD_INJECTION_MODEL: ${GUARD_INJECTION_MODEL-meta-llama/llama-prompt-guard-2-86m}
+      GUARD_INJECTION_THRESHOLD: ${GUARD_INJECTION_THRESHOLD:-0.8}
+      CHAT_HELP_RESPONSE_HOURS: ${CHAT_HELP_RESPONSE_HOURS:-6}
+      CHAT_HELP_REQUESTS_PER_WEEK: ${CHAT_HELP_REQUESTS_PER_WEEK:-3}
 
   frontend:
     build: ./frontend

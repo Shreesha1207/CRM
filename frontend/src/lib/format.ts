@@ -203,3 +203,10 @@ export function titleCase(value: string): string {
 export function hhmm(time: string): string {
   return time.slice(0, 5);
 }
+
+/** How long until a promised reply: "due in 3h 20m", or "overdue by 40m". */
+export function dueLabel(dueIso: string, now: number = Date.now()): string {
+  const minutes = Math.round((new Date(dueIso).getTime() - now) / 60_000);
+  const span = (m: number) => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}` : `${m}m`);
+  return minutes >= 0 ? `due in ${span(minutes)}` : `overdue by ${span(-minutes)}`;
+}

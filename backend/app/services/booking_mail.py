@@ -131,6 +131,11 @@ def _facts(db: Session, booking: Booking, customer_id, previous: Booking | None 
     )
 
 
+def facts(db: Session, booking: Booking, customer_id, previous: Booking | None = None) -> Facts:
+    """What the booking e-mails show about this booking (the chat's booking card shows the same)."""
+    return _facts(db, booking, customer_id, previous)
+
+
 # ---------------------------------------------------------------- building blocks
 
 

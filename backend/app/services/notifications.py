@@ -65,6 +65,7 @@ def notify(
     dedupe_key: str | None = None,
     channels=DEFAULT_CHANNELS,
     email_body: str | None = None,
+    link: str | None = None,
 ) -> None:
     recipient = db.get(User, user_id)
     if recipient is not None and recipient.status == UserStatus.INVITED:
@@ -75,6 +76,7 @@ def notify(
         values = dict(
             user_id=user_id,
             booking_id=booking_id,
+            link=link,
             type=type,
             channel=channel,
             title=title,
@@ -109,6 +111,8 @@ def _with_place(booking: Booking, body: str) -> dict[str, str]:
 
 
 def _on_created(db: Session, event: DomainEvent) -> None:
+    if event.payload.get("silent"):  # held by the booking assistant: told when confirmed
+        return
     booking: Booking = event.payload["booking"]
     titles = {
         BookingStatus.CONFIRMED: (NotificationType.BOOKING_CONFIRMED, "Booking confirmed"),
@@ -136,6 +140,8 @@ def _on_confirmed(db: Session, event: DomainEvent) -> None:
 
 
 def _on_cancelled(db: Session, event: DomainEvent) -> None:
+    if event.payload.get("silent"):  # a hold the customer never confirmed
+        return
     booking: Booking = event.payload["booking"]
     by_someone_else = event.payload.get("actor_id") not in (None, booking.user_id)
     body = _booking_line(db, booking)
