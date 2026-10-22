@@ -160,3 +160,26 @@ def test_admins_never_delete_accounts_when_the_setting_is_zero(client, make, use
     freeze_time(NOW + timedelta(days=3650))
     admin_headers = auth_headers(client, "admin@test.io")
     assert client.delete(f"/api/admin/users/{user.id}", headers=admin_headers).status_code == 403
+
+
+# ------------------------------------------------------------------ phone numbers
+
+
+@pytest.mark.parametrize("phone", ["call me maybe", "12345", "+1 555 0100 2233 99887", "98765 43210 ext. 2", "<script>"])
+def test_a_phone_number_must_look_like_one(client, user, user_headers, admin_headers, phone) -> None:
+    for method, path, headers, extra in (
+        ("post", "/api/auth/register", {}, {"name": "A", "email": "new@test.io", "password": "longpassword"}),
+        ("put", "/api/auth/me", user_headers, {}),
+        ("put", f"/api/admin/users/{user.id}", admin_headers, {}),
+        ("post", "/api/admin/users", admin_headers, {"name": "B", "email": "b@test.io"}),
+    ):
+        r = getattr(client, method)(path, headers=headers, json={**extra, "phone": phone})
+        assert r.status_code == 422, (path, r.text)
+        assert "phone" in str(r.json()["detail"][0]["loc"])
+
+
+def test_phone_numbers_are_stored_without_spacing(client, user_headers) -> None:
+    r = client.put("/api/auth/me", headers=user_headers, json={"phone": " +91 98765-43210 "})
+    assert r.status_code == 200 and r.json()["phone"] == "+919876543210"
+    # Clearing it is fine too.
+    assert client.put("/api/auth/me", headers=user_headers, json={"phone": ""}).json()["phone"] is None

@@ -1,11 +1,12 @@
 """Request / response models. Pydantic validates every input at the boundary."""
 
+import re
 import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Generic, Literal, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator, model_validator
 
 from app.core.maps import google_maps_url
 from app.core.timeutils import is_valid_timezone
@@ -37,10 +38,28 @@ class Page(BaseModel, Generic[T]):
 # ---------------------------------------------------------------- auth
 
 
+def _check_phone(value: str | None) -> str | None:
+    """A phone number: 7 to 15 digits (the international maximum), optionally after a +
+    and a country code. Spaces, dashes, dots and brackets are allowed while typing and
+    dropped, so "+91 98765-43210" is stored as "+919876543210"."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if not re.fullmatch(r"\+?[\d\s().-]+", value):
+        raise ValueError("Use digits only, with an optional + and country code (e.g. +91 98765 43210)")
+    digits = re.sub(r"\D", "", value)
+    if not 7 <= len(digits) <= 15:
+        raise ValueError("A phone number has 7 to 15 digits")
+    return ("+" if value.startswith("+") else "") + digits
+
+
+Phone = Annotated[str | None, Field(max_length=50), AfterValidator(_check_phone)]
+
+
 class RegisterIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     email: EmailStr
-    phone: str | None = Field(default=None, max_length=50)
+    phone: Phone = None
     password: str = Field(min_length=8, max_length=128)
 
 
@@ -69,7 +88,7 @@ class ChangePasswordIn(BaseModel):
 
 class ProfileIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    phone: str | None = Field(default=None, max_length=50)
+    phone: Phone = None
 
 
 class UserOut(ORM):
@@ -110,14 +129,14 @@ class UserCreateIn(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     email: EmailStr
-    phone: str | None = Field(default=None, max_length=50)
+    phone: Phone = None
     role: Role = Role.USER
 
 
 class UserUpdateIn(BaseModel):
     # No password: an admin can only send a link for the person to choose one.
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    phone: str | None = Field(default=None, max_length=50)
+    phone: Phone = None
     role: Role | None = None
     status: UserStatus | None = None
 
@@ -499,7 +518,7 @@ class InvitationPublicOut(BaseModel):
 class InvitationAcceptIn(BaseModel):
     # Only needed when the e-mail has no account yet.
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    phone: str | None = Field(default=None, max_length=50)
+    phone: Phone = None
     password: str | None = Field(default=None, min_length=8, max_length=128)
 
 

@@ -46,7 +46,9 @@ function messageFrom(body: unknown, fallback: string): string {
       return detail
         .map((d: { loc?: unknown[]; msg?: string }) => {
           const field = d.loc?.filter((p) => p !== "body").join(".");
-          return field ? `${field}: ${d.msg}` : d.msg;
+          // Our own checks' messages are written for people; drop the validator's prefix.
+          const msg = d.msg?.replace(/^Value error, /, "");
+          return field ? `${field}: ${msg}` : msg;
         })
         .join("; ");
     }

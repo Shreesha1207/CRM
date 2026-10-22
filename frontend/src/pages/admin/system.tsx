@@ -5,6 +5,7 @@ import type { AdminUser, AuditLog, Page, Role, SettingDefinition, User, UserStat
 import { ROLES } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Button, Card, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td, Textarea } from "../../components/ui";
+import { PhoneField } from "../../components/PhoneField";
 import { formatStamp, titleCase } from "../../lib/format";
 
 // ---------------------------------------------------------------- users
@@ -66,9 +67,7 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
         <Field label="E-mail">
           <Input type="email" value={form.email} onChange={set("email")} disabled={!!user} />
         </Field>
-        <Field label="Phone">
-          <Input value={form.phone} onChange={set("phone")} />
-        </Field>
+        <PhoneField value={form.phone} onChange={(phone) => setForm({ ...form, phone })} />
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
             label="Role"

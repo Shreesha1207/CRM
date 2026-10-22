@@ -25,6 +25,7 @@ import {
   buttonClass,
   linkClass,
 } from "../components/ui";
+import { PhoneField } from "../components/PhoneField";
 import { formatDateTime, formatDuration, formatMoney, formatRange, todayIn, zonedParts } from "../lib/format";
 
 type Scope = "upcoming" | "past" | "cancelled" | "waitlisted" | "all";
@@ -456,9 +457,7 @@ export function ProfilePage() {
             <Field label="Name">
               <Input required value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
-            <Field label="Phone">
-              <Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
-            </Field>
+            <PhoneField value={phone} onChange={setPhone} />
             <Button type="submit" loading={profile.isPending}>
               Save
             </Button>

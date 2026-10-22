@@ -9,6 +9,7 @@ import { useAuth } from "../auth/AuthContext";
 import { useConfig } from "../components/Layout";
 import { ChevronRight, Mark } from "../components/icons";
 import { Alert, BackLink, Badge, Button, Card, EmptyState, Field, Input, Loading, MapLink, PageHeader, Select, buttonClass, linkClass } from "../components/ui";
+import { PhoneField } from "../components/PhoneField";
 import { WEEKDAYS, formatClock, formatLengthRange, formatRate, titleCase } from "../lib/format";
 import { GoogleLogin } from "@react-oauth/google";
 
@@ -473,9 +474,7 @@ export function RegisterPage() {
         <Field label="E-mail">
           <Input type="email" required autoComplete="email" value={form.email} onChange={set("email")} />
         </Field>
-        <Field label="Phone (optional)">
-          <Input type="tel" autoComplete="tel" value={form.phone} onChange={set("phone")} />
-        </Field>
+        <PhoneField label="Phone (optional)" value={form.phone} onChange={(phone) => setForm({ ...form, phone })} />
         <Field label="Password" hint="At least 8 characters.">
           <Input type="password" required minLength={8} autoComplete="new-password" value={form.password} onChange={set("password")} />
         </Field>
@@ -585,9 +584,7 @@ export function InvitationPage() {
                 <Field label="Name">
                   <Input required autoComplete="name" value={form.name} onChange={set("name")} />
                 </Field>
-                <Field label="Phone (optional)">
-                  <Input type="tel" autoComplete="tel" value={form.phone} onChange={set("phone")} />
-                </Field>
+                <PhoneField label="Phone (optional)" value={form.phone} onChange={(phone) => setForm({ ...form, phone })} />
                 <Field label="Password" hint="At least 8 characters.">
                   <Input type="password" required minLength={8} autoComplete="new-password" value={form.password} onChange={set("password")} />
                 </Field>
