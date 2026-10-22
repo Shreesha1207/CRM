@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Booking System User Flows</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #f0f2f5;
+    --text: #17191c;
+    --muted: #5f6670;
+    --line: #d9dde3;
+    --arrow: #9aa2ad;
+
+    --user: #2563eb;
+    --user-soft: #e8f0fe;
+    --admin: #7c3aed;
+    --admin-soft: #f1eafe;
+    --super: #c2410c;
+    --super-soft: #fdeee4;
+
+    --decision: #b45309;
+    --decision-soft: #fef6e4;
+    --outcome: #15803d;
+    --outcome-soft: #e8f6ed;
+    --note: #6b7280;
+    --note-soft: #f3f4f6;
+    --stop: #b91c1c;
+    --stop-soft: #fdecec;
+
+    --accent: var(--user);
+    --accent-soft: var(--user-soft);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111316;
+      --surface: #1a1d21;
+      --surface-2: #22262b;
+      --text: #e8eaed;
+      --muted: #9aa1ab;
+      --line: #33383f;
+      --arrow: #5d6570;
+      --user: #7aa7ff;  --user-soft: #1b2740;
+      --admin: #b195ff; --admin-soft: #2a2140;
+      --super: #ff9a62; --super-soft: #3a2418;
+      --decision: #f2b84b; --decision-soft: #33291a;
+      --outcome: #5fd38a;  --outcome-soft: #17301f;
+      --note: #a3a9b2;     --note-soft: #24282d;
+      --stop: #ff8a8a;     --stop-soft: #3a1c1c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #111316;
+    --surface: #1a1d21;
+    --surface-2: #22262b;
+    --text: #e8eaed;
+    --muted: #9aa1ab;
+    --line: #33383f;
+    --arrow: #5d6570;
+    --user: #7aa7ff;  --user-soft: #1b2740;
+    --admin: #b195ff; --admin-soft: #2a2140;
+    --super: #ff9a62; --super-soft: #3a2418;
+    --decision: #f2b84b; --decision-soft: #33291a;
+    --outcome: #5fd38a;  --outcome-soft: #17301f;
+    --note: #a3a9b2;     --note-soft: #24282d;
+    --stop: #ff8a8a;     --stop-soft: #3a1c1c;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  header h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--muted); max-width: 70ch; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 8px; margin: 24px 0 8px; flex-wrap: wrap; }
+  .tab {
+    appearance: none; border: 1px solid var(--line); background: var(--surface);
+    color: var(--text); font: inherit; font-weight: 600; padding: 9px 16px;
+    border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .tab .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+  .tab[aria-selected="true"] { background: var(--c-soft); border-color: var(--c); color: var(--c); }
+  .tab:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+  .tab.user  { --c: var(--user);  --c-soft: var(--user-soft); }
+  .tab.admin { --c: var(--admin); --c-soft: var(--admin-soft); }
+  .tab.super { --c: var(--super); --c-soft: var(--super-soft); }
+
+  /* Legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 14px 20px; margin: 14px 0 26px; color: var(--muted); font-size: 12.5px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend i { display: inline-block; width: 18px; height: 12px; border-radius: 3px; border: 1.5px solid; }
+  .lg-start i { border-radius: 999px; border-color: var(--accent); background: var(--accent-soft); }
+  .lg-step i { border-color: var(--line); background: var(--surface); }
+  .lg-dec i { border-color: var(--decision); background: var(--decision-soft); transform: rotate(45deg) scale(.75); width: 13px; height: 13px; }
+  .lg-out i { border-color: var(--outcome); background: var(--outcome-soft); }
+  .lg-note i { border-color: var(--note); background: var(--note-soft); border-style: dashed; }
+  .lg-stop i { border-color: var(--stop); background: var(--stop-soft); }
+
+  /* Panels */
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .panel.user  { --accent: var(--user);  --accent-soft: var(--user-soft); }
+  .panel.admin { --accent: var(--admin); --accent-soft: var(--admin-soft); }
+  .panel.super { --accent: var(--super); --accent-soft: var(--super-soft); }
+  .panel-intro { margin: 0 0 22px; color: var(--muted); max-width: 80ch; }
+  .panel-intro b { color: var(--text); }
+
+  /* Entry column */
+  .entry { max-width: 620px; margin: 0 auto; display: flex; flex-direction: column; align-items: stretch; }
+
+  /* Nodes */
+  .node {
+    position: relative; background: var(--surface); border: 1.5px solid var(--line);
+    border-radius: 10px; padding: 10px 12px;
+  }
+  .node .t { font-weight: 600; }
+  .node .s { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .node.start, .node.hub {
+    border-color: var(--accent); background: var(--accent-soft); text-align: center;
+  }
+  .node.start { border-radius: 999px; padding: 10px 22px; align-self: center; min-width: 240px; }
+  .node.hub { border-width: 2px; padding: 14px 18px; }
+  .node.hub .t { font-size: 16px; color: var(--accent); }
+  .node.outcome { border-color: var(--outcome); background: var(--outcome-soft); }
+  .node.outcome .t::before { content: "✓ "; color: var(--outcome); }
+  .node.note { border-style: dashed; border-color: var(--note); background: var(--note-soft); }
+  .node.note .t { font-weight: 500; font-size: 13px; }
+  .node.stop { border-color: var(--stop); background: var(--stop-soft); }
+  .node.stop .t::before { content: "✕ "; color: var(--stop); }
+  .node.link { cursor: pointer; border-color: var(--admin); background: var(--admin-soft); }
+  .node.link .t { color: var(--admin); }
+  .node.link:hover { filter: brightness(0.97); }
+
+  .node.decision { border-color: var(--decision); background: var(--decision-soft); padding: 0; overflow: hidden; }
+  .decision .q { display: flex; align-items: center; gap: 9px; padding: 9px 12px; font-weight: 600; }
+  .decision .q::before {
+    content: ""; flex: none; width: 11px; height: 11px; transform: rotate(45deg);
+    border: 2px solid var(--decision); border-radius: 2px;
+  }
+  .opts { border-top: 1px solid color-mix(in srgb, var(--decision) 30%, transparent); background: var(--surface); }
+  /* Label above its chain, so nested decisions keep the lane's full width. */
+  .opt { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px; }
+  .opt + .opt { border-top: 1px dashed var(--line); }
+  .opt .lab {
+    font-size: 11.5px; font-weight: 700; color: var(--decision); background: var(--decision-soft);
+    border-radius: 6px; padding: 2px 7px;
+  }
+  .opt .lab::after { content: " ↓"; }
+  .opt .chain {
+    display: flex; flex-direction: column; gap: 4px; min-width: 0; align-self: stretch;
+    padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--decision) 35%, transparent);
+  }
+  .opt .chain .decision .q { padding: 7px 10px; font-size: 13px; }
+  .opt .chain .opts .opt { padding: 7px 8px; }
+  .opt .chain .node { padding: 6px 9px; border-radius: 8px; border-width: 1px; }
+  .opt .chain .node .t { font-weight: 500; font-size: 13px; }
+  .opt .chain .node.outcome .t, .opt .chain .node.stop .t { font-weight: 600; }
+  .opt .chain .arrow { height: 12px; }
+  .opt .chain .arrow::after { border-width: 5px 4px 0; }
+
+  /* Arrows */
+  .arrow { position: relative; height: 22px; display: flex; justify-content: center; flex: none; }
+  .arrow::before { content: ""; width: 2px; background: var(--arrow); height: calc(100% - 6px); }
+  .arrow::after {
+    content: ""; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+    border-style: solid; border-width: 7px 5px 0; border-color: var(--arrow) transparent transparent;
+  }
+  .arrow.long { height: 30px; }
+
+  /* Fan-out to lanes */
+  .fan { text-align: center; color: var(--muted); font-size: 12.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin: 2px 0 14px; }
+  .lanes {
+    display: grid; gap: 16px; align-items: start;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    border-top: 2px solid var(--arrow); padding-top: 18px; position: relative;
+  }
+  .lane {
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px;
+    padding: 12px; display: flex; flex-direction: column; position: relative;
+  }
+  .lane::before {
+    content: ""; position: absolute; top: -20px; left: 50%; width: 2px; height: 20px;
+    background: var(--arrow); transform: translateX(-50%);
+  }
+  .lane-h { display: flex; align-items: center; gap: 9px; margin: 2px 2px 12px; }
+  .lane-h .n {
+    flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--accent); color: var(--surface); font-size: 12px; font-weight: 700;
+  }
+  .lane-h h3 { margin: 0; font-size: 14.5px; }
+  .lane-h p { margin: 1px 0 0; color: var(--muted); font-size: 12px; }
+
+  /* Comparison matrix */
+  .matrix-sec { margin-top: 56px; }
+  .matrix-sec h2 { font-size: 18px; margin: 0 0 4px; }
+  .matrix-sec > p { margin: 0 0 14px; color: var(--muted); }
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13px; }
+  th, td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  tbody tr:last-child td { border-bottom: 0; }
+  thead th { background: var(--surface-2); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  th.c, td.c { text-align: center; width: 120px; }
+  td.grp { background: var(--surface-2); font-weight: 700; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .y { color: var(--outcome); font-weight: 700; }
+  .x { color: var(--arrow); }
+  .p { color: var(--decision); font-weight: 600; font-size: 12px; }
+  thead th.u { color: var(--user); } thead th.a { color: var(--admin); } thead th.sa { color: var(--super); }
+
+  footer { margin-top: 40px; color: var(--muted); font-size: 12px; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 22px 16px 48px; }
+    header h1 { font-size: 22px; }
+    .lanes { border-top: 0; padding-top: 0; }
+    .lane::before { display: none; }
+    .node.start { min-width: 0; }
+  }
+  @media print {
+    body { background: #fff; }
+    .tabs, .legend { display: none; }
+    .panel { display: block !important; break-before: page; }
+    .lane { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Booking System User Flows</h1>
+    <p>What each kind of account can do in the booking and appointment system, from signing in to every task it can complete. Pick a role to see its flow.</p>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Role">
+    <button class="tab user"  role="tab" id="tab-user"  aria-controls="panel-user"  data-role="user"><span class="dot"></span>User (customer)</button>
+    <button class="tab admin" role="tab" id="tab-admin" aria-controls="panel-admin" data-role="admin"><span class="dot"></span>Admin</button>
+    <button class="tab super" role="tab" id="tab-super" aria-controls="panel-super" data-role="super"><span class="dot"></span>Super admin</button>
+  </div>
+
+  <div class="legend" aria-label="Legend">
+    <span class="lg-start"><i></i>Start / main screen</span>
+    <span class="lg-step"><i></i>Action</span>
+    <span class="lg-dec"><i></i>Decision</span>
+    <span class="lg-out"><i></i>Result</span>
+    <span class="lg-stop"><i></i>Cancelled / refused</span>
+    <span class="lg-note"><i></i>Rule or limit</span>
+  </div>
+
+  <section class="panel user"  id="panel-user" role="tabpanel" aria-labelledby="tab-user"></section>
+  <section class="panel admin" id="panel-admin" role="tabpanel" aria-labelledby="tab-admin"></section>
+  <section class="panel super" id="panel-super" role="tabpanel" aria-labelledby="tab-super"></section>
+
+  <section class="matrix-sec">
+    <h2>Roles at a glance</h2>
+    <p>Each role can do everything the role to its left can do in the admin console, plus more. Customers use the public site; admins and super admins use the admin console.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Capability</th><th class="c u">User</th><th class="c a">Admin</th><th class="c sa">Super admin</th></tr></thead>
+        <tbody id="matrix"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>Source: the role permissions in <code>backend/app/core/permissions.py</code> and the routes in <code>frontend/src/App.tsx</code>.</footer>
+</div>
+
+<script>
+/* Flow data. Node kinds:
+   step(t, s)       action box
+   out(t, s)        result (green)
+   stop(t, s)       cancelled / refused (red)
+   note(t)          rule or limit (dashed)
+   dec(q, [[label, [nodes...]], ...])   decision with labelled options */
+const step = (t, s) => ({ k: "step", t, s });
+const out  = (t, s) => ({ k: "outcome", t, s });
+const stop = (t, s) => ({ k: "stop", t, s });
+const note = (t) => ({ k: "note", t });
+const dec  = (q, opts) => ({ k: "decision", q, opts });
+
+const FLOWS = {
+  user: {
+    intro: "A <b>customer</b> uses the public site to find services, book them, manage their own bookings and get help. They only ever see their own bookings.",
+    entry: [
+      { k: "start", t: "Visits the booking site" },
+      dec("Signed in?", [
+        ["Just browsing", [step("Browse services & resources", "Prices, opening hours, location, map link, details"), note("Signing in is needed to see live availability and book")]],
+        ["New", [step("Register", "E-mail & password, or Google")]],
+        ["Returning", [step("Sign in", "Forgot password → reset link by e-mail")]],
+        ["Invited", [step("Opens the invitation e-mail an admin triggered"), step("Creates their account from the link"), dec("Keep the booking?", [
+          ["Accept", [out("Booking confirmed", "Confirmation e-mail + calendar invite")]],
+          ["Decline", [stop("Booking cancelled", "Time freed on the calendar")]],
+        ])]],
+      ]),
+      { k: "hub", t: "Customer dashboard", s: "Upcoming bookings · quick links · notification bell" },
+    ],
+    lanes: [
+      { h: "Book an appointment", p: "4-step booking wizard", nodes: [
+        step("Choose a service"),
+        dec("How to book?", [
+          ["Resource first", [step("Pick a person, room, court…")]],
+          ["Time first", [step("Pick a time, see who's free")]],
+        ]),
+        step("Pick date & time", "Live slot grid: available, taken, blocked, too soon"),
+        step("Confirm", "Add a note · optionally repeat as a recurring series"),
+        dec("What happens?", [
+          ["Free", [out("Confirmed")]],
+          ["Needs approval", [out("Pending", "Waits for an admin to confirm")]],
+          ["Session full", [out("Waitlisted", "Booked automatically when a seat opens")]],
+        ]),
+        out("Confirmation e-mail + calendar invite", "Yes / No / Maybe in Gmail, Outlook, Apple Mail"),
+      ]},
+      { h: "Manage my bookings", p: "Only their own bookings", nodes: [
+        step("My bookings", "Upcoming · Past · Cancelled · Waitlisted"),
+        step("Open a booking", "Details, location, Open in Google Maps"),
+        dec("What to do?", [
+          ["Reschedule", [step("Pick a new slot", "Old time kept until the new one is secured"), out("'Booking moved' e-mail", "Calendar entry moves")]],
+          ["Cancel", [step("Give an optional reason"), stop("Booking cancelled", "Calendar entry removed")]],
+          ["Waitlisted", [step("Leave the waitlist")]],
+        ]),
+        note("Rescheduling and cancelling close a set time before the start (admin setting)"),
+      ]},
+      { h: "Booking assistant", p: "Chat that books from a sentence", nodes: [
+        step("Open Assistant", "Unlock it (demo paywall)"),
+        step("Type a request", "“Book personal training with John next Tuesday at 10 for two hours”"),
+        dec("Assistant checks it", [
+          ["Unclear name", [step("Pick the right name from buttons")]],
+          ["Time taken", [step("Pick a suggested free time")]],
+          ["All clear", [step("Slot held for 10 min", "Card with time, place, price, countdown")]],
+        ]),
+        dec("Hold card", [
+          ["Confirm", [out("Booked", "Normal confirmation e-mail")]],
+          ["Delete", [stop("Hold released", "No e-mail sent")]],
+        ]),
+        step("Move or cancel a booking by chat", "Shown as a card; nothing changes until they press Confirm"),
+        step("Ask questions about the business", "Answered from the admin's FAQ"),
+        note("Off-topic or unsafe messages are refused; usage limits apply"),
+      ]},
+      { h: "Get help from an admin", p: "For real problems only", nodes: [
+        dec("How?", [
+          ["In chat", [step("Assistant drafts a summary card"), step("Customer checks it → Send to admin")]],
+          ["After a failure", [step("Contact admin button", "Describe the problem (20–500 characters)")]],
+        ]),
+        out("Request sent", "“The admin will contact you within 6 hours”"),
+        out("Admin resolves it", "Their note shown in the chat and by e-mail"),
+        note("One open request at a time · at most 3 a week"),
+      ]},
+      { h: "Account & updates", p: "Profile, notifications, reminders", nodes: [
+        step("Edit profile", "Name, phone"),
+        step("Change password"),
+        step("Notification bell", "Confirmed, moved, cancelled, waitlist seat opened"),
+        out("Reminders before each booking", "24 hours and 1 hour before (configurable)"),
+        step("Sign out"),
+      ]},
+    ],
+  },
+
+  admin: {
+    intro: "An <b>admin</b> runs the business from the admin console: every booking, the catalogue, schedules, conflicts and customer help requests. They manage customer accounts, but they cannot hand out admin roles or delete accounts.",
+    entry: [
+      { k: "start", t: "Opens the admin console", s: "/admin/login" },
+      step("Signs in with an admin account", "Admin accounts are created by the super admin"),
+      { k: "hub", t: "Overview dashboard", s: "Today · upcoming · pending · completed · cancelled · conflicts · utilization · open help requests" },
+    ],
+    lanes: [
+      { h: "Run bookings", p: "Calendar & bookings list", nodes: [
+        step("Calendar", "Day, week or month view"),
+        step("Bookings list", "Search & filter every booking"),
+        dec("Book for a customer: do they have an account?", [
+          ["Yes", [out("Booked & confirmed", "E-mail says who booked it for them")]],
+          ["New e-mail", [step("Time held as Pending"), step("Invitation e-mail sent"), dec("Customer replies?", [
+            ["Accepts", [out("Confirmed")]],
+            ["Declines", [stop("Cancelled")]],
+            ["No answer", [step("Resend invite, reschedule or cancel")]],
+          ])]],
+        ]),
+        step("Manage any booking", "Confirm · complete · no-show · reschedule · reassign · cancel · history"),
+        out("Customer notified", "Action written to the audit log"),
+      ]},
+      { h: "Catalogue & schedules", p: "What can be booked, and when", nodes: [
+        step("Locations", "Name, address, time zone, map link"),
+        step("Resources", "Person, room, court, equipment · capacity · custom attributes"),
+        step("Services", "Duration, price, one-to-one or group"),
+        step("Link resources to services", "Optional price, duration and buffer per link"),
+        step("Schedules", "Business hours · weekly availability & breaks · blocks, holidays, special hours"),
+        dec("Does the change affect existing bookings?", [
+          ["No", [out("Saved, live immediately")]],
+          ["Yes", [step("Preview the N affected bookings"), step("Keep them, mark them as conflicts, or cancel them")]],
+        ]),
+      ]},
+      { h: "Resolve conflicts", p: "Bookings a schedule change broke", nodes: [
+        step("Conflicts list"),
+        step("Open a conflicted booking", "See why it no longer fits"),
+        dec("Resolve by", [
+          ["Reschedule", [step("Move to a new time")]],
+          ["Reassign", [step("Give to another resource")]],
+          ["Override", [step("Keep it as is", "Recorded in the audit log")]],
+          ["Cancel", [stop("Booking cancelled")]],
+        ]),
+        out("Customer notified"),
+      ]},
+      { h: "Help requests", p: "Problems customers sent from the chat", nodes: [
+        note("New requests arrive in the app and by e-mail"),
+        step("Help requests list", "Due in 3h / overdue by 40m"),
+        step("Open a request", "Problem, contact details, upcoming bookings, the whole chat"),
+        step("Contact the customer", "By e-mail or phone"),
+        step("Mark resolved", "With an optional note"),
+        out("Customer sees the note", "In the chat, on their card and by e-mail"),
+        note("Still open past the due time → admins reminded once"),
+      ]},
+      { h: "Administration", p: "Users, rules, records", nodes: [
+        step("Users", "Search · create & edit customers · activate / deactivate"),
+        note("Can give only the User role; admin roles and deleting accounts are for the super admin"),
+        step("Settings: booking rules", "Notice, advance window, cancel/reschedule windows, buffers, waitlist, recurring, approval, reminders"),
+        step("Settings: assistant FAQ", "What the booking assistant answers"),
+        step("Audit log", "Every change, with before and after"),
+        step("Reports", "Utilization per resource"),
+      ]},
+    ],
+  },
+
+  super: {
+    intro: "The <b>super admin</b> can do everything an admin can, and also decides who works in the admin console: they hand out roles, change admin accounts and delete accounts.",
+    entry: [
+      { k: "start", t: "Account created on the server", s: "python -m app.create_super_admin (never from inside the app)" },
+      step("Signs in at /admin/login"),
+      { k: "hub", t: "Admin console with full access", s: "Every admin menu, plus role management and account deletion" },
+    ],
+    lanes: [
+      { h: "Everything an admin does", p: "Same screens as the admin", nodes: [
+        step("Bookings & calendar"),
+        step("Catalogue & schedules"),
+        step("Conflicts"),
+        step("Help requests"),
+        step("Settings, audit log & reports"),
+        { k: "link", t: "See the Admin flow →", s: "Opens the Admin tab", go: "admin" },
+      ]},
+      { h: "Build the team", p: "Give people admin-console roles", nodes: [
+        step("Users → add or edit a person"),
+        dec("Choose a role", [
+          ["User", [step("Customer: books on the public site")]],
+          ["Staff", [step("Manages bookings, views reports")]],
+          ["Manager", [step("Everything except settings and user accounts")]],
+          ["Resource owner", [step("Views bookings")]],
+          ["Admin", [step("Everything except roles and deleting accounts")]],
+        ]),
+        out("They sign in at /admin/login", "They see only the menus their role allows"),
+        note("Super admin is never one of the choices"),
+      ]},
+      { h: "Manage admin accounts", p: "Accounts below their own", nodes: [
+        step("Open a staff, manager or admin account"),
+        dec("Change", [
+          ["Details", [step("Name, phone")]],
+          ["Role", [step("Promote, demote, or make a customer")]],
+          ["Status", [step("Deactivate or reactivate")]],
+        ]),
+        out("Saved", "Written to the audit log"),
+      ]},
+      { h: "Delete accounts", p: "Super admin only", nodes: [
+        step("Pick any account below their own"),
+        step("Confirm the warning", "“This deletes the account and their past bookings. It cannot be undone.”"),
+        stop("Account deleted"),
+      ]},
+      { h: "Guardrails", p: "What even a super admin cannot do", nodes: [
+        note("Nobody can be made a super admin in the app"),
+        note("Another super admin's account can be changed only by its owner"),
+        step("Edit own profile & password"),
+      ]},
+    ],
+  },
+};
+
+const MATRIX = [
+  ["Public site", null],
+  ["Browse services & resources", ["y", "y", "y"]],
+  ["Book, reschedule & cancel own bookings", ["y", "x", "x"]],
+  ["Booking assistant chat", ["y", "x", "x"]],
+  ["Send a help request to the admin", ["y", "x", "x"]],
+  ["Admin console", null],
+  ["See & manage every booking, calendar", ["x", "y", "y"]],
+  ["Book on behalf of a customer / invite", ["x", "y", "y"]],
+  ["Catalogue, schedules & conflicts", ["x", "y", "y"]],
+  ["Answer help requests", ["x", "y", "y"]],
+  ["Settings, assistant FAQ, audit log, reports", ["x", "y", "y"]],
+  ["People", null],
+  ["Create & edit customer accounts", ["x", "y", "y"]],
+  ["Give staff / manager / admin roles", ["x", "x", "y"]],
+  ["Change admin accounts", ["x", "x", "y"]],
+  ["Delete accounts", ["x", "x", "y"]],
+  ["Make someone a super admin", ["x", "x", "p:Server only"]],
+];
+
+const el = (tag, cls, html) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html != null) e.innerHTML = html;
+  return e;
+};
+const arrow = (cls) => el("div", "arrow" + (cls ? " " + cls : ""));
+
+function renderNode(n) {
+  if (n.k === "decision") {
+    const d = el("div", "node decision");
+    d.append(el("div", "q", n.q));
+    const opts = el("div", "opts");
+    n.opts.forEach(([label, nodes]) => {
+      const o = el("div", "opt");
+      o.append(el("span", "lab", label));
+      o.append(renderChain(nodes, "chain"));
+      opts.append(o);
+    });
+    d.append(opts);
+    return d;
+  }
+  const node = el("div", "node " + n.k);
+  node.append(el("div", "t", n.t));
+  if (n.s) node.append(el("div", "s", n.s));
+  if (n.go) {
+    node.tabIndex = 0;
+    node.setAttribute("role", "link");
+    const go = () => { select(n.go); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    node.addEventListener("click", go);
+    node.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  }
+  return node;
+}
+
+function renderChain(nodes, cls) {
+  const c = el("div", cls);
+  nodes.forEach((n, i) => {
+    if (i) c.append(arrow());
+    c.append(renderNode(n));
+  });
+  return c;
+}
+
+function renderFlow(key) {
+  const f = FLOWS[key];
+  const panel = document.getElementById("panel-" + key);
+  panel.append(el("p", "panel-intro", f.intro));
+  const entry = renderChain(f.entry, "entry");
+  panel.append(entry);
+  panel.append(arrow("long"));
+  panel.append(el("div", "fan", "From here they can"));
+  const lanes = el("div", "lanes");
+  f.lanes.forEach((l, i) => {
+    const lane = el("div", "lane");
+    const h = el("div", "lane-h");
+    h.append(el("span", "n", String(i + 1)));
+    const txt = el("div");
+    txt.append(el("h3", null, l.h));
+    if (l.p) txt.append(el("p", null, l.p));
+    h.append(txt);
+    lane.append(h);
+    l.nodes.forEach((n, j) => {
+      if (j) lane.append(arrow());
+      lane.append(renderNode(n));
+    });
+    lanes.append(lane);
+  });
+  panel.append(lanes);
+}
+
+function renderMatrix() {
+  const body = document.getElementById("matrix");
+  const cell = (v) => {
+    if (v === "y") return '<td class="c"><span class="y" aria-label="Yes">✓</span></td>';
+    if (v === "x") return '<td class="c"><span class="x" aria-label="No">—</span></td>';
+    return `<td class="c"><span class="p">${v.slice(2)}</span></td>`;
+  };
+  body.innerHTML = MATRIX.map(([label, v]) =>
+    v ? `<tr><td>${label}</td>${v.map(cell).join("")}</tr>`
+      : `<tr><td class="grp" colspan="4">${label}</td></tr>`
+  ).join("");
+}
+
+const tabs = [...document.querySelectorAll(".tab")];
+// Only touch the URL after the user picks a tab: rewriting it during the first
+// load can leave the page's top unpainted in Chrome.
+function select(role, updateHash = true) {
+  tabs.forEach((t) => {
+    const on = t.dataset.role === role;
+    t.setAttribute("aria-selected", on);
+    t.tabIndex = on ? 0 : -1;
+    document.getElementById("panel-" + t.dataset.role).classList.toggle("active", on);
+  });
+  if (updateHash && location.hash !== "#" + role) history.replaceState(null, "", "#" + role);
+}
+tabs.forEach((t, i) => {
+  t.addEventListener("click", () => select(t.dataset.role));
+  t.addEventListener("keydown", (e) => {
+    const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (!d) return;
+    const next = tabs[(i + d + tabs.length) % tabs.length];
+    next.focus();
+    select(next.dataset.role);
+  });
+});
+
+Object.keys(FLOWS).forEach(renderFlow);
+renderMatrix();
+const initial = location.hash.slice(1);
+select(FLOWS[initial] ? initial : "user", false);
+</script>
+</body>
+</html>
