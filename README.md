@@ -61,7 +61,7 @@ The seed builds a small catalogue spanning several industries: a strength coach 
 
 ### E-mail
 
-Out of the box, e-mails (booking confirmations, reminders, invitations) are only written to the backend's log. To really send them, put the mail server's details in `.env` next to `docker-compose.yml`, for example for Gmail (turn on 2-Step Verification, then create an *App Password*; a normal password is refused):
+Out of the box, e-mails (booking confirmations, reminders, invitations, the welcome e-mail a new account gets once it is ready to use) are only written to the backend's log. To really send them, put the mail server's details in `.env` next to `docker-compose.yml`, for example for Gmail (turn on 2-Step Verification, then create an *App Password*; a normal password is refused):
 
 ```
 EMAIL_BACKEND=smtp

@@ -326,3 +326,48 @@ def invitation_mail(db: Session, invitation: BookingInvitation, inviter: User, l
         footer=f"You are receiving this because {inviter.name} booked this for {invitation.email} at {facts.business}.",
     )
     return BookingMail(subject=subject, text=text, html=html)
+
+
+def welcome_mail(db: Session, user: User) -> BookingMail:
+    """Sent once, when a new account is ready to use."""
+    business = settings_service.get_rules(db).business_name
+    base = get_settings().frontend_url
+    first = user.name.split()[0] if user.name and "@" not in user.name else "there"
+    steps = [
+        ("Book", "Pick a service, then who or what and a time that suits you."),
+        ("Keep track", "Your bookings are under My bookings, where you can move or cancel them."),
+        ("Stay informed", "We e-mail a confirmation and reminders, each with a calendar invitation."),
+    ]
+    card = (
+        '<div style="background:#ffffff;border:1px solid #e4e1d9;border-radius:12px;padding:20px">'
+        + "".join(
+            f'<div style="{"margin-top:14px;" if i else ""}font-size:15px;font-weight:600">{escape(title)}</div>'
+            f'<div style="{MUTED}font-size:14px">{escape(body)}</div>'
+            for i, (title, body) in enumerate(steps)
+        )
+        + "</div>"
+    )
+    html = _page(
+        business=business,
+        heading=f"Welcome to {business}, {first}",
+        intro=f"Your account ({user.email}) is ready.",
+        card=card,
+        buttons=[_button(f"{base}/book", "Make a booking"), _button(f"{base}/dashboard", "My bookings", primary=False)],
+        notes=[],
+        footer=f"You get this e-mail because an account was created for {user.email}. If that wasn't you, reply to let us know.",
+    )
+    text = "\n".join(
+        [
+            f"Welcome to {business}, {first}!",
+            "",
+            f"Your account ({user.email}) is ready.",
+            "",
+            *(f"- {title}: {body}" for title, body in steps),
+            "",
+            f"Make a booking: {base}/book",
+            f"My bookings: {base}/dashboard",
+            "",
+            f"If you didn't create an account with {business}, reply to let us know.",
+        ]
+    )
+    return BookingMail(subject=f"Welcome to {business}", text=text, html=html)

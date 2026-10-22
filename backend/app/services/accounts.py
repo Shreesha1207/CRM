@@ -19,9 +19,10 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.security import hash_token, new_token
 from app.core.timeutils import utcnow
+from app.db.session import SessionLocal
 from app.models import Booking, PasswordResetToken, User
 from app.models.enums import BookingStatus, Role, UserStatus
-from app.services import audit, settings_service
+from app.services import audit, booking_mail, settings_service
 from app.services.booking_engine import BookingEngine
 from app.services.notifications import send_email
 
@@ -148,3 +149,23 @@ def close_own_account(db: Session, user: User) -> None:
         )
     except Exception:
         log.exception("Could not send the account deletion e-mail")
+
+
+def send_welcome(user_id) -> None:
+    """E-mail a new account's owner a welcome, once the account is ready to use.
+
+    Run after the response (a background task), so a slow mail server never holds
+    up signing up; a failure is only logged."""
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+        if user is None or user.status != UserStatus.ACTIVE:
+            return
+        mail = booking_mail.welcome_mail(db, user)
+        business = settings_service.get_rules(db).business_name
+        try:
+            send_email(user.email, mail.subject, mail.text, html=mail.html, from_name=business)
+        except Exception:
+            log.exception("Could not send the welcome e-mail to %s", user.email)
+            return
+        audit.record(db, actor_id=None, action="WELCOME_EMAIL_SENT", entity_type="user", entity_id=user.id)
+        db.commit()

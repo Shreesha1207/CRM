@@ -149,9 +149,12 @@ def test_accepting_registers_the_invitee_and_confirms_their_booking(client, db, 
     assert details["status"] == "PENDING" and details["has_account"] is False and details["booked"] is True
     assert details["invited_by"] == "Admin" and details["service_name"] == service.name
 
-    accepted = client.post(f"/api/invitations/{token}/accept", json={"name": "Gus Guest", "password": "password123"})
+    with caplog.at_level(logging.INFO, logger="notifications"):
+        accepted = client.post(f"/api/invitations/{token}/accept", json={"name": "Gus Guest", "password": "password123"})
     assert accepted.status_code == 200, accepted.text
     assert accepted.json()["signed_in"] is True and accepted.json()["booking_id"] == str(booking_id)
+    # Their account is new, so they are welcomed.
+    assert f"EMAIL to={GUEST} subject='Welcome to " in caplog.text
 
     db.expire_all()
     guest = db.scalar(select(User).where(User.email == GUEST))

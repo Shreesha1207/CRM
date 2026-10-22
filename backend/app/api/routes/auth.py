@@ -1,7 +1,7 @@
 import logging
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from google.auth.transport import requests
 from google.oauth2 import id_token
 from sqlalchemy import select, update
@@ -93,7 +93,7 @@ def _start_session(db: DB, user: User, request: Request, response: Response) -> 
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(rate_limit("register", 10, 3600))],
 )
-def register(body: RegisterIn, request: Request, response: Response, db: DB) -> TokenOut:
+def register(body: RegisterIn, request: Request, response: Response, db: DB, background: BackgroundTasks) -> TokenOut:
     email = body.email.lower()
     existing = db.scalar(select(User).where(User.email == email))
     if existing is not None:
@@ -115,7 +115,9 @@ def register(body: RegisterIn, request: Request, response: Response, db: DB) -> 
     db.add(user)
     db.flush()
     audit.record(db, actor_id=user.id, action="USER_REGISTERED", entity_type="user", entity_id=user.id)
-    return _start_session(db, user, request, response)
+    token = _start_session(db, user, request, response)
+    background.add_task(accounts.send_welcome, user.id)
+    return token
 
 
 @router.post("/login", response_model=TokenOut, dependencies=[Depends(rate_limit("login", 10, 300))])
@@ -133,7 +135,7 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
 
 
 @router.post("/google", response_model=TokenOut)
-def google_auth(body: GoogleAuthIn, request: Request, response: Response, db: DB) -> TokenOut:
+def google_auth(body: GoogleAuthIn, request: Request, response: Response, db: DB, background: BackgroundTasks) -> TokenOut:
     try:
         idinfo = id_token.verify_oauth2_token(body.credential, requests.Request(), GOOGLE_CLIENT_ID)
     except ValueError:
@@ -163,6 +165,7 @@ def google_auth(body: GoogleAuthIn, request: Request, response: Response, db: DB
         db.add(user)
         db.flush()
         audit.record(db, actor_id=user.id, action="USER_REGISTERED_GOOGLE", entity_type="user", entity_id=user.id)
+        background.add_task(accounts.send_welcome, user.id)
         
     return _start_session(db, user, request, response)
 
@@ -201,7 +204,7 @@ def forgot_password(body: ForgotPasswordIn, db: DB) -> dict:
 
 
 @router.post("/reset-password", dependencies=[Depends(rate_limit("reset", 10, 900))])
-def reset_password(body: ResetPasswordIn, db: DB) -> dict:
+def reset_password(body: ResetPasswordIn, db: DB, background: BackgroundTasks) -> dict:
     record = db.scalar(
         select(PasswordResetToken).where(PasswordResetToken.token_hash == hash_token(body.token)).with_for_update()
     )
@@ -226,6 +229,7 @@ def reset_password(body: ResetPasswordIn, db: DB) -> dict:
     audit.record(db, actor_id=user.id, action="ACCOUNT_SET_UP" if setting_up else "PASSWORD_RESET", entity_type="user", entity_id=user.id)
     db.commit()
     if setting_up:
+        background.add_task(accounts.send_welcome, user.id)
         return {"message": "Your account is ready. Please sign in."}
     return {"message": "Your password has been reset. Please sign in."}
 

@@ -136,6 +136,7 @@ def accept_invitation(
         # The account is kept (and the customer signed in) whatever happens to the booking.
         _start_session(db, user, request, response)
         signed_in = True
+        background.add_task(accounts.send_welcome, user.id)
     elif user.status != UserStatus.ACTIVE:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account is not active")
     elif current is None or current.id != user.id:

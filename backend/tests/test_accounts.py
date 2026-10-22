@@ -183,3 +183,25 @@ def test_phone_numbers_are_stored_without_spacing(client, user_headers) -> None:
     assert r.status_code == 200 and r.json()["phone"] == "+919876543210"
     # Clearing it is fine too.
     assert client.put("/api/auth/me", headers=user_headers, json={"phone": ""}).json()["phone"] is None
+
+
+# ------------------------------------------------------------------ welcome e-mail
+
+
+def test_signing_up_sends_a_welcome(client, mails) -> None:
+    r = client.post("/api/auth/register", json={"name": "Ann Lee", "email": "ann@test.io", "password": "longpassword"})
+    assert r.status_code == 201
+    (to, subject, body), = mails
+    assert to == "ann@test.io" and subject.startswith("Welcome to") and "Hi" not in subject
+    assert "Welcome to" in body and "Ann!" in body and "/book" in body
+
+
+def test_an_account_made_by_an_admin_is_welcomed_once_it_is_set_up(client, admin_headers, mails) -> None:
+    client.post("/api/admin/users", headers=admin_headers, json={"name": "Nia", "email": "nia@test.io"})
+    assert [subject for _, subject, _ in mails] == [mails[0][1]] and "Set up" in mails[0][1]  # no welcome yet
+    client.post("/api/auth/reset-password", json={"token": link_token(mails[0][2]), "password": "nias-own-pass"})
+    assert mails[-1][0] == "nia@test.io" and mails[-1][1].startswith("Welcome to")
+    # Resetting a password later is no reason to be welcomed again.
+    client.post("/api/auth/forgot-password", json={"email": "nia@test.io"})
+    client.post("/api/auth/reset-password", json={"token": link_token(mails[-1][2]), "password": "nias-newer-pass"})
+    assert sum(subject.startswith("Welcome") for _, subject, _ in mails) == 1
