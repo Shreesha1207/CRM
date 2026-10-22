@@ -94,24 +94,21 @@ class TokenOut(BaseModel):
     user: MeOut
 
 
-class UserCreateIn(RegisterIn):
-    role: Role = Role.USER
-    status: UserStatus = UserStatus.ACTIVE
+class UserCreateIn(BaseModel):
+    """No password: the person is e-mailed a link to choose their own."""
 
-    @field_validator("status")
-    @classmethod
-    def _not_invited(cls, status: UserStatus) -> UserStatus:
-        if status == UserStatus.INVITED:
-            raise ValueError("Accounts are only invited by booking for an e-mail address")
-        return status
+    name: str = Field(min_length=1, max_length=200)
+    email: EmailStr
+    phone: str | None = Field(default=None, max_length=50)
+    role: Role = Role.USER
 
 
 class UserUpdateIn(BaseModel):
+    # No password: an admin can only send a link for the person to choose one.
     name: str | None = Field(default=None, min_length=1, max_length=200)
     phone: str | None = Field(default=None, max_length=50)
     role: Role | None = None
     status: UserStatus | None = None
-    password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 # ---------------------------------------------------------------- locations

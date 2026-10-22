@@ -341,18 +341,15 @@ def test_a_registered_customer_is_booked_directly_and_e_mailed_a_confirmation(cl
     assert db.scalar(select(Notification.status).where(Notification.user_id == user.id, Notification.channel == NotificationChannel.EMAIL)) == "SENT"
 
 
-def test_an_admin_cannot_hand_out_the_invited_status(client, db, basic, admin_headers) -> None:
+def test_an_admin_cannot_hand_out_the_invited_status(client, db, basic, user, admin_headers) -> None:
     service, resource = basic
     invite(client, admin_headers, service, resource)
     guest = db.scalar(select(User).where(User.email == GUEST))
     # An invited customer can still be edited (the screen sends the status back unchanged) ...
     edited = client.put(f"/api/admin/users/{guest.id}", headers=admin_headers, json={"name": "Gus G", "status": "INVITED"})
     assert edited.status_code == 200, edited.text
-    # ... but nobody else can be turned into one, or created as one.
-    ok = client.post("/api/admin/users", headers=admin_headers, json={"name": "A", "email": "a@example.com", "password": "password123"}).json()
-    assert client.put(f"/api/admin/users/{ok['id']}", headers=admin_headers, json={"status": "INVITED"}).status_code == 422
-    made = client.post("/api/admin/users", headers=admin_headers, json={"name": "B", "email": "b@example.com", "password": "password123", "status": "INVITED"})
-    assert made.status_code == 422
+    # ... but nobody who has set up their account can be turned back into one.
+    assert client.put(f"/api/admin/users/{user.id}", headers=admin_headers, json={"status": "INVITED"}).status_code == 422
 
 
 def test_an_invited_users_status_follows_what_they_do(client, db, basic, admin_headers) -> None:

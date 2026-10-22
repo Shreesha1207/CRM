@@ -638,9 +638,11 @@ export function ResetPasswordPage() {
   const [params] = useSearchParams();
   const [password, setPassword] = useState("");
   const token = params.get("token") ?? "";
+  // The link in the e-mail for an account an admin made for them.
+  const setup = params.get("setup") === "1";
   const mutation = useMutation({ mutationFn: () => api.post<{ message: string }>("/api/auth/reset-password", { token, password }) });
   return (
-    <AuthCard title="Choose a new password">
+    <AuthCard title={setup ? "Set up your account" : "Choose a new password"}>
       {mutation.isSuccess ? (
         <div className="space-y-4">
           <Alert tone="success">{mutation.data.message}</Alert>
@@ -658,11 +660,11 @@ export function ResetPasswordPage() {
         >
           {!token && <Alert>This link is missing its token.</Alert>}
           {mutation.error && <Alert>{errorMessage(mutation.error)}</Alert>}
-          <Field label="New password" hint="At least 8 characters.">
-            <Input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} />
+          <Field label={setup ? "Choose a password" : "New password"} hint="At least 8 characters.">
+            <Input type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
           </Field>
           <Button type="submit" className="w-full" disabled={!token} loading={mutation.isPending}>
-            Set password
+            {setup ? "Set up account" : "Set password"}
           </Button>
         </form>
       )}

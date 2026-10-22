@@ -53,7 +53,7 @@ def test_cookie_auth_requires_csrf_token_for_writes(client, user) -> None:
 
 def test_forgot_and_reset_password(client, user, monkeypatch) -> None:
     sent = []
-    monkeypatch.setattr("app.api.routes.auth.send_email", lambda to, subject, body: sent.append(body))
+    monkeypatch.setattr("app.services.accounts.send_email", lambda to, subject, body, **kw: sent.append(body))
     assert client.post("/api/auth/forgot-password", json={"email": "unknown@test.io"}).status_code == 202
     assert sent == []  # same response, no e-mail, for unknown addresses
     client.post("/api/auth/forgot-password", json={"email": user.email})

@@ -31,8 +31,7 @@ from app.schemas import (
     ResetPasswordIn,
     TokenOut,
 )
-from app.services import audit
-from app.services.notifications import send_email
+from app.services import accounts, audit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 log = logging.getLogger("auth")
@@ -100,7 +99,7 @@ def register(body: RegisterIn, request: Request, response: Response, db: DB) -> 
         if existing.status == UserStatus.INVITED:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
-                "A booking is waiting for this e-mail address: open the link in the invitation e-mail to set up your account",
+                "This e-mail address has been invited: open the link in the invitation e-mail to set up your account",
             )
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this e-mail already exists")
     # Self-registration always yields a plain USER; roles are granted by admins.
@@ -123,6 +122,8 @@ def login(body: LoginIn, request: Request, response: Response, db: DB) -> TokenO
     user = db.scalar(select(User).where(User.email == body.email.lower()))
     if not verify_password(body.password, user.password_hash if user else None) or user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid e-mail or password")
+    if user.status == UserStatus.INVITED:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Finish setting up your account first: open the link in your invitation e-mail")
     if user.status != UserStatus.ACTIVE:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account is not active")
     if needs_rehash(user.password_hash):
@@ -185,28 +186,14 @@ def logout(request: Request, response: Response, user: CurrentUser, db: DB) -> R
     dependencies=[Depends(rate_limit("forgot", 5, 900))],
 )
 def forgot_password(body: ForgotPasswordIn, db: DB) -> dict:
-    settings = get_settings()
     user = db.scalar(select(User).where(User.email == body.email.lower()))
-    if user is not None and user.status == UserStatus.ACTIVE:
-        token = new_token()
-        db.add(
-            PasswordResetToken(
-                user_id=user.id,
-                token_hash=hash_token(token),
-                expires_at=utcnow() + timedelta(minutes=settings.password_reset_ttl_minutes),
-            )
-        )
-        db.commit()
-        link = f"{settings.frontend_url}/reset-password?token={token}"
+    # An invited account that lost its e-mail can set itself up the same way.
+    if user is not None and user.status in (UserStatus.ACTIVE, UserStatus.INVITED):
         try:
-            send_email(
-                user.email,
-                "Reset your password",
-                f"Hi {user.name},\n\nUse this link to choose a new password "
-                f"(valid for {settings.password_reset_ttl_minutes} minutes):\n{link}\n\n"
-                "If you did not ask for this, ignore this e-mail.",
-            )
+            accounts.send_reset_link(db, user)
+            db.commit()
         except Exception:
+            db.rollback()
             log.exception("Could not send password reset e-mail")
     # Same answer whether or not the account exists: no e-mail enumeration.
     return {"message": "If that e-mail is registered, a reset link has been sent."}
@@ -225,14 +212,20 @@ def reset_password(body: ResetPasswordIn, db: DB) -> dict:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This reset link is invalid or has expired")
     user.password_hash = hash_password(body.password)
     record.used_at = now
+    setting_up = user.status == UserStatus.INVITED
+    if setting_up:
+        # They chose their own password, so the account is theirs now.
+        user.status = UserStatus.ACTIVE
     # Sign out every existing session.
     db.execute(
         update(AuthSession)
         .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
         .values(revoked_at=now)
     )
-    audit.record(db, actor_id=user.id, action="PASSWORD_RESET", entity_type="user", entity_id=user.id)
+    audit.record(db, actor_id=user.id, action="ACCOUNT_SET_UP" if setting_up else "PASSWORD_RESET", entity_type="user", entity_id=user.id)
     db.commit()
+    if setting_up:
+        return {"message": "Your account is ready. Please sign in."}
     return {"message": "Your password has been reset. Please sign in."}
 
 

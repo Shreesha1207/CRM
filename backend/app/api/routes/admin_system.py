@@ -1,5 +1,6 @@
 """Admin: users, settings, dashboard, reports and the audit log."""
 
+import logging
 import uuid
 from datetime import date, timedelta
 
@@ -10,14 +11,15 @@ from app.api.deps import DB
 from app.api.deps import require as require_permission
 from app.core.errors import AppError
 from app.core.permissions import Permission, can_assign_role, can_manage_account
-from app.core.security import hash_password
+from app.core.security import hash_password, new_token
 from app.core.timeutils import day_bounds, get_zone, utcnow
 from app.models import AuditLog, AuthSession, Booking, User
 from app.models.enums import BookingStatus, Role, UserStatus
 from app.schemas import AuditLogOut, Page, SettingsIn, SettingsOut, UserCreateIn, UserOut, UserUpdateIn
-from app.services import audit, reports, settings_service
+from app.services import accounts, audit, reports, settings_service
 
 router = APIRouter(prefix="/api/admin", tags=["admin: system"])
+log = logging.getLogger("auth")
 
 # Bookings that still hold someone's time.
 UPCOMING_STATUSES = (BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.WAITLISTED, BookingStatus.CONFLICTED)
@@ -77,6 +79,8 @@ def list_users(
 
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def create_user(body: UserCreateIn, db: DB, actor: User = Depends(require_permission(Permission.USERS_MANAGE))) -> User:
+    """Make an account for someone. They get an e-mail with a link to choose their own
+    password; until they do, the account is INVITED and cannot sign in."""
     if not can_assign_role(actor.role, body.role):
         raise HTTPException(status.HTTP_403_FORBIDDEN, _cannot_give(body.role))
     email = body.email.lower()
@@ -84,13 +88,51 @@ def create_user(body: UserCreateIn, db: DB, actor: User = Depends(require_permis
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this e-mail already exists")
     user = User(
         name=body.name.strip(), email=email, phone=body.phone,
-        password_hash=hash_password(body.password), role=body.role, status=body.status,
+        # Nobody knows this password: the person chooses their own with the link.
+        password_hash=hash_password(new_token()), role=body.role, status=UserStatus.INVITED,
     )
     db.add(user)
     db.flush()
-    audit.record(db, actor_id=actor.id, action="USER_CREATED", entity_type="user", entity_id=user.id, new={"email": email, "role": body.role, "status": body.status})
+    audit.record(db, actor_id=actor.id, action="USER_CREATED", entity_type="user", entity_id=user.id, new={"email": email, "role": body.role, "status": user.status})
+    try:
+        accounts.send_setup_link(db, user, actor)
+    except Exception:
+        log.exception("Could not send the account set-up e-mail to %s", email)
+        db.rollback()  # nobody would know the account exists
+        raise AppError("EMAIL_FAILED", f"The e-mail to {email} could not be sent, so the account was not created", status_code=502) from None
     db.commit()
     return user
+
+
+@router.post("/users/{user_id}/send-password-link")
+def send_password_link(user_id: uuid.UUID, db: DB, actor: User = Depends(require_permission(Permission.USERS_MANAGE))) -> dict:
+    """E-mail someone a link to choose a password: to set up an invited account, or to
+    reset a forgotten one. The admin never sees or sets the password."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if user.id != actor.id and not can_manage_account(actor.role, user.role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _not_yours(user))
+    if user.status not in (UserStatus.ACTIVE, UserStatus.INVITED):
+        raise AppError("ACCOUNT_NOT_ACTIVE", f"{user.name}'s account is {user.status.value.lower()}: make it active first", status_code=409)
+    setup = user.status == UserStatus.INVITED
+    try:
+        if setup:
+            accounts.send_setup_link(db, user, actor)
+        else:
+            accounts.send_reset_link(db, user)
+    except Exception:
+        log.exception("Could not send the password e-mail to %s", user.email)
+        db.rollback()  # the earlier link keeps working
+        raise AppError("EMAIL_FAILED", f"The e-mail to {user.email} could not be sent", status_code=502) from None
+    audit.record(
+        db, actor_id=actor.id, action="ACCOUNT_SETUP_LINK_SENT" if setup else "PASSWORD_RESET_LINK_SENT",
+        entity_type="user", entity_id=user.id,
+    )
+    db.commit()
+    if setup:
+        return {"message": f"A new link to set up the account was sent to {user.email}."}
+    return {"message": f"A link to choose a new password was sent to {user.email}."}
 
 
 @router.put("/users/{user_id}", response_model=UserOut)
@@ -123,18 +165,11 @@ def update_user(
             )
 
     old = audit.snapshot(user, "name", "phone", "role", "status")
-    password = changes.pop("password", None)
     for key, value in changes.items():
         setattr(user, key, value)
-    revoke = password is not None or changes.get("status", UserStatus.ACTIVE) != UserStatus.ACTIVE
-    if password is not None:
-        user.password_hash = hash_password(password)
-    if revoke:
+    if changes.get("status", UserStatus.ACTIVE) not in (UserStatus.ACTIVE, UserStatus.INVITED):
         db.execute(update(AuthSession).where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None)).values(revoked_at=utcnow()))
-    audit.record(
-        db, actor_id=actor.id, action="USER_UPDATED", entity_type="user", entity_id=user.id,
-        old=old, new={**changes, "password_changed": password is not None},
-    )
+    audit.record(db, actor_id=actor.id, action="USER_UPDATED", entity_type="user", entity_id=user.id, old=old, new=changes)
     db.commit()
     return user
 

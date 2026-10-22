@@ -16,7 +16,7 @@ def super_admin_headers(client, make):
 
 def new_user(client, headers, role="USER", email="new@test.io"):
     return client.post(
-        "/api/admin/users", headers=headers, json={"name": "New", "email": email, "password": "password123", "role": role}
+        "/api/admin/users", headers=headers, json={"name": "New", "email": email, "role": role}
     )
 
 
@@ -54,7 +54,7 @@ def test_only_a_super_admin_makes_admins(client, make, user, admin_headers) -> N
 
 def test_an_admin_cannot_change_another_admins_account(client, make, admin, admin_headers) -> None:
     other = make.user("other-admin@test.io", Role.ADMIN, name="Other")
-    for change in ({"password": "newpassword1"}, {"status": "SUSPENDED"}, {"name": "Renamed"}):
+    for change in ({"status": "SUSPENDED"}, {"name": "Renamed"}):
         assert client.put(f"/api/admin/users/{other.id}", headers=admin_headers, json=change).status_code == 403
     # Their own account is still theirs to edit.
     assert client.put(f"/api/admin/users/{admin.id}", headers=admin_headers, json={"name": "Me"}).status_code == 200
@@ -115,7 +115,7 @@ def test_nobody_can_make_a_super_admin_in_the_app(client, make, user, admin_head
 def test_a_super_admins_account_is_left_to_its_owner(client, db, make) -> None:
     headers = super_admin_headers(client, make)
     other = make.user("boss2@test.io", Role.SUPER_ADMIN, name="Other boss")
-    for change in ({"role": "USER"}, {"status": "SUSPENDED"}, {"password": "newpassword1"}, {"name": "X"}):
+    for change in ({"role": "USER"}, {"status": "SUSPENDED"}, {"name": "X"}):
         assert client.put(f"/api/admin/users/{other.id}", headers=headers, json=change).status_code == 403
     assert client.delete(f"/api/admin/users/{other.id}", headers=headers).status_code == 403
     # Their own name and password are still theirs to change.

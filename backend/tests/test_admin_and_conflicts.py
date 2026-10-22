@@ -301,20 +301,20 @@ def test_admin_user_management_guards(client, admin, admin_headers, user) -> Non
     r = client.post(
         "/api/admin/users",
         headers=admin_headers,
-        json={"name": "Customer", "email": "customer@test.io", "password": "password123", "role": "USER"},
+        json={"name": "Customer", "email": "customer@test.io", "role": "USER"},
     )
     assert r.status_code == 201
     # Only a SUPER_ADMIN may hand out admin-console roles, a super admin's included.
     r = client.post(
         "/api/admin/users",
         headers=admin_headers,
-        json={"name": "Staff", "email": "staff@test.io", "password": "password123", "role": "STAFF"},
+        json={"name": "Staff", "email": "staff@test.io", "role": "STAFF"},
     )
     assert r.status_code == 403
     r = client.post(
         "/api/admin/users",
         headers=admin_headers,
-        json={"name": "Boss", "email": "boss@test.io", "password": "password123", "role": "SUPER_ADMIN"},
+        json={"name": "Boss", "email": "boss@test.io", "role": "SUPER_ADMIN"},
     )
     assert r.status_code == 403
     assert client.put(f"/api/admin/users/{admin.id}", headers=admin_headers, json={"role": "USER"}).status_code == 400

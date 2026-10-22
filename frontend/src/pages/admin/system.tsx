@@ -26,20 +26,21 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
     email: user?.email ?? "",
     phone: user?.phone ?? "",
     role: user?.role ?? ("USER" as Role),
-    status: user?.status ?? ("ACTIVE" as UserStatus),
-    password: "",
+    status: user?.status ?? ("INVITED" as UserStatus),
   });
   const save = useMutation({
     mutationFn: () => {
-      const body: Record<string, unknown> = { name: form.name, phone: form.phone || null, role: form.role, status: form.status };
-      if (form.password) body.password = form.password;
-      return user ? api.put(`/api/admin/users/${user.id}`, body) : api.post("/api/admin/users", { ...body, email: form.email, password: form.password });
+      const body = { name: form.name, phone: form.phone || null, role: form.role };
+      // New accounts are invited: the person chooses their own password from the e-mailed link.
+      return user ? api.put(`/api/admin/users/${user.id}`, { ...body, status: form.status }) : api.post("/api/admin/users", { ...body, email: form.email });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       onClose();
     },
   });
+  // The admin never sees or picks a password, only sends a link for the person to choose one.
+  const sendLink = useMutation({ mutationFn: () => api.post<{ message: string }>(`/api/admin/users/${user!.id}/send-password-link`) });
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
   return (
     <Modal
@@ -52,7 +53,7 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
             Cancel
           </Button>
           <Button loading={save.isPending} onClick={() => save.mutate()}>
-            Save
+            {user ? "Save" : "Create and send invitation"}
           </Button>
         </>
       }
@@ -81,28 +82,47 @@ function UserForm({ user, onClose }: { user: User | null; onClose: () => void })
               ))}
             </Select>
           </Field>
-          <Field
-            label="Status"
-            hint={
-              isMe
-                ? "You cannot change the status of your own account."
-                : user?.status === "INVITED"
-                  ? "Becomes Active when they accept the invitation."
-                  : undefined
-            }
-          >
-            <Select value={form.status} onChange={set("status")} disabled={statusLocked}>
-              <option value="ACTIVE">Active</option>
-              <option value="INACTIVE">Inactive</option>
-              <option value="SUSPENDED">Suspended</option>
-              {/* Only made by a booking invitation; shown so the current value reads right, never offered. */}
-              {form.status === "INVITED" && <option value="INVITED">Invited (not registered yet)</option>}
-            </Select>
-          </Field>
+          {user && (
+            <Field
+              label="Status"
+              hint={
+                isMe
+                  ? "You cannot change the status of your own account."
+                  : user.status === "INVITED"
+                    ? "Becomes Active when they accept the invitation."
+                    : undefined
+              }
+            >
+              <Select value={form.status} onChange={set("status")} disabled={statusLocked}>
+                <option value="ACTIVE">Active</option>
+                <option value="INACTIVE">Inactive</option>
+                <option value="SUSPENDED">Suspended</option>
+                {/* Only made by an invitation; shown so the current value reads right, never offered. */}
+                {form.status === "INVITED" && <option value="INVITED">Invited (not set up yet)</option>}
+              </Select>
+            </Field>
+          )}
         </div>
-        <Field label={user ? "Set a new password (optional)" : "Password"} hint="At least 8 characters. Changing it signs the user out everywhere.">
-          <Input type="password" minLength={8} value={form.password} onChange={set("password")} autoComplete="new-password" />
-        </Field>
+        {!user ? (
+          <p className="text-sm text-muted">We'll e-mail them a link to choose their own password. The account becomes active once they do.</p>
+        ) : (
+          !isMe &&
+          (user.status === "ACTIVE" || user.status === "INVITED") && (
+            <div className="space-y-2 rounded-md border border-line p-3">
+              <p className="text-sm font-medium text-fg">Password</p>
+              <p className="text-xs text-muted">
+                {user.status === "INVITED"
+                  ? "They haven't set up their account yet. Send a new link if they lost the first one or it ran out."
+                  : "Only they can choose their password. If they forgot it, send them a link to pick a new one."}
+              </p>
+              {sendLink.isSuccess && <Alert tone="success">{sendLink.data.message}</Alert>}
+              {sendLink.error && <Alert>{errorMessage(sendLink.error)}</Alert>}
+              <Button size="sm" variant="secondary" loading={sendLink.isPending} onClick={() => sendLink.mutate()}>
+                {user.status === "INVITED" ? "Resend invitation" : "Send password reset link"}
+              </Button>
+            </div>
+          )
+        )}
       </div>
     </Modal>
   );
