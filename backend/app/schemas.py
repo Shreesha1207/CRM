@@ -636,11 +636,16 @@ class AuditLogOut(ORM):
 
 class SettingsOut(BaseModel):
     values: dict[str, Any]
+    # Per setting, a token that changes on every save (null while it has its default).
+    versions: dict[str, str | None]
     definitions: list[dict[str, Any]]
 
 
 class SettingsIn(BaseModel):
+    # Only the settings being changed.
     values: dict[str, Any]
+    # The versions the editor loaded for them; a setting saved by someone else since is refused.
+    versions: dict[str, str | None] | None = None
 
 
 class PublicConfigOut(BaseModel):

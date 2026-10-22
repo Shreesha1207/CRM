@@ -4,9 +4,9 @@ from sqlalchemy import select
 
 from app.core.timeutils import freeze_time
 from app.models import Notification
-from app.models.enums import BookingType, NotificationChannel, NotificationType
+from app.models.enums import BookingType, NotificationChannel, NotificationType, Role
 from app.services import notifications
-from tests.conftest import MONDAY, at
+from tests.conftest import MONDAY, at, auth_headers
 
 
 def book(client, headers, service, resource, start, **extra):
@@ -234,6 +234,34 @@ def test_settings_validation_and_update(client, admin_headers) -> None:
     r = client.put("/api/admin/settings", headers=admin_headers, json={"values": {"minimum_booking_notice": 90, "allow_waitlist": False}})
     assert r.json()["values"]["minimum_booking_notice"] == 90
     assert client.get("/api/config").json()["allow_waitlist"] is False
+
+
+def test_two_admins_editing_settings_do_not_overwrite_each_other(client, make, admin_headers) -> None:
+    make.user("admin2@test.io", Role.ADMIN, name="Admin 2")
+    other_headers = auth_headers(client, "admin2@test.io")
+    # Both open the settings screen.
+    mine = client.get("/api/admin/settings", headers=admin_headers).json()["versions"]
+    theirs = client.get("/api/admin/settings", headers=other_headers).json()["versions"]
+
+    # They change one setting, I change another: both changes stand.
+    r = client.put("/api/admin/settings", headers=other_headers, json={"values": {"slot_interval": 30}, "versions": {"slot_interval": theirs["slot_interval"]}})
+    assert r.status_code == 200, r.text
+    r = client.put("/api/admin/settings", headers=admin_headers, json={"values": {"business_name": "Mine"}, "versions": {"business_name": mine["business_name"]}})
+    assert r.status_code == 200, r.text
+    assert r.json()["values"]["slot_interval"] == 30 and r.json()["values"]["business_name"] == "Mine"
+
+    # Saving the one they changed, as I loaded it, is refused instead of silently undoing theirs.
+    r = client.put(
+        "/api/admin/settings", headers=admin_headers,
+        json={"values": {"slot_interval": 15, "allow_waitlist": False}, "versions": {"slot_interval": mine["slot_interval"], "allow_waitlist": mine["allow_waitlist"]}},
+    )
+    assert r.status_code == 409 and r.json()["code"] == "SETTINGS_CHANGED" and r.json()["details"]["keys"] == ["slot_interval"]
+    current = client.get("/api/admin/settings", headers=admin_headers).json()
+    assert current["values"]["slot_interval"] == 30 and current["values"]["allow_waitlist"] is True
+
+    # With the latest version it goes through.
+    r = client.put("/api/admin/settings", headers=admin_headers, json={"values": {"slot_interval": 15}, "versions": {"slot_interval": current["versions"]["slot_interval"]}})
+    assert r.status_code == 200 and r.json()["values"]["slot_interval"] == 15
 
 
 def test_waitlist_can_be_disabled(client, make, user_headers, admin_headers) -> None:

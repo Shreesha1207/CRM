@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, errorMessage } from "../../api/client";
+import { ApiError, api, errorMessage } from "../../api/client";
 import type { AuditLog, Page, Role, SettingDefinition, User, UserStatus } from "../../api/types";
 import { ROLES } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
@@ -222,19 +222,37 @@ export function AdminSettingsPage() {
   const queryClient = useQueryClient();
   const settings = useQuery({
     queryKey: ["admin", "settings"],
-    queryFn: () => api.get<{ values: Record<string, unknown>; definitions: SettingDefinition[] }>("/api/admin/settings"),
+    queryFn: () =>
+      api.get<{ values: Record<string, unknown>; versions: Record<string, string | null>; definitions: SettingDefinition[] }>("/api/admin/settings"),
   });
+  // Only the settings changed here: saving them leaves everything another admin changed alone.
   const [draft, setDraft] = useState<Record<string, unknown> | null>(null);
-  const values = draft ?? settings.data?.values ?? {};
+  const values = { ...settings.data?.values, ...draft };
   const save = useMutation({
-    mutationFn: () => api.put("/api/admin/settings", { values: draft }),
+    mutationFn: () => {
+      const keys = Object.keys(draft ?? {});
+      // The versions these were loaded at: if someone saved one since, the server refuses instead of overwriting it.
+      const versions = Object.fromEntries(keys.map((k) => [k, settings.data?.versions[k] ?? null]));
+      return api.put("/api/admin/settings", { values: draft, versions });
+    },
     onSuccess: () => {
       setDraft(null);
       queryClient.invalidateQueries();
     },
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "SETTINGS_CHANGED") {
+        // Show the other admin's values for those settings; keep the rest of this draft.
+        const stale = (error.details as { keys?: string[] } | undefined)?.keys ?? [];
+        setDraft((d) => {
+          const rest = Object.fromEntries(Object.entries(d ?? {}).filter(([k]) => !stale.includes(k)));
+          return Object.keys(rest).length ? rest : null;
+        });
+        queryClient.invalidateQueries({ queryKey: ["admin", "settings"] });
+      }
+    },
   });
   if (settings.isLoading) return <Loading />;
-  const set = (key: string, value: unknown) => setDraft({ ...values, [key]: value });
+  const set = (key: string, value: unknown) => setDraft({ ...draft, [key]: value });
   return (
     <>
       <PageHeader title="Settings" subtitle="Booking rules. These make the same engine fit a clinic, a gym or a meeting-room system." />

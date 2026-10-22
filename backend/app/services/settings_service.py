@@ -9,6 +9,7 @@ from dataclasses import dataclass, fields
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.timeutils import is_valid_timezone
@@ -67,6 +68,14 @@ class SettingsValidationError(ValueError):
     pass
 
 
+class SettingsConflict(Exception):
+    """Someone else saved some of these settings after the editor loaded them."""
+
+    def __init__(self, keys: list[str]) -> None:
+        super().__init__(", ".join(keys))
+        self.keys = keys
+
+
 def _coerce(key: str, value: Any) -> Any:
     default = SETTING_DEFINITIONS[key][0]
     if isinstance(default, bool):
@@ -109,19 +118,56 @@ def get_rules(db: Session) -> BookingRules:
     return BookingRules(**{f.name: values[f.name] for f in fields(BookingRules)})
 
 
-def update(db: Session, changes: dict[str, Any], actor_id: uuid.UUID | None) -> dict[str, Any]:
+def _version(entry: SettingEntry | None) -> str | None:
+    """Changes whenever the setting is saved; None while it has its default."""
+    return entry.updated_at.isoformat() if entry is not None and entry.updated_at else None
+
+
+def get_versions(db: Session) -> dict[str, str | None]:
+    versions: dict[str, str | None] = dict.fromkeys(SETTING_DEFINITIONS)
+    for entry in db.scalars(select(SettingEntry)):
+        if entry.key in versions:
+            versions[entry.key] = _version(entry)
+    return versions
+
+
+def update(
+    db: Session,
+    changes: dict[str, Any],
+    actor_id: uuid.UUID | None,
+    *,
+    expected: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
+    """Save `changes`. With `expected` (the versions the editor loaded), a setting
+    someone else saved in the meantime is not overwritten: SettingsConflict names them."""
     unknown = set(changes) - set(SETTING_DEFINITIONS)
     if unknown:
         raise SettingsValidationError(f"Unknown settings: {', '.join(sorted(unknown))}")
-    for key, raw in changes.items():
-        value = _coerce(key, raw)
-        entry = db.get(SettingEntry, key)
+    values = {key: _coerce(key, raw) for key, raw in changes.items()}
+    # Locked, so two admins saving at once take turns and the second sees the first's change.
+    entries = {
+        e.key: e
+        for e in db.scalars(
+            select(SettingEntry).where(SettingEntry.key.in_(list(values))).order_by(SettingEntry.key).with_for_update()
+        )
+    }
+    if expected is not None:
+        stale = sorted(k for k in values if k in expected and _version(entries.get(k)) != expected[k])
+        if stale:
+            raise SettingsConflict(stale)
+    for key, value in values.items():
+        entry = entries.get(key)
         if entry is None:
             db.add(SettingEntry(key=key, value=value, updated_by=actor_id))
         else:
             entry.value = value
             entry.updated_by = actor_id
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # Another admin saved a setting that still had its default, at the same moment.
+        db.rollback()
+        raise SettingsConflict(sorted(k for k in values if k not in entries)) from None
     return get_all(db)
 
 

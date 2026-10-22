@@ -177,22 +177,39 @@ def delete_user(user_id: uuid.UUID, db: DB, actor: User = Depends(require_permis
 
 @router.get("/settings", response_model=SettingsOut)
 def get_settings_values(db: DB, _: User = Depends(require_permission(Permission.SETTINGS_MANAGE))) -> SettingsOut:
-    return SettingsOut(values=settings_service.get_all(db), definitions=settings_service.describe())
+    return _settings_out(db)
+
+
+def _settings_out(db: DB) -> SettingsOut:
+    return SettingsOut(
+        values=settings_service.get_all(db), versions=settings_service.get_versions(db), definitions=settings_service.describe()
+    )
 
 
 @router.put("/settings", response_model=SettingsOut)
 def update_settings(body: SettingsIn, db: DB, actor: User = Depends(require_permission(Permission.SETTINGS_MANAGE))) -> SettingsOut:
+    """Save only the settings in `values`. With `versions` (as loaded), a setting another
+    admin saved in the meantime is refused (409) instead of silently overwritten."""
     old = settings_service.get_all(db)
     try:
-        values = settings_service.update(db, body.values, actor.id)
+        settings_service.update(db, body.values, actor.id, expected=body.versions)
     except settings_service.SettingsValidationError as exc:
         raise AppError("INVALID_SETTING", str(exc), status_code=422) from exc
+    except settings_service.SettingsConflict as exc:
+        db.rollback()
+        names = ", ".join(k.replace("_", " ") for k in exc.keys)
+        raise AppError(
+            "SETTINGS_CHANGED",
+            f"Someone else changed {names} while you were editing. Their values are shown now: check them and save again.",
+            status_code=409,
+            details={"keys": exc.keys},
+        ) from exc
     audit.record(
         db, actor_id=actor.id, action="SETTINGS_CHANGED", entity_type="settings",
         old={k: old[k] for k in body.values}, new=body.values,
     )
     db.commit()
-    return SettingsOut(values=values, definitions=settings_service.describe())
+    return _settings_out(db)
 
 
 # ---------------------------------------------------------------- audit
