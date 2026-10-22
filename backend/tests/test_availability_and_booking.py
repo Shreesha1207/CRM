@@ -82,29 +82,36 @@ def test_both_booking_flows_service_first_lists_all_resources(client, make) -> N
 # ---------------------------------------------------------------- clash detection
 
 
-def test_clash_detection(client, basic, user_headers) -> None:
-    service, resource = basic
-    assert book(client, user_headers, service, resource, at(MONDAY, 10)).status_code == 201
+def test_clash_detection(client, make, user_headers) -> None:
+    # Half-hour steps, so a booking can start in the middle of another.
+    service = make.service(duration=30, max_duration_minutes=60)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    assert book(client, user_headers, service, resource, at(MONDAY, 10), duration_minutes=60).status_code == 201
     clash = book(client, user_headers, service, resource, at(MONDAY, 10, 30))
     assert clash.status_code == 409
     assert clash.json()["code"] == "CONFLICT"
     # Back-to-back is fine without buffers.
     assert book(client, user_headers, service, resource, at(MONDAY, 11)).status_code == 201
     statuses = {s["start_time"]: s["status"] for s in slots(client, service, resource)}
-    assert statuses["10:00"] == "CONFLICT" and statuses["12:00"] == "AVAILABLE"
+    assert statuses["10:30"] == "CONFLICT" and statuses["11:00"] == "CONFLICT" and statuses["11:30"] == "AVAILABLE"
 
 
 def test_buffers_extend_the_occupied_time(client, make, user_headers) -> None:
-    service = make.service(duration=60, buffer_before=10, buffer_after=15)
+    # Bookable in 5-minute steps, to probe the buffers minute by minute.
+    service = make.service(duration=5, max_duration_minutes=60, buffer_before=10, buffer_after=15)
     resource = make.resource(services=[service], hours=make.weekdays(time(8), time(17)))
-    assert book(client, user_headers, service, resource, at(MONDAY, 10)).status_code == 201
+
+    def hour_at(hh, mm=0):
+        return book(client, user_headers, service, resource, at(MONDAY, hh, mm), duration_minutes=60)
+
+    assert hour_at(10).status_code == 201
     # 10:00-11:00 occupies 09:50-11:15, and a new booking needs 10 minutes before it.
-    assert book(client, user_headers, service, resource, at(MONDAY, 11)).json()["code"] == "CONFLICT"
-    assert book(client, user_headers, service, resource, at(MONDAY, 11, 20)).json()["code"] == "CONFLICT"
-    assert book(client, user_headers, service, resource, at(MONDAY, 11, 25)).status_code == 201
+    assert hour_at(11).json()["code"] == "CONFLICT"
+    assert hour_at(11, 20).json()["code"] == "CONFLICT"
+    assert hour_at(11, 25).status_code == 201
     # 08:40 would occupy until 09:55, running into the 09:50 buffer; 08:35 just touches it.
-    assert book(client, user_headers, service, resource, at(MONDAY, 8, 40)).json()["code"] == "CONFLICT"
-    assert book(client, user_headers, service, resource, at(MONDAY, 8, 35)).status_code == 201
+    assert hour_at(8, 40).json()["code"] == "CONFLICT"
+    assert hour_at(8, 35).status_code == 201
 
 
 def test_rejections_for_rules(client, make, basic, user_headers) -> None:
@@ -150,19 +157,20 @@ def test_special_hours_override_recurring_schedule(client, basic, admin_headers)
 
 
 def test_booking_across_midnight(client, make, user_headers) -> None:
-    service = make.service(duration=60)
+    service = make.service(duration=90)
     resource = make.resource(services=[service], hours=[(0, time(22), time(2))])
     r = book(client, user_headers, service, resource, at(MONDAY, 23, 30))
     assert r.status_code == 201, r.text
     assert r.json()["end_datetime"].startswith((MONDAY + timedelta(days=1)).isoformat())
     # Notifications and e-mails give the end its own date.
     [notification] = client.get("/api/notifications", headers=user_headers).json()
-    assert "Mon 01 Mar 2027, 11:30 PM – Tue 02 Mar 2027, 12:30 AM (UTC)" in notification["body"]
+    assert "Mon 01 Mar 2027, 11:30 PM – Tue 02 Mar 2027, 1:00 AM (UTC)" in notification["body"]
 
 
-def test_notifications_use_a_12_hour_clock(client, basic, user_headers) -> None:
-    service, resource = basic
-    assert book(client, user_headers, service, resource, at(MONDAY, 12, 30)).status_code == 201
+def test_notifications_use_a_12_hour_clock(client, make, user_headers) -> None:
+    service = make.service(duration=30, max_duration_minutes=60)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    assert book(client, user_headers, service, resource, at(MONDAY, 12, 30), duration_minutes=60).status_code == 201
     [notification] = client.get("/api/notifications", headers=user_headers).json()
     assert "Mon 01 Mar 2027, 12:30 PM – 1:30 PM (UTC)" in notification["body"]
 
@@ -237,10 +245,50 @@ def test_quantity_counts_against_capacity(client, make, user_headers) -> None:
 
 def test_capacity_session_blocks_exclusive_booking_on_same_resource(client, make, user_headers) -> None:
     group = make.service("Group", booking_type=BookingType.CAPACITY, capacity=10)
-    private = make.service("Private")
+    private = make.service("Private", duration=30)
     resource = make.resource(services=[group, private], hours=make.weekdays(time(9), time(17)))
     assert book(client, user_headers, group, resource, at(MONDAY, 10)).status_code == 201
     assert book(client, user_headers, private, resource, at(MONDAY, 10, 30)).json()["code"] == "CONFLICT"
+
+
+# ---------------------------------------------------------------- the slot grid
+
+
+def test_a_two_hour_service_starts_every_two_hours_whatever_the_slot_interval(client, make) -> None:
+    service = make.service(duration=120)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    for interval in (0, 30, 60):
+        make.settings(slot_interval=interval)
+        assert [s["start_time"] for s in slots(client, service, resource)] == ["09:00", "11:00", "13:00", "15:00"]
+    # A wider interval still spaces them further apart.
+    make.settings(slot_interval=180)
+    assert [s["start_time"] for s in slots(client, service, resource)] == ["09:00", "12:00", "15:00"]
+
+
+def test_a_booking_can_only_start_at_a_listed_time(client, make, user_headers, admin, admin_headers) -> None:
+    service = make.service(duration=120)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    for hh, mm in ((10, 0), (10, 17), (12, 0)):
+        r = book(client, user_headers, service, resource, at(MONDAY, hh, mm))
+        assert r.status_code == 409 and r.json()["code"] == "NOT_A_SLOT_START", r.text
+    assert book(client, user_headers, service, resource, at(MONDAY, 11)).status_code == 201
+    # An admin can still book an odd time on purpose, by overriding the rules.
+    r = client.post(
+        "/api/admin/bookings", headers=admin_headers,
+        json={"service_id": str(service.id), "resource_id": str(resource.id), "start": at(MONDAY, 13, 30), "user_id": str(admin.id), "override_rules": True},
+    )
+    assert r.status_code == 201, r.text
+
+
+def test_a_two_hour_booking_takes_both_hours_from_everyone_else(client, make, user_headers) -> None:
+    service = make.service(duration=60, max_duration_minutes=120)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    assert book(client, user_headers, service, resource, at(MONDAY, 10), duration_minutes=120).status_code == 201
+    other = make.user("other@test.io")
+    other_headers = auth_headers(client, other.email)
+    free = {s["start_time"]: s["available"] for s in slots(client, service, resource)}
+    assert free["10:00"] is False and free["11:00"] is False and free["12:00"] is True
+    assert book(client, other_headers, service, resource, at(MONDAY, 11)).json()["code"] == "CONFLICT"
 
 
 # ---------------------------------------------------------------- cancel & reschedule
@@ -282,17 +330,18 @@ def test_reschedule_creates_linked_booking_and_frees_old_slot(client, basic, use
     assert book(client, user_headers, service, resource, at(MONDAY, 10)).status_code == 201
 
 
-def test_reschedule_can_overlap_its_own_old_time(client, basic, user_headers) -> None:
-    service, resource = basic
-    original = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
+def test_reschedule_can_overlap_its_own_old_time(client, make, user_headers) -> None:
+    service = make.service(duration=30, max_duration_minutes=60)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    original = book(client, user_headers, service, resource, at(MONDAY, 10), duration_minutes=60).json()
     r = client.post(f"/api/bookings/{original['id']}/reschedule", headers=user_headers, json={"start": at(MONDAY, 10, 30)})
     assert r.status_code == 200, r.text
 
 
-def test_availability_can_leave_out_the_booking_being_moved(client, make, basic, user_headers, admin_headers) -> None:
-    service, resource = basic
-    make.settings(slot_interval=30)
-    original = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
+def test_availability_can_leave_out_the_booking_being_moved(client, make, user_headers, admin_headers) -> None:
+    service = make.service(duration=30, max_duration_minutes=60)
+    resource = make.resource(services=[service], hours=make.weekdays(time(9), time(17)))
+    original = book(client, user_headers, service, resource, at(MONDAY, 10), duration_minutes=60).json()
 
     def status_at_1030(headers=None, **params):
         r = client.get(

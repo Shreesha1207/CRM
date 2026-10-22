@@ -475,7 +475,7 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
         {serviceId && (
           <>
             <DateNav date={date} onChange={(d) => { setDate(d); setPicked(null); }} />
-            <Checkbox label="Override booking rules (outside hours, notice, blocks — audited; clashes are still prevented)" checked={override} onChange={(e) => setOverride(e.target.checked)} />
+            <Checkbox label="Override booking rules (outside hours, notice, blocks, unlisted start times — audited; clashes are still prevented)" checked={override} onChange={(e) => setOverride(e.target.checked)} />
             {override ? (
               <Field label="Start time (resource's local time)">
                 <TimeSelect step={5} value={manualTime} onChange={setManualTime} className="w-40" />

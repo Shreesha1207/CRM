@@ -19,7 +19,11 @@ from app.models import SettingEntry
 SETTING_DEFINITIONS: dict[str, tuple[Any, str]] = {
     "business_name": ("Booking Platform", "Name shown in the UI and e-mails."),
     "default_timezone": ("UTC", "Timezone for resources without a location."),
-    "slot_interval": (0, "Minutes between generated slot starts. 0 = use the service duration."),
+    "slot_interval": (
+        0,
+        "Minutes between slot starts. 0 = the service's length. Starts are never closer together than "
+        "a service's length, so a booking never leaves a gap too short to book.",
+    ),
     "minimum_booking_notice": (0, "Minutes of notice required before a booking starts."),
     "maximum_advance_booking_days": (90, "How many days ahead users may book."),
     "cancellation_window": (0, "Users may cancel until this many minutes before the start."),

@@ -55,6 +55,7 @@ BLOCKED = "BLOCKED"
 CONFLICT = "CONFLICT"
 FULL = "CAPACITY_REACHED"
 QUANTITY_TOO_LARGE = "QUANTITY_EXCEEDS_CAPACITY"
+OFF_GRID = "NOT_A_SLOT_START"
 
 REASON_MESSAGES = {
     PAST: "This time is in the past",
@@ -66,6 +67,7 @@ REASON_MESSAGES = {
     CONFLICT: "This time overlaps another booking",
     FULL: "This session is full",
     QUANTITY_TOO_LARGE: "The requested quantity exceeds the capacity",
+    OFF_GRID: "Bookings start at the listed times only: choose one of them",
 }
 
 
@@ -143,6 +145,16 @@ class Offering:
 
     def allocation_key(self, booking_id: uuid.UUID, start: datetime) -> str:
         return f"x:{booking_id}" if self.exclusive else self.session_key(start)
+
+
+def slot_step(offering: Offering, rules: BookingRules) -> timedelta:
+    """How far apart bookable start times are.
+
+    Never closer than the service's own length (its shortest booking): a
+    two-hour service starts every two hours, so each booking takes whole
+    blocks and never leaves an hour nobody can use. `slot_interval` can only
+    space them further apart."""
+    return max(timedelta(minutes=rules.slot_interval), offering.step)
 
 
 def resolve_offering(
@@ -249,6 +261,14 @@ class ResourceSnapshot:
     def free(self) -> list[Interval]:
         return subtract(self.base, [(b.start, b.end) for b in self.blocks])
 
+    def on_grid(self, start: datetime, step: timedelta) -> bool:
+        """Whether `start` is one of the listed slot starts: a whole number of
+        steps from the start of the bookable period it falls in."""
+        for window_start, window_end in self.base:
+            if window_start <= start < window_end:
+                return (start - window_start) % step == timedelta(0)
+        return False
+
     def schedule_violation(self, start: datetime, end: datetime) -> tuple[str, str | None] | None:
         """Why [start, end) is not bookable time on this resource, if it isn't.
 
@@ -275,13 +295,16 @@ class ResourceSnapshot:
         now: datetime,
         override_rules: bool = False,
         ignore_notice: bool = False,
+        require_grid: bool = True,
     ) -> SlotCheck:
         """Validate one candidate booking against this snapshot.
 
         ``override_rules`` (admin only) skips notice, window, hours,
-        availability and block checks. It never skips the clash and capacity
-        checks: an exclusive resource can never be double booked and capacity
-        can never go negative.
+        availability, block and slot-grid checks. It never skips the clash and
+        capacity checks: an exclusive resource can never be double booked and
+        capacity can never go negative. ``require_grid=False`` accepts a start
+        between the listed slot starts (an extra resource, or a booking that
+        already exists).
         """
         end = start + offering.duration
 
@@ -299,6 +322,8 @@ class ResourceSnapshot:
             violation = self.schedule_violation(start, end)
             if violation:
                 return result(violation[0], detail=violation[1])
+            if require_grid and not self.on_grid(start, slot_step(offering, rules)):
+                return result(OFF_GRID)
 
         occupied_start = start - offering.buffer_before
         occupied_end = end + offering.buffer_after
@@ -506,7 +531,7 @@ def generate_slots(
     snapshot = build_snapshot(
         db, resource, day_start, day_end + offering.duration, rules, exclude_booking_ids=exclude_booking_ids
     )
-    step = timedelta(minutes=rules.slot_interval) if rules.slot_interval else offering.step
+    step = slot_step(offering, rules)
 
     if resource.status != RecordStatus.ACTIVE or offering.service.status != RecordStatus.ACTIVE:
         return tz, []

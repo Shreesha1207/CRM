@@ -73,13 +73,13 @@ def test_multi_resource_booking_is_atomic(client, make, user_headers) -> None:
         "resource_id": str(photographer.id),
         "additional_resource_ids": [str(studio.id), str(camera.id)],
     }
-    # 10:00-12:00 needs the camera, which is taken: nothing at all is reserved.
-    clash = client.post("/api/bookings", headers=user_headers, json={**payload, "start": at(MONDAY, 10)})
+    # 11:00-13:00 needs the camera, which is taken: nothing at all is reserved.
+    clash = client.post("/api/bookings", headers=user_headers, json={**payload, "start": at(MONDAY, 11)})
     assert clash.status_code == 409 and "Camera Kit" in clash.json()["detail"]
     solo = client.post(
         "/api/bookings",
         headers=user_headers,
-        json={"service_id": str(shoot.id), "resource_id": str(photographer.id), "start": at(MONDAY, 10)},
+        json={"service_id": str(shoot.id), "resource_id": str(photographer.id), "start": at(MONDAY, 11)},
     )
     assert solo.status_code == 201  # photographer was not left half-reserved
 

@@ -282,6 +282,7 @@ class BookingEngine:
         override_rules: bool,
         exclude: Sequence[uuid.UUID] = (),
         ignore_notice: bool = False,
+        require_grid: bool = True,
     ) -> SlotCheck:
         end = start + offering.duration
         snapshot = build_snapshot(
@@ -300,6 +301,7 @@ class BookingEngine:
             now=self.now,
             override_rules=override_rules,
             ignore_notice=ignore_notice,
+            require_grid=require_grid,
         )
 
     def _evaluate(
@@ -337,8 +339,9 @@ class BookingEngine:
                 extra_offering = replace(
                     offering, resource=extra, booking_type=BookingType.INDIVIDUAL, capacity=None
                 )
+                # The start is on the main resource's grid; the extra one only has to be free.
                 extra_result = self._check(
-                    extra_offering, start, quantity=1, override_rules=override_rules, exclude=exclude
+                    extra_offering, start, quantity=1, override_rules=override_rules, exclude=exclude, require_grid=False
                 )
                 if not extra_result.available:
                     raise BookingRejected(
@@ -689,7 +692,9 @@ class BookingEngine:
 
         promoted = []
         for candidate in waiting:
-            result = self._check(offering, start, quantity=candidate.quantity, override_rules=False, ignore_notice=True)
+            result = self._check(
+                offering, start, quantity=candidate.quantity, override_rules=False, ignore_notice=True, require_grid=False
+            )
             if not result.available:
                 break
             transition(candidate, S.CONFIRMED)
