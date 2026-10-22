@@ -318,6 +318,18 @@ def test_cancellation_window(client, make, basic, user_headers, admin_headers) -
     assert logs["total"] == 1
 
 
+def test_nobody_cancels_a_booking_once_it_has_started(client, basic, user_headers, admin_headers) -> None:
+    service, resource = basic
+    booking = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
+    for moment in (NOW.replace(day=1, month=3, hour=10, minute=30), NOW.replace(day=9, month=3)):  # running, then long over
+        freeze_time(moment)
+        admin_view = client.get(f"/api/admin/bookings/{booking['id']}", headers=admin_headers).json()
+        assert admin_view["can_cancel"] is False
+        for path, headers in ((f"/api/admin/bookings/{booking['id']}/cancel", admin_headers), (f"/api/bookings/{booking['id']}/cancel", user_headers)):
+            r = client.post(path, headers=headers, json={})
+            assert r.status_code == 409 and r.json()["code"] == "ALREADY_STARTED", r.text
+
+
 def test_reschedule_creates_linked_booking_and_frees_old_slot(client, basic, user_headers) -> None:
     service, resource = basic
     original = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
@@ -417,7 +429,7 @@ def test_completed_is_stamped_with_the_scheduled_end_not_the_click(client, basic
     assert done["status"] == "COMPLETED" and done["completed_at"] == done["end_datetime"]
 
 
-def test_bookings_whose_time_is_over_complete_by_themselves(client, db, make, basic, user, user_headers, admin_headers) -> None:
+def test_bookings_whose_time_is_over_complete_by_themselves(client, make, basic, user_headers, admin_headers) -> None:
     service, resource = basic
     past = book(client, user_headers, service, resource, at(MONDAY, 10)).json()
     later = book(client, user_headers, service, resource, at(MONDAY, 14)).json()

@@ -627,8 +627,16 @@ class BookingEngine:
 
         policy_overridden = False
         if booking.status != S.WAITLISTED:
+            if self.now >= booking.start_datetime:
+                # It is happening or has happened: what is left is to record how it went.
+                raise BookingRejected(
+                    "ALREADY_STARTED",
+                    "This booking has already started, so it can no longer be cancelled. Mark it completed or a no-show instead"
+                    if self.can_manage
+                    else "This booking has already started, so it can no longer be cancelled",
+                )
             deadline = booking.start_datetime - timedelta(minutes=self.rules.cancellation_window)
-            if self.now > deadline or self.now >= booking.start_datetime:
+            if self.now > deadline:
                 if not (self.can_manage or override_window):
                     raise BookingRejected(
                         "CANCELLATION_WINDOW_PASSED",

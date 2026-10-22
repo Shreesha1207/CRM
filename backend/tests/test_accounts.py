@@ -114,6 +114,17 @@ def test_anyone_can_delete_their_own_account(client, db, make, basic, user, user
     assert [m[0] for m in mails] == [email] and "deleted" in mails[0][1]
 
 
+def test_an_account_waits_for_a_booking_in_progress_to_end(client, basic, user, user_headers, mails) -> None:
+    service, resource = basic
+    client.post("/api/bookings", headers=user_headers, json={"service_id": str(service.id), "resource_id": str(resource.id), "start": at(MONDAY, 10)})
+    freeze_time(NOW.replace(day=1, month=3, hour=10, minute=30))
+    user_headers = auth_headers(client, user.email)
+    r = client.post("/api/auth/delete-account", headers=user_headers, json={"password": PASSWORD})
+    assert r.status_code == 409 and r.json()["code"] == "BOOKING_IN_PROGRESS"
+    freeze_time(NOW.replace(day=1, month=3, hour=11))
+    assert client.post("/api/auth/delete-account", headers=user_headers, json={"password": PASSWORD}).status_code == 200
+
+
 def test_the_last_super_admin_cannot_delete_their_account(client, make) -> None:
     make.user("boss@test.io", Role.SUPER_ADMIN, name="Boss")
     headers = auth_headers(client, "boss@test.io")

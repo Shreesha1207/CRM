@@ -90,9 +90,10 @@ def booking_permissions(booking: Booking, actor: User, rules: BookingRules, now:
         return (manage or booking.start_datetime > now), False
     if booking.status not in OPEN_STATUSES:
         return False, False
-    if manage:
-        return True, True
+    # Nobody cancels a booking once it has started; staff can still move it.
     started = now >= booking.start_datetime
+    if manage:
+        return not started, True
     can_cancel = not started and now <= booking.start_datetime - timedelta(minutes=rules.cancellation_window)
     can_reschedule = not started and now <= booking.start_datetime - timedelta(minutes=rules.rescheduling_window)
     return can_cancel, can_reschedule

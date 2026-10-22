@@ -159,7 +159,7 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
               {b.status === "NO_SHOW" && <Button size="sm" variant="secondary" onClick={() => action.mutate("complete")}>Mark completed instead</Button>}
               {open && !b.held_in_chat && <Button size="sm" variant="secondary" onClick={() => setSub("reschedule")}>Reschedule</Button>}
               {open && !b.held_in_chat && <Button size="sm" variant="secondary" onClick={() => setSub("reassign")}>Reassign resource</Button>}
-              {(open || b.status === "WAITLISTED") && <Button size="sm" variant="danger" onClick={() => setSub("cancel")}>Cancel</Button>}
+              {b.can_cancel && <Button size="sm" variant="danger" onClick={() => setSub("cancel")}>Cancel</Button>}
             </div>
           )}
           {manage && (

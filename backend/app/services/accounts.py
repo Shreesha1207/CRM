@@ -123,8 +123,16 @@ def close_own_account(db: Session, user: User) -> None:
                 status_code=409,
             )
     engine = BookingEngine(db, user)
-    for booking_id in upcoming_booking_ids(db, user):
-        engine.cancel(booking_id, reason="The customer deleted their account", override_window=True)
+    upcoming = [db.get(Booking, booking_id) for booking_id in upcoming_booking_ids(db, user)]
+    running = next((b for b in upcoming if b.start_datetime <= engine.now and b.status != BookingStatus.WAITLISTED), None)
+    if running is not None:
+        raise AppError(
+            "BOOKING_IN_PROGRESS",
+            f"Your {running.service.name} booking is happening now. You can delete your account once it has ended.",
+            status_code=409,
+        )
+    for booking in upcoming:
+        engine.cancel(booking.id, reason="The customer deleted their account", override_window=True)
     email, name, business = user.email, user.name, settings_service.get_rules(db).business_name
     user = db.get(User, user.id)
     # Nothing that identifies them is kept, not even in the audit log.
