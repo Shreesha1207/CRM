@@ -86,6 +86,17 @@ class MeOut(UserOut):
     permissions: list[str]
 
 
+class AdminUserOut(UserOut):
+    # When an admin may delete this (inactive customer) account; None = only a super admin.
+    deletable_from: datetime | None = None
+    # Whether the person listing the users may delete this one now.
+    can_delete: bool = False
+
+
+class DeleteAccountIn(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"

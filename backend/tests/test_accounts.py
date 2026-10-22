@@ -1,12 +1,15 @@
 """Nobody but the account's owner ever chooses its password."""
 
 import re
+from datetime import timedelta
 
 import pytest
+from sqlalchemy import select
 
-from app.models import User
-from app.models.enums import UserStatus
-from tests.conftest import PASSWORD, auth_headers
+from app.core.timeutils import freeze_time
+from app.models import AuditLog, Booking, User
+from app.models.enums import Role, UserStatus
+from tests.conftest import MONDAY, NOW, PASSWORD, at, auth_headers
 
 
 @pytest.fixture
@@ -77,3 +80,72 @@ def test_no_password_link_for_a_suspended_account(client, user, admin_headers, m
     client.put(f"/api/admin/users/{user.id}", headers=admin_headers, json={"status": "SUSPENDED"})
     r = client.post(f"/api/admin/users/{user.id}/send-password-link", headers=admin_headers)
     assert r.status_code == 409 and mails == []
+
+
+# ------------------------------------------------------------------ deleting accounts
+
+
+def test_anyone_can_delete_their_own_account(client, db, make, basic, user, user_headers, mails) -> None:
+    service, resource = basic
+    user_id, email, name = user.id, user.email, user.name
+    make.settings(cancellation_window=60 * 24 * 7)  # too late to cancel online...
+    booked = client.post(
+        "/api/bookings", headers=user_headers,
+        json={"service_id": str(service.id), "resource_id": str(resource.id), "start": at(MONDAY, 10)},
+    )
+    assert booked.status_code == 201, booked.text
+    assert client.post(f"/api/bookings/{booked.json()['id']}/cancel", headers=user_headers, json={}).status_code == 409
+
+    assert client.post("/api/auth/delete-account", headers=user_headers, json={"password": "wrong-password"}).status_code == 400
+    r = client.post("/api/auth/delete-account", headers=user_headers, json={"password": PASSWORD})
+    assert r.status_code == 200, r.text
+
+    # ...but deleting the account cancels it anyway, frees the time and erases everything.
+    db.expire_all()
+    assert db.get(User, user_id) is None
+    assert db.scalars(select(Booking)).all() == []
+    assert client.get("/api/auth/me", headers=user_headers).status_code == 401
+    assert client.post("/api/auth/login", json={"email": email, "password": PASSWORD}).status_code == 401
+    free = client.get("/api/availability", params={"service_id": str(service.id), "resource_id": str(resource.id), "date": MONDAY.isoformat()}).json()
+    assert next(s for s in free["resources"][0]["slots"] if s["start_time"] == "10:00")["available"] is True
+    # Nothing that identifies them stays in the audit log; they get a confirmation.
+    entry = db.scalar(select(AuditLog).where(AuditLog.action == "ACCOUNT_DELETED_BY_OWNER"))
+    assert email not in str(entry.old_value) and name not in str(entry.old_value)
+    assert [m[0] for m in mails] == [email] and "deleted" in mails[0][1]
+
+
+def test_the_last_super_admin_cannot_delete_their_account(client, make) -> None:
+    make.user("boss@test.io", Role.SUPER_ADMIN, name="Boss")
+    headers = auth_headers(client, "boss@test.io")
+    r = client.post("/api/auth/delete-account", headers=headers, json={"password": PASSWORD})
+    assert r.status_code == 409 and r.json()["code"] == "LAST_SUPER_ADMIN"
+
+
+def test_an_admin_deletes_a_customer_only_after_a_year_inactive(client, db, make, user, admin_headers) -> None:
+    def listed():
+        return next(u for u in client.get("/api/admin/users", headers=admin_headers).json()["items"] if u["id"] == str(user.id))
+
+    # Active customers are not the admin's to delete.
+    assert client.delete(f"/api/admin/users/{user.id}", headers=admin_headers).status_code == 403
+    assert listed()["can_delete"] is False and listed()["deletable_from"] is None
+
+    client.put(f"/api/admin/users/{user.id}", headers=admin_headers, json={"status": "INACTIVE"})
+    refused = client.delete(f"/api/admin/users/{user.id}", headers=admin_headers)
+    assert refused.status_code == 403 and refused.json()["code"] == "NOT_DELETABLE_YET"
+    assert listed()["deletable_from"].startswith(str((NOW + timedelta(days=365)).date()))
+
+    freeze_time(NOW + timedelta(days=366))
+    admin_headers = auth_headers(client, "admin@test.io")  # the old session has expired by now
+    assert listed()["can_delete"] is True
+    user_id = user.id
+    assert client.delete(f"/api/admin/users/{user_id}", headers=admin_headers).status_code == 204
+    db.expire_all()
+    assert db.get(User, user_id) is None
+
+
+def test_admins_never_delete_accounts_when_the_setting_is_zero(client, make, user, admin_headers) -> None:
+    make.settings(inactive_account_deletion_days=0)
+    client.put(f"/api/admin/users/{user.id}", headers=admin_headers, json={"status": "INACTIVE"})
+    freeze_time(NOW + timedelta(days=3650))
+    admin_headers = auth_headers(client, "admin@test.io")
+    assert client.delete(f"/api/admin/users/{user.id}", headers=admin_headers).status_code == 403

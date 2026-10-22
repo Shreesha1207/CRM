@@ -378,6 +378,7 @@ export function LoginPage() {
   return (
     <AuthCard title="Sign in" footer={<>No account? <Link to="/register" className={linkClass}>Create one</Link></>}>
       <form onSubmit={submit} className="space-y-4">
+        {params.get("deleted") === "1" && <Alert tone="success">Your account has been deleted.</Alert>}
         {mutation.error && <Alert>{errorMessage(mutation.error)}</Alert>}
         {googleMutation.error && <Alert>{errorMessage(googleMutation.error)}</Alert>}
         

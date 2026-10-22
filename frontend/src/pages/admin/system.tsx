@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, api, errorMessage } from "../../api/client";
-import type { AuditLog, Page, Role, SettingDefinition, User, UserStatus } from "../../api/types";
+import type { AdminUser, AuditLog, Page, Role, SettingDefinition, User, UserStatus } from "../../api/types";
 import { ROLES } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { Alert, Button, Card, Checkbox, Field, Input, Loading, Modal, PageHeader, Pagination, Select, StatusBadge, Table, Td, Textarea } from "../../components/ui";
@@ -173,7 +173,7 @@ export function AdminUsersPage() {
   const [deleting, setDeleting] = useState<User | null>(null);
   const users = useQuery({
     queryKey: ["admin", "users", q, role, offset],
-    queryFn: () => api.get<Page<User>>("/api/admin/users", { q, role, limit: 25, offset }),
+    queryFn: () => api.get<Page<AdminUser>>("/api/admin/users", { q, role, limit: 25, offset }),
   });
   const manage = can("users:manage");
   const superAdmin = can("admins:manage");
@@ -210,6 +210,9 @@ export function AdminUsersPage() {
                 <Td>{titleCase(u.role)}</Td>
                 <Td>
                   <StatusBadge status={u.status} />
+                  {!u.can_delete && u.deletable_from && (
+                    <div className="mt-0.5 text-xs text-muted">Can be deleted from {new Date(u.deletable_from).toLocaleDateString()}</div>
+                  )}
                 </Td>
                 <Td>{new Date(u.created_at).toLocaleDateString()}</Td>
                 <Td className="space-x-2 whitespace-nowrap text-right">
@@ -218,7 +221,7 @@ export function AdminUsersPage() {
                       Edit
                     </Button>
                   )}
-                  {can("users:delete") && u.id !== me?.id && below(u) && (
+                  {u.can_delete && (
                     <Button size="sm" variant="danger" onClick={() => setDeleting(u)}>
                       Delete
                     </Button>

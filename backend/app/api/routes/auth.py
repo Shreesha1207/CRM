@@ -22,6 +22,7 @@ from app.models import AuthSession, PasswordResetToken, User
 from app.models.enums import Role, UserStatus
 from app.schemas import (
     ChangePasswordIn,
+    DeleteAccountIn,
     ForgotPasswordIn,
     GoogleAuthIn,
     LoginIn,
@@ -215,7 +216,7 @@ def reset_password(body: ResetPasswordIn, db: DB) -> dict:
     setting_up = user.status == UserStatus.INVITED
     if setting_up:
         # They chose their own password, so the account is theirs now.
-        user.status = UserStatus.ACTIVE
+        accounts.set_status(user, UserStatus.ACTIVE)
     # Sign out every existing session.
     db.execute(
         update(AuthSession)
@@ -264,3 +265,16 @@ def change_password(body: ChangePasswordIn, request: Request, user: CurrentUser,
     audit.record(db, actor_id=user.id, action="PASSWORD_CHANGED", entity_type="user", entity_id=user.id)
     db.commit()
     return {"message": "Password updated"}
+
+
+@router.post("/delete-account", dependencies=[Depends(rate_limit("delete-account", 5, 900))])
+def delete_account(body: DeleteAccountIn, response: Response, user: CurrentUser, db: DB) -> dict:
+    """Delete your own account for good (your right to erasure). Upcoming bookings are
+    cancelled; the account and its booking history are deleted; you are signed out."""
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password is incorrect")
+    accounts.close_own_account(db, user)
+    settings = get_settings()
+    response.delete_cookie(ACCESS_COOKIE, path="/", domain=settings.cookie_domain)
+    response.delete_cookie(CSRF_COOKIE, path="/", domain=settings.cookie_domain)
+    return {"message": "Your account has been deleted."}

@@ -37,6 +37,11 @@ SETTING_DEFINITIONS: dict[str, tuple[Any, str]] = {
     "pending_consumes_capacity": (True, "PENDING bookings hold their slot and capacity."),
     "enforce_operating_hours": (True, "Reject bookings outside operating hours."),
     "reminder_offsets": ([1440, 60], "Minutes before the start at which reminders are sent."),
+    "inactive_account_deletion_days": (
+        365,
+        "Admins may delete a customer account once it has been Inactive this many days. "
+        "0 = only super admins delete accounts.",
+    ),
     "assistant_knowledge": (
         "",
         "Facts and policies the booking assistant may use to answer customers' questions "

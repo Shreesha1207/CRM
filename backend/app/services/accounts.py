@@ -1,20 +1,34 @@
-"""Links that let people choose their own password.
+"""Accounts: choosing a password, and deleting an account.
 
 Nobody else ever sets a password: an account an admin creates gets a link to set
 one up, and an admin can only send someone a link to reset theirs, never pick it.
+
+Anyone can delete their own account (the right to erasure under India's DPDP
+Act, 2023). Its upcoming bookings are cancelled, then it goes with its booking
+history. An admin may delete a customer account once it has been inactive for
+`inactive_account_deletion_days`; a super admin may delete any account below them.
 """
 
-from datetime import timedelta
+import logging
+from datetime import datetime, timedelta
 
-from sqlalchemy import update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.errors import AppError
 from app.core.security import hash_token, new_token
 from app.core.timeutils import utcnow
-from app.models import PasswordResetToken, User
-from app.services import settings_service
+from app.models import Booking, PasswordResetToken, User
+from app.models.enums import BookingStatus, Role, UserStatus
+from app.services import audit, settings_service
+from app.services.booking_engine import BookingEngine
 from app.services.notifications import send_email
+
+log = logging.getLogger("auth")
+
+# Bookings that still hold someone's time.
+UPCOMING_STATUSES = (BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.WAITLISTED, BookingStatus.CONFLICTED)
 
 
 def issue_password_link(db: Session, user: User, *, ttl: timedelta, setup: bool = False) -> str:
@@ -58,3 +72,71 @@ def send_reset_link(db: Session, user: User) -> None:
         f"(valid for {minutes} minutes):\n{link}\n\n"
         "If you did not ask for this, ignore this e-mail.",
     )
+
+
+def set_status(user: User, status: UserStatus) -> None:
+    if user.status != status:
+        user.status = status
+        user.status_changed_at = utcnow()
+
+
+def upcoming_booking_ids(db: Session, user: User) -> list:
+    return list(
+        db.scalars(
+            select(Booking.id)
+            .where(Booking.user_id == user.id, Booking.status.in_(UPCOMING_STATUSES), Booking.end_datetime > utcnow())
+            .order_by(Booking.start_datetime)
+        )
+    )
+
+
+def deletable_from(db: Session, user: User) -> datetime | None:
+    """When an admin (not only a super admin) may delete this account: a customer's,
+    once it has been inactive for `inactive_account_deletion_days`. None = not by an admin."""
+    days = settings_service.get_all(db)["inactive_account_deletion_days"]
+    if user.role != Role.USER or user.status != UserStatus.INACTIVE or not days:
+        return None
+    return (user.status_changed_at or user.updated_at) + timedelta(days=days)
+
+
+def erase(db: Session, user: User, *, actor_id, action: str, keep: dict | None = None) -> None:
+    """Delete the account and its booking history. Upcoming bookings must be gone first."""
+    removed = db.execute(delete(Booking).where(Booking.user_id == user.id)).rowcount
+    audit.record(
+        db, actor_id=actor_id, action=action, entity_type="user", entity_id=user.id,
+        old={**(keep or {}), "role": user.role, "bookings_deleted": removed},
+    )
+    db.delete(user)
+
+
+def close_own_account(db: Session, user: User) -> None:
+    """The owner deletes their account: upcoming bookings are cancelled (whatever the
+    cancellation window), then the account and its history are erased. Commits."""
+    if user.role == Role.SUPER_ADMIN:
+        others = db.scalar(
+            select(func.count()).select_from(User).where(User.role == Role.SUPER_ADMIN, User.id != user.id, User.status == UserStatus.ACTIVE)
+        )
+        if not others:
+            raise AppError(
+                "LAST_SUPER_ADMIN",
+                "You are the only super admin. Make another one on the server (python -m app.create_super_admin) first.",
+                status_code=409,
+            )
+    engine = BookingEngine(db, user)
+    for booking_id in upcoming_booking_ids(db, user):
+        engine.cancel(booking_id, reason="The customer deleted their account", override_window=True)
+    email, name, business = user.email, user.name, settings_service.get_rules(db).business_name
+    user = db.get(User, user.id)
+    # Nothing that identifies them is kept, not even in the audit log.
+    erase(db, user, actor_id=None, action="ACCOUNT_DELETED_BY_OWNER")
+    db.commit()
+    try:
+        send_email(
+            email,
+            f"Your {business} account has been deleted",
+            f"Hi {name},\n\nAs you asked, your {business} account ({email}) and its booking history have been deleted, "
+            "and any upcoming bookings were cancelled.\n\nIf you did not do this, reply to this e-mail.",
+            from_name=business,
+        )
+    except Exception:
+        log.exception("Could not send the account deletion e-mail")

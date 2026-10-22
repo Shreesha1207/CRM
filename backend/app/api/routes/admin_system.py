@@ -5,25 +5,21 @@ import uuid
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import func, or_, select, update
 
 from app.api.deps import DB
 from app.api.deps import require as require_permission
 from app.core.errors import AppError
-from app.core.permissions import Permission, can_assign_role, can_manage_account
+from app.core.permissions import Permission, can_assign_role, can_manage_account, has_permission
 from app.core.security import hash_password, new_token
 from app.core.timeutils import day_bounds, get_zone, utcnow
-from app.models import AuditLog, AuthSession, Booking, User
-from app.models.enums import BookingStatus, Role, UserStatus
-from app.schemas import AuditLogOut, Page, SettingsIn, SettingsOut, UserCreateIn, UserOut, UserUpdateIn
+from app.models import AuditLog, AuthSession, User
+from app.models.enums import Role, UserStatus
+from app.schemas import AdminUserOut, AuditLogOut, Page, SettingsIn, SettingsOut, UserCreateIn, UserOut, UserUpdateIn
 from app.services import accounts, audit, reports, settings_service
 
 router = APIRouter(prefix="/api/admin", tags=["admin: system"])
 log = logging.getLogger("auth")
-
-# Bookings that still hold someone's time.
-UPCOMING_STATUSES = (BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.WAITLISTED, BookingStatus.CONFLICTED)
-
 
 @router.get("/dashboard")
 def dashboard(db: DB, _: User = Depends(require_permission(Permission.REPORTS_VIEW))) -> dict:
@@ -55,16 +51,24 @@ def _not_yours(user: User) -> str:
     return "Only a super admin can change admin accounts"
 
 
-@router.get("/users", response_model=Page[UserOut])
+def _may_delete(actor: User, user: User, deletable_from) -> bool:
+    if user.id == actor.id or not can_manage_account(actor.role, user.role):
+        return False
+    if has_permission(actor.role, Permission.USERS_DELETE):
+        return True
+    return has_permission(actor.role, Permission.USERS_MANAGE) and deletable_from is not None and deletable_from <= utcnow()
+
+
+@router.get("/users", response_model=Page[AdminUserOut])
 def list_users(
     db: DB,
-    _: User = Depends(require_permission(Permission.USERS_VIEW)),
+    actor: User = Depends(require_permission(Permission.USERS_VIEW)),
     q: str | None = Query(default=None, max_length=100),
     role: Role | None = None,
     status_filter: UserStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-) -> Page[UserOut]:
+) -> Page[AdminUserOut]:
     stmt = select(User)
     if q:
         stmt = stmt.where(or_(User.name.ilike(f"%{q}%"), User.email.ilike(f"%{q}%"), User.phone.ilike(f"%{q}%")))
@@ -74,7 +78,13 @@ def list_users(
         stmt = stmt.where(User.status == status_filter)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(stmt.order_by(User.created_at.desc()).limit(limit).offset(offset)).all()
-    return Page(items=[UserOut.model_validate(u) for u in rows], total=total)
+    items = []
+    for u in rows:
+        when = accounts.deletable_from(db, u)
+        items.append(
+            AdminUserOut(**UserOut.model_validate(u).model_dump(), deletable_from=when, can_delete=_may_delete(actor, u, when))
+        )
+    return Page(items=items, total=total)
 
 
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -166,7 +176,10 @@ def update_user(
 
     old = audit.snapshot(user, "name", "phone", "role", "status")
     for key, value in changes.items():
-        setattr(user, key, value)
+        if key == "status":
+            accounts.set_status(user, value)
+        else:
+            setattr(user, key, value)
     if changes.get("status", UserStatus.ACTIVE) not in (UserStatus.ACTIVE, UserStatus.INVITED):
         db.execute(update(AuthSession).where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None)).values(revoked_at=utcnow()))
     audit.record(db, actor_id=actor.id, action="USER_UPDATED", entity_type="user", entity_id=user.id, old=old, new=changes)
@@ -175,35 +188,40 @@ def update_user(
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_user(user_id: uuid.UUID, db: DB, actor: User = Depends(require_permission(Permission.USERS_DELETE))) -> None:
-    """Delete an account (customer or admin) and its past bookings for good.
+def delete_user(user_id: uuid.UUID, db: DB, actor: User = Depends(require_permission(Permission.USERS_MANAGE))) -> None:
+    """Delete an account and its past bookings for good.
 
+    A super admin may delete any account below them. An admin may delete a
+    customer account once it has been inactive for `inactive_account_deletion_days`.
     Refused while the account still has upcoming bookings, so nobody's time is
     freed without the waitlist and notifications that a cancellation brings."""
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     if user.id == actor.id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot delete your own account")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "To delete your own account, use Delete account on your profile")
     if not can_manage_account(actor.role, user.role):
         raise HTTPException(status.HTTP_403_FORBIDDEN, _not_yours(user))
-    upcoming = db.scalar(
-        select(func.count())
-        .select_from(Booking)
-        .where(Booking.user_id == user.id, Booking.status.in_(UPCOMING_STATUSES), Booking.end_datetime > utcnow())
-    )
+    when = accounts.deletable_from(db, user)
+    if not _may_delete(actor, user, when):
+        if when is None:
+            days = settings_service.get_all(db)["inactive_account_deletion_days"]
+            message = (
+                f"Only a super admin can delete this account. Admins can delete a customer's account once it has been inactive for {days} days"
+                if days
+                else "Only a super admin can delete accounts"
+            )
+        else:
+            message = f"{user.name}'s account can be deleted from {when:%d %b %Y}, once it has been inactive long enough"
+        raise AppError("NOT_DELETABLE_YET", message, status_code=403)
+    upcoming = len(accounts.upcoming_booking_ids(db, user))
     if upcoming:
         raise AppError(
             "HAS_UPCOMING_BOOKINGS",
             f"{user.name} has {upcoming} upcoming booking{'s' if upcoming != 1 else ''}. Cancel them first, or deactivate the account instead.",
             status_code=409,
         )
-    removed = db.execute(delete(Booking).where(Booking.user_id == user.id)).rowcount
-    audit.record(
-        db, actor_id=actor.id, action="USER_DELETED", entity_type="user", entity_id=user.id,
-        old={**audit.snapshot(user, "name", "email", "role", "status"), "bookings_deleted": removed},
-    )
-    db.delete(user)
+    accounts.erase(db, user, actor_id=actor.id, action="USER_DELETED", keep=audit.snapshot(user, "name", "email", "role", "status"))
     db.commit()
 
 

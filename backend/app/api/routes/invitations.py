@@ -20,7 +20,7 @@ from app.jobs.runner import dispatch_notifications
 from app.models import Booking, BookingInvitation, User
 from app.models.enums import BookingStatus, InvitationStatus, NotificationType, Role, UserStatus
 from app.schemas import InvitationAcceptIn, InvitationAcceptOut, InvitationPublicOut
-from app.services import audit, invitations
+from app.services import accounts, audit, invitations
 from app.services.booking_engine import BookingEngine
 
 router = APIRouter(prefix="/api/invitations", tags=["invitations"], dependencies=[Depends(rate_limit("invitation", 30, 300))])
@@ -127,7 +127,7 @@ def accept_invitation(
         user.name = body.name.strip()
         user.phone = body.phone
         user.password_hash = hash_password(body.password)
-        user.status = UserStatus.ACTIVE
+        accounts.set_status(user, UserStatus.ACTIVE)
         db.flush()
         audit.record(
             db, actor_id=user.id, action="USER_REGISTERED", entity_type="user", entity_id=user.id,

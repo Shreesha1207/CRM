@@ -58,6 +58,8 @@ class User(UUIDPk, Timestamps, Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[Role] = mapped_column(_enum(Role), default=Role.USER)
     status: Mapped[UserStatus] = mapped_column(_enum(UserStatus), default=UserStatus.ACTIVE)
+    # When the status last changed (None: never, since the account was made).
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AuthSession(UUIDPk, Base):

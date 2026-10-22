@@ -45,6 +45,14 @@ export interface User {
   created_at: string;
 }
 
+/** A user as the admin Users list shows them. */
+export interface AdminUser extends User {
+  /** When an admin may delete this inactive customer's account; null = only a super admin. */
+  deletable_from: string | null;
+  /** Whether you may delete this account now. */
+  can_delete: boolean;
+}
+
 export interface Me extends User {
   permissions: string[];
 }

@@ -500,6 +500,74 @@ export function ProfilePage() {
           </form>
         </Card>
       </div>
+      <DeleteAccount />
     </>
+  );
+}
+
+/** Your right to erasure: the account, its bookings and its history go for good. */
+function DeleteAccount() {
+  const { refresh } = useAuth();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [understood, setUnderstood] = useState(false);
+  const remove = useMutation({
+    mutationFn: () => api.post("/api/auth/delete-account", { password }),
+    onSuccess: async () => {
+      await refresh();
+      navigate("/login?deleted=1", { replace: true });
+    },
+  });
+  const close = () => {
+    setOpen(false);
+    setPassword("");
+    setUnderstood(false);
+    remove.reset();
+  };
+  return (
+    <Card className="mt-6">
+      <h2 className="text-sm font-semibold text-fg">Delete account</h2>
+      <p className="mt-1 text-sm text-muted">
+        Deletes your account and your booking history for good. Upcoming bookings are cancelled. This cannot be undone.
+      </p>
+      <Button className="mt-4" variant="danger" onClick={() => setOpen(true)}>
+        Delete my account
+      </Button>
+      <Modal
+        open={open}
+        title="Delete your account?"
+        onClose={close}
+        footer={
+          <>
+            <Button variant="secondary" onClick={close}>
+              Keep my account
+            </Button>
+            <Button variant="danger" disabled={!password || !understood} loading={remove.isPending} onClick={() => remove.mutate()}>
+              Delete for good
+            </Button>
+          </>
+        }
+      >
+        <form
+          className="space-y-4 text-sm"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (password && understood) remove.mutate();
+          }}
+        >
+          {remove.error && <Alert>{errorMessage(remove.error)}</Alert>}
+          <ul className="list-disc space-y-1 pl-5 text-fg">
+            <li>Your upcoming bookings are cancelled and their times freed for others.</li>
+            <li>Your account, booking history and assistant chats are deleted.</li>
+            <li>You are signed out, and the e-mail address can be used to sign up again.</li>
+          </ul>
+          <Field label="Your password" hint="Signed up with Google? Use “Forgot password” on the sign-in page to set one first.">
+            <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </Field>
+          <Checkbox label="I understand this cannot be undone" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
+        </form>
+      </Modal>
+    </Card>
   );
 }

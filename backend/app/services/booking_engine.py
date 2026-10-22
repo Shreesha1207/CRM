@@ -612,7 +612,9 @@ class BookingEngine:
     # Cancel & waitlist
     # ------------------------------------------------------------------
 
-    def cancel(self, booking_id: uuid.UUID, *, reason: str | None = None) -> Booking:
+    def cancel(self, booking_id: uuid.UUID, *, reason: str | None = None, override_window: bool = False) -> Booking:
+        """`override_window`: cancel even inside the cancellation window (the customer
+        is deleting their account, so the booking cannot stand)."""
         if self.open_chat_hold(booking_id) is not None:
             # Never confirmed: cancelling it anywhere is the same as deleting it in the chat.
             return self.release_chat_hold(booking_id, reason=reason or "Cancelled")
@@ -626,7 +628,7 @@ class BookingEngine:
         if booking.status != S.WAITLISTED:
             deadline = booking.start_datetime - timedelta(minutes=self.rules.cancellation_window)
             if self.now > deadline or self.now >= booking.start_datetime:
-                if not self.can_manage:
+                if not (self.can_manage or override_window):
                     raise BookingRejected(
                         "CANCELLATION_WINDOW_PASSED",
                         "This booking can no longer be cancelled online",
