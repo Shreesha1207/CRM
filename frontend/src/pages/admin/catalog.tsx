@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { api, errorMessage } from "../../api/client";
-import type { AvailabilityRule, Location, Offering, Resource, ResourceDetail, ScheduleChange, Service } from "../../api/types";
+import type { AdminResource, AdminService, AvailabilityRule, Location, Offering, ResourceDetail, ResourceType, ScheduleChange, Service } from "../../api/types";
 import { RESOURCE_TYPES } from "../../api/types";
 import { useConfig } from "../../components/Layout";
 import { Close } from "../../components/icons";
-import { Alert, Badge, Button, Checkbox, EmptyState, Field, Input, Loading, MapLink, Modal, PageHeader, Select, StatusBadge, Table, Tabs, Td, Textarea, TimeSelect } from "../../components/ui";
+import { LinkPicker, type LinkOption } from "../../components/LinkPicker";
+import { Alert, Badge, Button, EmptyState, Field, Input, Loading, MapLink, Modal, PageHeader, Select, StatusBadge, Table, Tabs, Td, Textarea, TimeSelect } from "../../components/ui";
 import { WEEKDAYS, formatLengthRange, formatRate, hhmm, titleCase } from "../../lib/format";
 import { useCatalog } from "./bookings";
 import { useScheduleChange } from "./scheduleChange";
@@ -197,12 +198,128 @@ function ResourceDetailsForm({ resource, onSaved }: { resource: ResourceDetail |
   );
 }
 
+const serviceOption = (s: Service): LinkOption => ({
+  id: s.id,
+  name: s.name,
+  detail: `${formatLengthRange(s.duration_minutes, s.max_duration_minutes)} · ${formatRate(s.price)}`,
+  inactive: s.status !== "ACTIVE",
+});
+
+const resourceOption = (r: AdminResource): LinkOption => ({
+  id: r.id,
+  name: r.name,
+  detail: [titleCase(r.type), r.location?.name].filter(Boolean).join(" · "),
+  inactive: r.status !== "ACTIVE",
+});
+
+/** Create a service from its name and a length, right where it is being linked. */
+function QuickServiceForm({ name, onCreated, onCancel }: { name: string; onCreated: (s: Service) => void; onCancel: () => void }) {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState({ name, duration: "60", price: "" });
+  const create = useMutation({
+    mutationFn: () =>
+      api.post<Service>("/api/admin/services", {
+        name: form.name.trim(),
+        duration_minutes: Number(form.duration),
+        price: strOrNull(form.price),
+        booking_type: "INDIVIDUAL",
+        status: "ACTIVE",
+      }),
+    onSuccess: (service) => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "services"] });
+      onCreated(service);
+    },
+  });
+  return (
+    <div className="space-y-3 rounded-md border border-accent p-3">
+      <p className="text-sm font-medium text-fg">New service</p>
+      {create.error && <Alert>{errorMessage(create.error)}</Alert>}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field label="Name">
+          <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </Field>
+        <Field label="Length (minutes)">
+          <Input type="number" min={5} max={1440} value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} />
+        </Field>
+        <Field label="Price per hour">
+          <Input type="number" min={0} step="0.01" placeholder="Optional" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
+        </Field>
+      </div>
+      <p className="text-xs text-muted">Buffers, group sessions and longer bookings can be set under Services afterwards.</p>
+      <div className="flex gap-2">
+        <Button size="sm" loading={create.isPending} disabled={!form.name.trim() || !Number(form.duration)} onClick={() => create.mutate()}>
+          Create and add
+        </Button>
+        <Button size="sm" variant="secondary" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Create a resource from its name and type, right where it is being linked. */
+function QuickResourceForm({ name, onCreated, onCancel }: { name: string; onCreated: (r: ResourceDetail) => void; onCancel: () => void }) {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState({ name, type: "PERSON" as ResourceType });
+  const create = useMutation({
+    mutationFn: () => api.post<ResourceDetail>("/api/admin/resources", { name: form.name.trim(), type: form.type, metadata: {}, status: "ACTIVE" }),
+    onSuccess: (resource) => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "resources"] });
+      onCreated(resource);
+    },
+  });
+  return (
+    <div className="space-y-3 rounded-md border border-accent p-3">
+      <p className="text-sm font-medium text-fg">New resource</p>
+      {create.error && <Alert>{errorMessage(create.error)}</Alert>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Name">
+          <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </Field>
+        <Field label="Type">
+          <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as ResourceType })}>
+            {RESOURCE_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {titleCase(t)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+      <p className="text-xs text-muted">It follows the operating hours until you give it a location and weekly hours under Resources.</p>
+      <div className="flex gap-2">
+        <Button size="sm" loading={create.isPending} disabled={!form.name.trim()} onClick={() => create.mutate()}>
+          Create and add
+        </Button>
+        <Button size="sm" variant="secondary" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** The names on the other side of a resource-service link, for a table cell. */
+function LinkedNames({ links, none }: { links: { id: string; name: string }[]; none: string }) {
+  if (!links.length) return <span className="text-xs text-faint">{none}</span>;
+  return (
+    <div className="flex max-w-56 flex-wrap gap-1">
+      {links.slice(0, 3).map((l) => (
+        <Badge key={l.id}>{l.name}</Badge>
+      ))}
+      {links.length > 3 && <span className="text-xs text-muted">+{links.length - 3} more</span>}
+    </div>
+  );
+}
+
 function ResourceServicesForm({ resource }: { resource: ResourceDetail }) {
   const { services } = useCatalog();
   const queryClient = useQueryClient();
   const [links, setLinks] = useState<Record<string, Partial<Offering>>>(() =>
     Object.fromEntries(resource.services.map((o) => [o.service_id, o])),
   );
+  const [creating, setCreating] = useState<string | null>(null);
   const save = useMutation({
     mutationFn: () =>
       api.put(
@@ -219,74 +336,96 @@ function ResourceServicesForm({ resource }: { resource: ResourceDetail }) {
     onSuccess: () => queryClient.invalidateQueries(),
   });
   const update = (id: string, patch: Partial<Offering>) => setLinks({ ...links, [id]: { ...links[id], ...patch } });
+  const add = (id: string) => {
+    save.reset();
+    setLinks((l) => ({ ...l, [id]: { status: "ACTIVE" } }));
+  };
+  const remove = (id: string) => {
+    save.reset();
+    setLinks((l) => Object.fromEntries(Object.entries(l).filter(([k]) => k !== id)));
+  };
+  const byId = new Map(services.map((s) => [s.id, s]));
   return (
     <div className="space-y-4">
       {save.isSuccess && <Alert tone="success">Saved.</Alert>}
       {save.error && <Alert>{errorMessage(save.error)}</Alert>}
-      <p className="text-sm text-muted">Choose the services this resource provides. Leave overrides empty to use the service defaults.</p>
-      <div className="divide-y divide-line rounded-lg border border-line">
-        {services.map((s) => {
-          const link = links[s.id];
-          return (
-            <div key={s.id} className="p-3">
-              <Checkbox
-                label={
-                  <span>
+      <LinkPicker
+        label="Services this resource provides"
+        options={services.map(serviceOption)}
+        selected={Object.keys(links)}
+        onAdd={add}
+        onRemove={remove}
+        onCreate={setCreating}
+        placeholder="Search services, or type a new one…"
+        emptyText="No services yet: customers cannot book this resource."
+      />
+      {creating !== null && (
+        <QuickServiceForm
+          key={creating}
+          name={creating}
+          onCreated={(s) => {
+            add(s.id);
+            setCreating(null);
+          }}
+          onCancel={() => setCreating(null)}
+        />
+      )}
+      {Object.keys(links).length > 0 && (
+        <div className="space-y-2">
+          <p className="text-sm text-muted">Overrides for this resource (optional). Leave them empty to use each service's own terms.</p>
+          <div className="divide-y divide-line rounded-lg border border-line">
+            {Object.entries(links).map(([id, link]) => {
+              const s = byId.get(id);
+              if (!s) return null;
+              return (
+                <div key={id} className="p-3">
+                  <p className="text-sm">
                     <span className="font-medium">{s.name}</span>{" "}
                     <span className="text-muted">
                       {formatLengthRange(s.duration_minutes, s.max_duration_minutes)} · {formatRate(s.price)}
                     </span>
-                  </span>
-                }
-                checked={!!link}
-                onChange={(e) => {
-                  const next = { ...links };
-                  if (e.target.checked) next[s.id] = { status: "ACTIVE" };
-                  else delete next[s.id];
-                  setLinks(next);
-                }}
-              />
-              {link && (
-                <div className="mt-2 grid gap-2 pl-6 sm:grid-cols-4">
-                  <Input
-                    type="number"
-                    min={1}
-                    placeholder={`Duration (${s.duration_minutes})`}
-                    aria-label={`${s.name} duration`}
-                    value={link.custom_duration ?? ""}
-                    onChange={(e) => update(s.id, { custom_duration: numOrNull(e.target.value) })}
-                  />
-                  <Input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    placeholder={`Price / h (${s.price ?? "—"})`}
-                    aria-label={`${s.name} price per hour`}
-                    value={link.custom_price ?? ""}
-                    onChange={(e) => update(s.id, { custom_price: strOrNull(e.target.value) })}
-                  />
-                  <Input
-                    type="number"
-                    min={0}
-                    placeholder="Buffer before"
-                    aria-label={`${s.name} buffer before`}
-                    value={link.custom_buffer_before ?? ""}
-                    onChange={(e) => update(s.id, { custom_buffer_before: numOrNull(e.target.value) })}
-                  />
-                  <Input
-                    type="number"
-                    min={0}
-                    placeholder="Buffer after"
-                    aria-label={`${s.name} buffer after`}
-                    value={link.custom_buffer_after ?? ""}
-                    onChange={(e) => update(s.id, { custom_buffer_after: numOrNull(e.target.value) })}
-                  />
+                  </p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                    <Input
+                      type="number"
+                      min={1}
+                      placeholder={`Duration (${s.duration_minutes})`}
+                      aria-label={`${s.name} duration`}
+                      value={link.custom_duration ?? ""}
+                      onChange={(e) => update(id, { custom_duration: numOrNull(e.target.value) })}
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      placeholder={`Price / h (${s.price ?? "—"})`}
+                      aria-label={`${s.name} price per hour`}
+                      value={link.custom_price ?? ""}
+                      onChange={(e) => update(id, { custom_price: strOrNull(e.target.value) })}
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      placeholder="Buffer before"
+                      aria-label={`${s.name} buffer before`}
+                      value={link.custom_buffer_before ?? ""}
+                      onChange={(e) => update(id, { custom_buffer_before: numOrNull(e.target.value) })}
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      placeholder="Buffer after"
+                      aria-label={`${s.name} buffer after`}
+                      value={link.custom_buffer_after ?? ""}
+                      onChange={(e) => update(id, { custom_buffer_after: numOrNull(e.target.value) })}
+                    />
+                  </div>
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <Button loading={save.isPending} onClick={() => save.mutate()}>
         Save services
       </Button>
@@ -431,7 +570,7 @@ export function AdminResourcesPage() {
   const config = useConfig();
   const [editing, setEditing] = useState<string | null | undefined>(undefined);
   const [status, setStatus] = useState("");
-  const resources = useQuery({ queryKey: ["admin", "resources", status], queryFn: () => api.get<Resource[]>("/api/admin/resources", { status }) });
+  const resources = useQuery({ queryKey: ["admin", "resources", status], queryFn: () => api.get<AdminResource[]>("/api/admin/resources", { status }) });
   const remove = useScheduleChange<{ deleted: boolean }>(config.data?.default_timezone ?? "UTC");
   return (
     <>
@@ -453,7 +592,7 @@ export function AdminResourcesPage() {
       ) : !resources.data?.length ? (
         <EmptyState title="No resources yet">Create your first resource to start taking bookings.</EmptyState>
       ) : (
-        <Table head={["Name", "Type", "Location", "Capacity", "Status", ""]}>
+        <Table head={["Name", "Type", "Location", "Services", "Capacity", "Status", ""]}>
           {resources.data.map((r) => (
             <tr key={r.id} className="hover:bg-subtle">
               <Td>
@@ -472,6 +611,9 @@ export function AdminResourcesPage() {
               <Td>
                 {r.location?.name ?? "—"}
                 <div className="text-xs text-muted">{r.timezone}</div>
+              </Td>
+              <Td>
+                <LinkedNames links={r.services} none="No services" />
               </Td>
               <Td>{r.capacity ?? "—"}</Td>
               <Td>
@@ -504,8 +646,12 @@ export function AdminResourcesPage() {
 
 // ---------------------------------------------------------------- services
 
-function ServiceForm({ service, onClose }: { service: Service | null; onClose: () => void }) {
+function ServiceForm({ service, onClose }: { service: AdminService | null; onClose: () => void }) {
   const queryClient = useQueryClient();
+  const resources = useCatalog().resources as AdminResource[];
+  // Who or what provides this service: linked from here as well as from each resource.
+  const [resourceIds, setResourceIds] = useState<string[]>(service?.resources.map((r) => r.id) ?? []);
+  const [creating, setCreating] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: service?.name ?? "",
     description: service?.description ?? "",
@@ -519,7 +665,7 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
     status: service?.status ?? "ACTIVE",
   });
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const body = {
         ...form,
         description: strOrNull(form.description),
@@ -531,7 +677,8 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
         buffer_before: numOrNull(form.buffer_before),
         buffer_after: numOrNull(form.buffer_after),
       };
-      return service ? api.put(`/api/admin/services/${service.id}`, body) : api.post("/api/admin/services", body);
+      const saved = await (service ? api.put<Service>(`/api/admin/services/${service.id}`, body) : api.post<Service>("/api/admin/services", body));
+      await api.put(`/api/admin/services/${saved.id}/resources`, resourceIds);
     },
     onSuccess: () => {
       queryClient.invalidateQueries();
@@ -601,6 +748,28 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
         <Field label="Description">
           <Textarea value={form.description} onChange={set("description")} />
         </Field>
+        <LinkPicker
+          label="Provided by"
+          options={resources.map(resourceOption)}
+          selected={resourceIds}
+          onAdd={(id) => setResourceIds((ids) => [...ids, id])}
+          onRemove={(id) => setResourceIds((ids) => ids.filter((x) => x !== id))}
+          onCreate={setCreating}
+          placeholder="Search people, rooms, equipment…, or type a new one"
+          emptyText="Nobody provides it yet: customers cannot book it."
+        />
+        {creating !== null && (
+          <QuickResourceForm
+            key={creating}
+            name={creating}
+            onCreated={(r) => {
+              setResourceIds((ids) => [...ids, r.id]);
+              setCreating(null);
+            }}
+            onCancel={() => setCreating(null)}
+          />
+        )}
+        <p className="text-xs text-muted">Per-resource prices, lengths and buffers are set on each resource's Services tab.</p>
       </div>
     </Modal>
   );
@@ -608,8 +777,8 @@ function ServiceForm({ service, onClose }: { service: Service | null; onClose: (
 
 export function AdminServicesPage() {
   const queryClient = useQueryClient();
-  const services = useQuery({ queryKey: ["admin", "services"], queryFn: () => api.get<Service[]>("/api/admin/services") });
-  const [editing, setEditing] = useState<Service | null | undefined>(undefined);
+  const services = useQuery({ queryKey: ["admin", "services"], queryFn: () => api.get<AdminService[]>("/api/admin/services") });
+  const [editing, setEditing] = useState<AdminService | null | undefined>(undefined);
   const remove = useMutation({
     mutationFn: (id: string) => api.del<{ deleted: boolean }>(`/api/admin/services/${id}`),
     onSuccess: () => queryClient.invalidateQueries(),
@@ -621,12 +790,15 @@ export function AdminServicesPage() {
       {services.isLoading ? (
         <Loading />
       ) : (
-        <Table head={["Name", "Type", "Length", "Buffers", "Rate", "Status", ""]}>
+        <Table head={["Name", "Type", "Length", "Provided by", "Buffers", "Rate", "Status", ""]}>
           {services.data?.map((s) => (
             <tr key={s.id} className="hover:bg-subtle">
               <Td className="font-medium">{s.name}</Td>
               <Td>{s.booking_type === "CAPACITY" ? `Group (${s.capacity ?? 1})` : "Individual"}</Td>
               <Td>{formatLengthRange(s.duration_minutes, s.max_duration_minutes)}</Td>
+              <Td>
+                <LinkedNames links={s.resources} none="Nobody yet" />
+              </Td>
               <Td>{s.buffer_before || s.buffer_after ? `${s.buffer_before ?? 0} / ${s.buffer_after ?? 0} min` : "—"}</Td>
               <Td>{formatRate(s.price)}</Td>
               <Td>

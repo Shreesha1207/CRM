@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TdHTMLAttributes, TextareaHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, ComponentProps, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TdHTMLAttributes, TextareaHTMLAttributes } from "react";
 import { Children, cloneElement, isValidElement, useEffect, useId } from "react";
 import { Link } from "react-router-dom";
 import type { BookingStatus } from "../api/types";
@@ -132,7 +132,7 @@ function controlClass(extra?: string): string {
   return cx(inputClass, !/(^|\s)w-/.test(extra ?? "") && "w-full", extra);
 }
 
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+export function Input(props: ComponentProps<"input">) {
   return <input {...props} className={controlClass(props.className)} />;
 }
 

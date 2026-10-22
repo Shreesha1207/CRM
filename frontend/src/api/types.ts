@@ -141,6 +141,21 @@ export interface ServiceDetail extends Service {
   resources: Offering[];
 }
 
+/** The other side of a resource-service link, as the admin lists show it. */
+export interface LinkRef {
+  id: string;
+  name: string;
+  status: RecordStatus;
+}
+
+export interface AdminResource extends Resource {
+  services: LinkRef[];
+}
+
+export interface AdminService extends Service {
+  resources: LinkRef[];
+}
+
 export interface Slot {
   start: string;
   end: string;

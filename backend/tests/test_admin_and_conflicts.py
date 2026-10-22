@@ -158,6 +158,32 @@ def test_admin_crud_for_catalogue(client, admin_headers) -> None:
     assert client.delete(f"/api/admin/services/{svc['id']}", headers=admin_headers).json()["deleted"] is True
 
 
+def test_services_and_resources_are_linked_from_either_side(client, admin_headers) -> None:
+    svc = client.post("/api/admin/services", headers=admin_headers, json={"name": "Court hire", "duration_minutes": 60}).json()
+    court1, court2 = (
+        client.post("/api/admin/resources", headers=admin_headers, json={"name": name, "type": "COURT"}).json()
+        for name in ("Court 1", "Court 2")
+    )
+    # From the resource, with its own price ...
+    client.put(f"/api/admin/resources/{court1['id']}/services", headers=admin_headers, json=[{"service_id": svc["id"], "custom_price": "25.00"}])
+    # ... and from the service: the link that stays keeps its price, the new one uses the service's terms.
+    r = client.put(f"/api/admin/services/{svc['id']}/resources", headers=admin_headers, json=[court1["id"], court2["id"]])
+    assert r.status_code == 200, r.text
+    offered = {o["resource_name"]: o["custom_price"] for o in r.json()["resources"]}
+    assert offered == {"Court 1": "25.00", "Court 2": None}
+
+    # Both admin lists show what each is linked to.
+    services = client.get("/api/admin/services", headers=admin_headers).json()
+    assert [r["name"] for r in services[0]["resources"]] == ["Court 1", "Court 2"]
+    resources = {r["name"]: [s["name"] for s in r["services"]] for r in client.get("/api/admin/resources", headers=admin_headers).json()}
+    assert resources == {"Court 1": ["Court hire"], "Court 2": ["Court hire"]}
+
+    # Unlinking from the service side.
+    r = client.put(f"/api/admin/services/{svc['id']}/resources", headers=admin_headers, json=[court2["id"]])
+    assert [o["resource_name"] for o in r.json()["resources"]] == ["Court 2"]
+    assert client.put(f"/api/admin/services/{svc['id']}/resources", headers=admin_headers, json=[court2["id"], court2["id"]]).status_code == 422
+
+
 def test_location_map_links(client, make, db, user_headers, admin_headers) -> None:
     locations = "/api/admin/locations"
     # Only web links: the link ends up in an href.

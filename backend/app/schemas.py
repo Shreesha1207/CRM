@@ -312,6 +312,22 @@ class ServiceDetailOut(ServiceOut):
     resources: list[OfferingOut]
 
 
+class LinkRef(BaseModel):
+    """The other side of a resource-service link, as listed in the admin console."""
+
+    id: uuid.UUID
+    name: str
+    status: RecordStatus
+
+
+class AdminResourceOut(ResourceOut):
+    services: list[LinkRef]
+
+
+class AdminServiceOut(ServiceOut):
+    resources: list[LinkRef]
+
+
 # ---------------------------------------------------------------- schedules
 
 

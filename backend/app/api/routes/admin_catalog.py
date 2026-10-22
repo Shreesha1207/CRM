@@ -29,16 +29,18 @@ from app.models import (
 )
 from app.models.enums import RecordStatus, ResourceType
 from app.schemas import (
+    AdminResourceOut,
+    AdminServiceOut,
     AffectedBookingOut,
     AvailabilityRuleIn,
     AvailabilityRuleOut,
     ConflictAction,
+    LinkRef,
     LocationIn,
     LocationOut,
     OfferingOut,
     ResourceDetailOut,
     ResourceIn,
-    ResourceOut,
     ResourceServiceIn,
     ScheduleChangeOut,
     ServiceDetailOut,
@@ -167,14 +169,14 @@ def _validate_location(db, location_id: uuid.UUID | None) -> None:
         raise AppError("INVALID_LOCATION", "Location not found", status_code=422)
 
 
-@router.get("/resources", response_model=list[ResourceOut], dependencies=[ManageResources])
+@router.get("/resources", response_model=list[AdminResourceOut], dependencies=[ManageResources])
 def list_resources(
     db: DB,
     q: str | None = Query(default=None, max_length=100),
     type: ResourceType | None = None,
     location_id: uuid.UUID | None = None,
     status_filter: RecordStatus | None = Query(default=None, alias="status"),
-) -> list[ResourceOut]:
+) -> list[AdminResourceOut]:
     rules = settings_service.get_rules(db)
     stmt = select(Resource)
     if q:
@@ -185,7 +187,16 @@ def list_resources(
         stmt = stmt.where(Resource.location_id == location_id)
     if status_filter:
         stmt = stmt.where(Resource.status == status_filter)
-    return [resource_out(r, rules) for r in db.scalars(stmt.order_by(Resource.name)).unique()]
+    return [
+        AdminResourceOut(
+            **resource_out(r, rules).model_dump(),
+            services=sorted(
+                (LinkRef(id=link.service.id, name=link.service.name, status=link.status) for link in r.service_links),
+                key=lambda ref: ref.name.lower(),
+            ),
+        )
+        for r in db.scalars(stmt.order_by(Resource.name)).unique()
+    ]
 
 
 @router.get("/resources/{resource_id}", response_model=ResourceDetailOut, dependencies=[ManageResources])
@@ -358,12 +369,21 @@ def _service_detail(service: Service) -> ServiceDetailOut:
     )
 
 
-@router.get("/services", response_model=list[ServiceOut], dependencies=[ManageServices])
-def list_services(db: DB, status_filter: RecordStatus | None = Query(default=None, alias="status")) -> list[Service]:
+@router.get("/services", response_model=list[AdminServiceOut], dependencies=[ManageServices])
+def list_services(db: DB, status_filter: RecordStatus | None = Query(default=None, alias="status")) -> list[AdminServiceOut]:
     stmt = select(Service)
     if status_filter:
         stmt = stmt.where(Service.status == status_filter)
-    return list(db.scalars(stmt.order_by(Service.name)))
+    return [
+        AdminServiceOut(
+            **ServiceOut.model_validate(s).model_dump(),
+            resources=sorted(
+                (LinkRef(id=link.resource.id, name=link.resource.name, status=link.status) for link in s.resource_links),
+                key=lambda ref: ref.name.lower(),
+            ),
+        )
+        for s in db.scalars(stmt.order_by(Service.name))
+    ]
 
 
 @router.get("/services/{service_id}", response_model=ServiceDetailOut, dependencies=[ManageServices])
@@ -391,6 +411,34 @@ def update_service(service_id: uuid.UUID, body: ServiceIn, db: DB, actor: User =
     for key, value in body.model_dump().items():
         setattr(service, key, value)
     audit.record(db, actor_id=actor.id, action="SERVICE_UPDATED", entity_type="service", entity_id=service_id, old=old, new=body.model_dump())
+    db.commit()
+    db.refresh(service)
+    return _service_detail(service)
+
+
+@router.put("/services/{service_id}/resources", response_model=ServiceDetailOut)
+def set_service_resources(
+    service_id: uuid.UUID, resource_ids: list[uuid.UUID], db: DB, actor: User = ManageServices
+) -> ServiceDetailOut:
+    """Replace which resources provide this service. Links that stay keep their
+    overrides; new ones use the service's own terms. Existing bookings are kept."""
+    service = _get(db, Service, service_id, "Service")
+    wanted = list(dict.fromkeys(resource_ids))
+    if len(wanted) != len(resource_ids):
+        raise AppError("DUPLICATE_RESOURCE", "Each resource may be listed once", status_code=422)
+    for resource_id in wanted:
+        _get(db, Resource, resource_id, "Resource")
+    current = {link.resource_id: link for link in service.resource_links}
+    for resource_id, link in current.items():
+        if resource_id not in wanted:
+            service.resource_links.remove(link)
+    for resource_id in wanted:
+        if resource_id not in current:
+            service.resource_links.append(ResourceService(resource_id=resource_id, service_id=service_id))
+    audit.record(
+        db, actor_id=actor.id, action="SERVICE_RESOURCES_CHANGED", entity_type="service", entity_id=service_id,
+        old={"resources": [str(r) for r in current]}, new={"resources": [str(r) for r in wanted]},
+    )
     db.commit()
     db.refresh(service)
     return _service_detail(service)
