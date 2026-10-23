@@ -197,7 +197,18 @@ Customers can also book from **their own** AI assistant, the way Claude's connec
 | Siri | No connector support yet: create an access token, then an Apple Shortcut with **Get contents of URL** (POST to the MCP URL, header `Authorization: Bearer <token>`, body `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_my_bookings","arguments":{}}}`). Keep "Run when locked" off. |
 | Meta Muse | Add a custom connector for the MCP URL with an access token in Muse's credential store. |
 
-Claude and ChatGPT reach your server from the internet, so it must be public over HTTPS (`PUBLIC_URL`); for local testing use a tunnel (e.g. `cloudflared tunnel --url http://localhost:8080`) and set `PUBLIC_URL` to it. `npx @modelcontextprotocol/inspector` works against `http://localhost:5173/api/mcp` for development.
+**Testing the connectors locally.** claude.ai and ChatGPT call your server from their own cloud, not from your computer, so they can't reach `localhost`; in production the site must be public over HTTPS, with `PUBLIC_URL` set to it.
+
+- *On your own machine, no tunnel needed:*
+  - **Claude Code** runs locally: `claude mcp add --transport http bookings http://localhost:5173/api/mcp`, then `/mcp` → Authenticate. It opens the consent page and returns to a `localhost` callback, which registration accepts.
+  - **A personal token** (AI apps → Access token) with curl, or with the MCP Inspector's CLI:
+    `npx @modelcontextprotocol/inspector --cli http://localhost:5173/api/mcp --transport http --header "Authorization: Bearer bk_pat_…" --method tools/list`
+    (add `--method tools/call --tool-name find_next_available --tool-arg service=yoga` to call a tool).
+- *claude.ai or ChatGPT, through a tunnel:*
+  1. `cloudflared tunnel --url http://localhost:8080` (docker compose) or `--url http://localhost:5173` (dev server; Vite accepts `*.trycloudflare.com` and `*.ngrok-free.app`, others via `VITE_ALLOWED_HOSTS`).
+  2. Set `PUBLIC_URL` to the `https://….trycloudflare.com` address it prints and restart the backend: the OAuth issuer and the connector URL are built from it.
+  3. Add `<PUBLIC_URL>/api/mcp` as the connector, sign in on the consent page and press Allow.
+  4. Keep the tunnel running while you test. A quick tunnel gets a new address each time it starts; then update `PUBLIC_URL` and add the connector again.
 
 ### Online payment (demo gateway)
 

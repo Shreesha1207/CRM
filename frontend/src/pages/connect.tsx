@@ -8,6 +8,10 @@ import { Check, Lock } from "../components/icons";
 import { Alert, Badge, Button, Card, Checkbox, EmptyState, Field, Input, Loading, Modal, PageHeader, Select, Tabs, linkClass } from "../components/ui";
 import { formatMoney, formatStamp } from "../lib/format";
 
+// Not a charge: a cap on what an assistant may book in total, on top of the price of each booking.
+const SPEND_HINT =
+  "The most this app may book for you in 7 days, all bookings added up. Each booking still has its own price (and payment); over the limit, you book on this website.";
+
 function limitLabel(value: string | null, currency: string): string {
   return value === null ? "No limit" : `${formatMoney(value)} ${currency} a week`;
 }
@@ -118,7 +122,7 @@ export function OAuthAuthorizePage() {
             </p>
             {allowChanges && (
               <div className="mt-3 pl-6">
-                <Field label="Spending limit" hint="The most it may book for you in 7 days. Over that, you book on this website.">
+                <Field label="Spending limit" hint={SPEND_HINT}>
                   <LimitSelect value={plain(chosenLimit)} onChange={setLimit} limits={i.spend_limits.map(plain)} currency={i.currency} />
                 </Field>
               </div>
@@ -251,7 +255,7 @@ function ConnectionCard({ c, data }: { c: AgentConnection; data: AgentConnection
               {c.weekly_spend_limit !== null && <span className="font-normal text-muted"> of {formatMoney(c.weekly_spend_limit)}</span>}
             </p>
           </div>
-          <Field label="Spending limit">
+          <Field label="Spending limit" hint={SPEND_HINT}>
             <LimitSelect
               value={plain(c.weekly_spend_limit)}
               limits={data.spend_limits.map(plain)}
@@ -372,7 +376,7 @@ function CreateToken({ data }: { data: AgentConnections }) {
             <Checkbox label="Let it hold, move and cancel bookings for me" checked={allowChanges} onChange={(e) => setAllowChanges(e.target.checked)} />
           </div>
           {allowChanges && (
-            <Field label="Spending limit">
+            <Field label="Spending limit" hint={SPEND_HINT}>
               <LimitSelect value={limit} onChange={setLimit} limits={data.spend_limits.map(plain)} currency={data.currency} />
             </Field>
           )}
