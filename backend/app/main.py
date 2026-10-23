@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError
 
 from app.api.routes import (
     admin_bookings,
@@ -28,12 +29,14 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.db.session import database_unreachable
 from app.jobs import runner
 from app.services import invitations as invitation_service
 from app.services import payments
 from app.services.notifications import register_handlers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("app")
 
 
 @contextlib.asynccontextmanager
@@ -91,6 +94,18 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.message, "code": exc.code, "details": exc.details},
+        )
+
+    @app.exception_handler(DBAPIError)
+    async def database_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
+        if not database_unreachable(exc):
+            raise exc
+        # One line instead of a traceback per request while the database is away.
+        log.warning("%s %s: the database can't be reached (%s)", request.method, request.url.path, exc.orig)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "The service can't reach its database right now. Please try again in a moment.", "code": "DATABASE_UNAVAILABLE", "details": None},
+            headers={"Retry-After": "30"},
         )
 
     @app.get("/api/health", tags=["system"])

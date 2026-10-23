@@ -12,7 +12,7 @@ from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.core.timeutils import utcnow
-from app.db.session import SessionLocal, engine
+from app.db.session import SessionLocal, database_unreachable, engine
 from app.services import booking_engine, notifications, payments
 from app.services.chat import help, holds
 
@@ -55,6 +55,9 @@ async def run_forever() -> None:
     while True:
         try:
             await asyncio.to_thread(run_once)
-        except Exception:
-            log.exception("Background job run failed")
+        except Exception as exc:
+            if database_unreachable(exc):
+                log.warning("Background jobs skipped: the database can't be reached (%s)", exc.orig)
+            else:
+                log.exception("Background job run failed")
         await asyncio.sleep(interval)

@@ -27,6 +27,11 @@ open http://localhost:8080
 
 The stack has no database container. The API connects to the PostgreSQL database in `DATABASE_URL` (a hosted one such as Railway's works; plain `postgresql://` URLs are fine) and applies the migrations when it starts.
 
+If the database can't be reached, every page says "The service can't reach its database right now" (HTTP 503), and the backend log shows one line per request, such as `the database can't be reached (failed to resolve host '….proxy.rlwy.net' …)`. This is a network or settings problem, not an app error. Check the following:
+
+- **Does the host resolve on your computer?** Run `nslookup <host>`. If it doesn't, your internet or VPN is the problem, or the host has changed. Railway can change the public TCP proxy host and port, so copy the current `DATABASE_PUBLIC_URL` from the Railway dashboard into `.env`. Then run `docker compose up -d --force-recreate backend`.
+- **Does it resolve on your computer but not in the container?** Check with `docker compose exec backend python -c "import socket; print(socket.gethostbyname('<host>'))"`. If only the container fails, Docker's DNS has stopped working, which often happens after sleep, a Wi-Fi change or a VPN change. Restart Docker Desktop (on Windows, `wsl --shutdown` first), then run `docker compose up -d`.
+
 ### Option B: Local development
 
 ```bash
@@ -227,7 +232,7 @@ then register it in `PROVIDERS`, set `PAYMENT_PROVIDER=<name>` and `PAYMENT_WEBH
 ### Tests
 
 ```bash
-cd backend && pytest            # 374 tests, against a real PostgreSQL database
+cd backend && pytest            # 377 tests, against a real PostgreSQL database
 cd frontend && npm test         # unit tests for prices, booking lengths and the chat's event stream
 cd frontend && npm run build    # type-check + production build
 ```
