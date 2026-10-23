@@ -1,4 +1,4 @@
-"""Background jobs: reminder scheduling, notification delivery, expired chat holds,
+"""Background jobs: reminder scheduling, notification delivery, expired chat holds and unpaid bookings,
 overdue help requests and completing bookings whose time is over.
 
 Runs inside the API process on an interval. A PostgreSQL advisory lock makes
@@ -13,7 +13,7 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.core.timeutils import utcnow
 from app.db.session import SessionLocal, engine
-from app.services import booking_engine, notifications
+from app.services import booking_engine, notifications, payments
 from app.services.chat import help, holds
 
 log = logging.getLogger("jobs")
@@ -41,6 +41,7 @@ def run_once() -> None:
         try:
             with SessionLocal() as db:
                 holds.release_expired(db, utcnow())
+                payments.release_expired(db, utcnow())
                 help.remind_overdue(db, utcnow())
                 booking_engine.complete_finished(db, utcnow())
                 notifications.queue_reminders(db, utcnow())

@@ -6,7 +6,16 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from app.core.maps import google_maps_url
 from app.core.timeutils import is_valid_timezone
@@ -16,6 +25,7 @@ from app.models.enums import (
     ExceptionType,
     NotificationChannel,
     NotificationType,
+    PaymentStatus,
     RecordStatus,
     RecurrenceFrequency,
     ResourceType,
@@ -627,6 +637,18 @@ class BookingOut(BaseModel):
     awaiting_customer: bool = False
     # Held by the booking assistant until the customer confirms or deletes it in the chat.
     held_in_chat: bool = False
+    # Held until the customer pays for it online (or the payment window passes).
+    awaiting_payment: bool = False
+    payment: "PaymentRef | None" = None
+
+
+class PaymentRef(BaseModel):
+    id: uuid.UUID
+    status: PaymentStatus
+    amount: Decimal
+    currency: str
+    expires_at: datetime
+    paid_at: datetime | None
 
 
 class RecurringCreatedOut(BaseModel):

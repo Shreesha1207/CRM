@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.errors import AppError, BookingRejected, NotFound
 from app.core.timeutils import utcnow
-from app.models import Booking, ChatConversation, ChatProposal, Resource, User
-from app.models.enums import BookingStatus, ChatProposalKind, ChatProposalStatus
-from app.services import booking_mail, settings_service
+from app.models import Booking, ChatConversation, ChatProposal, Payment, Resource, User
+from app.models.enums import BookingStatus, ChatProposalKind, ChatProposalStatus, PaymentStatus
+from app.services import booking_mail, payments, settings_service
 from app.services.availability import resource_timezone
 from app.services.booking_engine import BookingEngine
 from app.services.notifications import _clock
@@ -86,6 +86,18 @@ def card(db: Session, proposal: ChatProposal, user: User, now: datetime | None =
     )
     if facts.was is not None:
         out["was"] = {"date": facts.was.date, "time": facts.was.time, "zone": facts.was.zone}
+    payment = db.get(Payment, shown.payment_id) if proposal.kind == K.HOLD and shown.payment_id else None
+    if payment is not None:
+        # Confirmed in the chat, paid (or to be paid) online.
+        unpaid = payment.status == PaymentStatus.PENDING and shown.status == BookingStatus.PENDING and payment.expires_at > now
+        out["payment"] = {
+            "id": str(payment.id),
+            "status": payment.status.value,
+            "amount": f"{payment.amount:.2f}",
+            "currency": payment.currency,
+            "expires_at": payment.expires_at.isoformat(),
+            "checkout_url": payments.checkout_url(payment) if unpaid else None,
+        }
     if proposal.kind == K.RESCHEDULE and result is None:
         # Not moved yet: show the new time, and the current one as "was".
         target = db.get(Resource, uuid.UUID(proposal.payload["resource_id"])) or booking.primary_resource
@@ -246,7 +258,13 @@ def report(db: Session, conversation_id: uuid.UUID, user: User, now: datetime) -
             }[status]
             booking = db.get(Booking, proposal.booking_id) if proposal.booking_id else None
             if status == P.CONFIRMED and booking is not None and booking.status == BookingStatus.PENDING:
-                text = f"The customer confirmed {what}. It now waits for the business to approve it."
+                if payments.pending_for(db, booking.id) is not None:
+                    text = (
+                        f"The customer confirmed {what}. It is booked once they pay with the Pay now button on its card; "
+                        "if they don't pay in time, the time is released."
+                    )
+                else:
+                    text = f"The customer confirmed {what}. It now waits for the business to approve it."
         else:
             verb = "moving" if proposal.kind == K.RESCHEDULE else "cancelling"
             text = {

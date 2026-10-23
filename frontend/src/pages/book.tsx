@@ -217,7 +217,9 @@ export function BookPage() {
     mutationFn: () => api.post<Booking>("/api/bookings", bookingBody()),
     onSuccess: (booking) => {
       queryClient.invalidateQueries();
-      navigate(`/bookings/${booking.id}`, { state: { created: true } });
+      // Paid online: the time is held while the customer pays.
+      if (booking.awaiting_payment && booking.payment) navigate(`/pay/${booking.payment.id}`);
+      else navigate(`/bookings/${booking.id}`, { state: { created: true } });
     },
   });
 

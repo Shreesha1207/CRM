@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { useEffect, useId, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, errorMessage } from "../../api/client";
-import type { AuditLog, Booking, Invitation, Location, Page, Resource, Service, ServiceDetail, User } from "../../api/types";
+import type { AdminPayment, AuditLog, Booking, Invitation, Location, Page, Resource, Service, ServiceDetail, User } from "../../api/types";
 import { BOOKING_STATUSES } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { BookingSummary, DateNav, SlotPicker, type PickedSlot } from "../../components/booking";
@@ -138,11 +138,22 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
               time is released by itself. You can cancel it, but not confirm or move it.
             </Alert>
           )}
+          {b.awaiting_payment && (
+            <Alert tone="info">
+              Waiting for {b.user.email} to pay online. If they don't pay in time, the time is released by itself. You can cancel it, but not confirm or
+              move it.
+            </Alert>
+          )}
+          {b.payment && b.payment.status !== "PENDING" && (
+            <p className="text-sm text-muted">
+              Payment: {formatMoney(b.payment.amount)} {b.payment.currency}, {titleCase(b.payment.status)}
+            </p>
+          )}
           {resend.error && <Alert>{errorMessage(resend.error)}</Alert>}
           {resend.isSuccess && <Alert tone="success">A new link was sent to {b.user.email}. The old one no longer works.</Alert>}
           {manage && (
             <div className="flex flex-wrap gap-2">
-              {b.status === "PENDING" && !b.awaiting_customer && !b.held_in_chat && <Button size="sm" onClick={() => action.mutate("confirm")}>Confirm</Button>}
+              {b.status === "PENDING" && !b.awaiting_customer && !b.held_in_chat && !b.awaiting_payment && <Button size="sm" onClick={() => action.mutate("confirm")}>Confirm</Button>}
               {b.awaiting_customer && (
                 <Button size="sm" variant="secondary" loading={resend.isPending} onClick={() => resend.mutate()}>
                   Resend invitation
@@ -157,8 +168,8 @@ export function AdminBookingModal({ booking, onClose }: { booking: Booking; onCl
               {/* Past bookings complete by themselves, so either can be corrected. */}
               {b.status === "COMPLETED" && <Button size="sm" variant="secondary" onClick={() => action.mutate("no-show")}>Mark no-show instead</Button>}
               {b.status === "NO_SHOW" && <Button size="sm" variant="secondary" onClick={() => action.mutate("complete")}>Mark completed instead</Button>}
-              {open && !b.held_in_chat && <Button size="sm" variant="secondary" onClick={() => setSub("reschedule")}>Reschedule</Button>}
-              {open && !b.held_in_chat && <Button size="sm" variant="secondary" onClick={() => setSub("reassign")}>Reassign resource</Button>}
+              {open && !b.held_in_chat && !b.awaiting_payment && <Button size="sm" variant="secondary" onClick={() => setSub("reschedule")}>Reschedule</Button>}
+              {open && !b.held_in_chat && !b.awaiting_payment && <Button size="sm" variant="secondary" onClick={() => setSub("reassign")}>Reassign resource</Button>}
               {b.can_cancel && <Button size="sm" variant="danger" onClick={() => setSub("cancel")}>Cancel</Button>}
             </div>
           )}
@@ -509,6 +520,80 @@ function CreateBookingModal({ onClose, initial }: { onClose: () => void; initial
 
 const LIMIT = 25;
 
+/** Paid bookings that were cancelled: refund them on the payment provider's side, then mark them here. */
+function RefundsDue() {
+  const queryClient = useQueryClient();
+  const due = useQuery({ queryKey: ["admin", "payments", "REFUND_DUE"], queryFn: () => api.get<AdminPayment[]>("/api/admin/payments", { status: "REFUND_DUE" }) });
+  const [marking, setMarking] = useState<AdminPayment | null>(null);
+  const [note, setNote] = useState("");
+  const mark = useMutation({
+    mutationFn: () => api.post(`/api/admin/payments/${marking!.id}/refunded`, { note: note.trim() || null }),
+    onSuccess: () => {
+      setMarking(null);
+      setNote("");
+      queryClient.invalidateQueries({ queryKey: ["admin", "payments"] });
+    },
+  });
+  if (!due.data?.length) return null;
+  return (
+    <div className="mb-6 rounded-lg border border-line bg-surface p-4">
+      <h2 className="text-sm font-semibold text-fg">Refunds due</h2>
+      <p className="mt-0.5 text-xs text-muted">These bookings were paid online and then cancelled. Refund them with the payment provider, then mark them refunded.</p>
+      <ul className="mt-3 divide-y divide-line text-sm">
+        {due.data.map((p) => (
+          <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+            <span className="min-w-0">
+              <span className="tabular font-semibold text-fg">
+                {formatMoney(p.amount)} {p.currency}
+              </span>{" "}
+              <span className="text-fg">{p.customer ? `${p.customer.name} (${p.customer.email})` : "a deleted account"}</span>
+              {p.booking && (
+                <span className="text-muted">
+                  {" "}
+                  · {p.booking.service}, {p.booking.when.date}
+                </span>
+              )}
+              {p.refund_due_at && <span className="text-xs text-muted"> · due since {formatStamp(p.refund_due_at)}</span>}
+            </span>
+            <Button size="sm" variant="secondary" onClick={() => setMarking(p)}>
+              Mark refunded
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <Modal
+        open={!!marking}
+        title="Mark refunded"
+        onClose={() => setMarking(null)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setMarking(null)}>
+              Back
+            </Button>
+            <Button loading={mark.isPending} onClick={() => mark.mutate()}>
+              Mark refunded
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg">
+          Only once you have refunded {marking && `${formatMoney(marking.amount)} ${marking.currency}`} with the payment provider. The customer is told.
+        </p>
+        <div className="mt-3">
+          <Field label="Note for the customer (optional)">
+            <Textarea value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+          </Field>
+        </div>
+        {mark.error && (
+          <div className="mt-3">
+            <Alert>{errorMessage(mark.error)}</Alert>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
 export function AdminBookingsPage() {
   const { resources, services, locations } = useCatalog();
   const { can } = useAuth();
@@ -547,6 +632,7 @@ export function AdminBookingsPage() {
   return (
     <>
       <PageHeader title="Bookings" actions={can("bookings:manage") && <Button onClick={() => setCreating(true)}>New booking</Button>} />
+      {can("bookings:manage") && <RefundsDue />}
       <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
         <Input placeholder="Customer name or e-mail" value={filters.q} onChange={set("q")} className="col-span-2 lg:col-span-1" />
         <Select value={filters.status} onChange={set("status")} aria-label="Status">
@@ -609,7 +695,7 @@ export function AdminBookingsPage() {
                 </Td>
                 <Td>{b.resource.name}</Td>
                 <Td>
-                  <StatusBadge status={b.awaiting_customer || b.held_in_chat ? "AWAITING_CUSTOMER" : b.status} />
+                  <StatusBadge status={b.awaiting_payment ? "AWAITING_PAYMENT" : b.awaiting_customer || b.held_in_chat ? "AWAITING_CUSTOMER" : b.status} />
                 </Td>
                 <Td className="text-right">
                   <Button size="sm" variant="secondary" onClick={() => setSelected(b)}>

@@ -125,7 +125,7 @@ def test_one_call_resolves_the_names_and_holds_it(db, gym, chat) -> None:
     [held] = last_tool_results(second["messages"])
     assert held["held"] is True and held["booking"]["when"]["time"] == "10:00 AM – 12:00 PM"
     assert held["booking"]["service"] == "Strength coaching" and held["booking"]["resource"] == "Coach Sam"
-    assert {t["function"]["name"] for t in first["tools"]} == {"book", "move", "cancel", "check_availability", "my_bookings", "contact_admin", "offer_choices"}
+    assert {t["function"]["name"] for t in first["tools"]} == {"book", "move", "cancel", "check_availability", "find_next_available", "my_bookings", "contact_admin", "offer_choices"}
 
 
 def test_the_prompt_lists_the_catalogue_and_the_next_days(gym, chat, monkeypatch) -> None:

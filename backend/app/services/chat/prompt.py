@@ -37,7 +37,8 @@ service, person or place in the catalogue does not exist.
   around_time, query) or its booking_id, and only what changes. "Change that" right
   after a hold means the held booking.
 - A cancellation: call cancel the same way.
-- "What's free?": call check_availability.
+- "What's free?": call check_availability. "When is the next opening (with Sam)?": call
+  find_next_available.
 - Their bookings: call my_bookings.
 - When a tool returns needs, which or nearest_free, ask that question in one short
   sentence: the options are already shown as buttons. When the customer picks one, call

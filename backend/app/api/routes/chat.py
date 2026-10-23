@@ -103,7 +103,8 @@ def unsubscribe(user: Customer, db: DB) -> ChatSubscriptionOut:
 
 def _conversation(db, user: User, conversation_id: uuid.UUID) -> ChatConversation:
     conversation = db.get(ChatConversation, conversation_id)
-    if conversation is None or conversation.user_id != user.id:
+    # A connected assistant's conversation is its activity log, not a chat.
+    if conversation is None or conversation.user_id != user.id or conversation.agent_connection_id is not None:
         raise NotFound("Conversation")
     return conversation
 
@@ -113,7 +114,7 @@ def list_conversations(user: Subscriber, db: DB) -> list[ChatConversation]:
     return list(
         db.scalars(
             select(ChatConversation)
-            .where(ChatConversation.user_id == user.id)
+            .where(ChatConversation.user_id == user.id, ChatConversation.agent_connection_id.is_(None))
             .order_by(ChatConversation.updated_at.desc())
             .limit(50)
         )

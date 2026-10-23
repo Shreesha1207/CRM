@@ -1,4 +1,7 @@
 from app.models.entities import (
+    AgentClient,
+    AgentConnection,
+    AgentToken,
     AuditLog,
     AuthSession,
     AvailabilityException,
@@ -14,6 +17,7 @@ from app.models.entities import (
     Notification,
     OperatingHours,
     PasswordResetToken,
+    Payment,
     RecurringSeries,
     Resource,
     ResourceAvailability,
@@ -24,6 +28,9 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "AgentClient",
+    "AgentConnection",
+    "AgentToken",
     "AuditLog",
     "AuthSession",
     "AvailabilityException",
@@ -39,6 +46,7 @@ __all__ = [
     "Notification",
     "OperatingHours",
     "PasswordResetToken",
+    "Payment",
     "RecurringSeries",
     "Resource",
     "ResourceAvailability",

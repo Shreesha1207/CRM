@@ -24,7 +24,7 @@ from app.api.routes.bookings import create_with_auto_assign, scope_filter
 from app.api.serializers import bookings_out
 from app.core.config import get_settings
 from app.core.errors import AppError
-from app.core.timeutils import ensure_aware, utcnow
+from app.core.timeutils import ensure_aware, get_zone, utcnow
 from app.db.session import SessionLocal
 from app.models import Booking, ChatProposal, Resource, Service, User
 from app.models.enums import BookingType, ChatProposalKind, ChatProposalStatus, RecordStatus
@@ -48,6 +48,8 @@ class ToolContext:
     turn_id: uuid.UUID
     proposal_ids: list[uuid.UUID] = field(default_factory=list)
     choices: list[str] = field(default_factory=list)
+    # Set when a connected AI assistant (not the in-app chat) calls the tool.
+    connection_id: uuid.UUID | None = None
 
 
 # What small models write for a field they don't know.
@@ -327,6 +329,9 @@ def _booking_json(db: Session, booking: Booking, user: User, flags) -> dict[str,
         "can_cancel": flags.can_cancel,
         "can_reschedule": flags.can_reschedule,
         "waiting_for_confirmation_in_chat": flags.held_in_chat,
+        **({"payment": {"status": flags.payment.status.value.lower(), "amount": _money(flags.payment.amount), "currency": flags.payment.currency}}
+           if flags.payment else {}),
+        **({"waiting_for_payment": True} if flags.awaiting_payment else {}),
     }
 
 
@@ -860,6 +865,59 @@ def check_availability(db: Session, user: User, ctx: ToolContext, args: Availabi
     return {"service": service.name, "person": resource.name if resource else None, **found}
 
 
+class NextFreeIn(_In):
+    service: str = Field(max_length=100)
+    person: str | None = Field(default=None, max_length=100)
+    from_date: date | None = None
+    duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
+    quantity: int = Field(default=1, ge=1, le=100)
+    count: int = Field(default=5, ge=1, le=10)
+
+
+# How far ahead "the next free time" is looked for.
+NEXT_FREE_DAYS = 30
+
+
+def find_next_available(db: Session, user: User, ctx: ToolContext, args: NextFreeIn) -> dict[str, Any]:
+    """The earliest free start times of a service (and person), from a day on."""
+    service, question = _service(db, ctx, args.service)
+    if question:
+        return question
+    resource = None
+    if args.person:
+        resource, question = _person(db, ctx, service, args.person)
+        if question:
+            return question
+    rules = settings_service.get_rules(db)
+    start = args.from_date or utcnow().astimezone(resource_timezone(resource, rules) if resource else get_zone(rules.default_timezone)).date()
+    horizon = min(NEXT_FREE_DAYS, rules.maximum_advance_booking_days + 1)
+    found: list[dict[str, Any]] = []
+    timezone = length = rate = None
+    for offset in range(0, horizon, 7):
+        week = find_available_slots(
+            db, user, ctx,
+            FindSlotsIn(
+                service_id=service.id, date=start + timedelta(days=offset), days=min(7, horizon - offset),
+                resource_id=resource.id if resource else None, quantity=args.quantity, duration_minutes=args.duration_minutes,
+            ),
+        )  # fmt: skip
+        timezone, length, rate = timezone or week["timezone"], length or week["length_minutes"], rate or week["rate_per_hour"]
+        for day in week["days"]:
+            found += [{"start": t["start"], "label": f"{day['label']}, {t['label']}", "with": [r["name"] for r in t["resources"]]} for t in day["times"]]
+        if len(found) >= args.count:
+            break
+    return {
+        "service": service.name,
+        "person": resource.name if resource else None,
+        "timezone": timezone,
+        "length_minutes": length,
+        "rate_per_hour": rate,
+        "next_free": found[: args.count],
+        "searched_from": start.isoformat(),
+        "searched_days": horizon if len(found) < args.count else None,
+    }
+
+
 class ContactAdminIn(_In):
     summary: str = Field(max_length=600)
 
@@ -1008,6 +1066,25 @@ TOOLS = [
         "Checking free times…",
     ),
     Tool(
+        "find_next_available",
+        "The earliest free times of a service (and optionally a person), looking up to 30 days ahead: for 'when is "
+        "the next opening with Sam?'. from_date is the first day to look at (default today).",
+        {
+            "properties": {
+                "service": _NAME,
+                "person": _NAME,
+                "from_date": _DATE,
+                "duration_minutes": _LENGTH,
+                "quantity": {"type": "integer", "minimum": 1},
+                "count": {"type": "integer", "minimum": 1, "maximum": 10},
+            },
+            "required": ["service"],
+        },
+        NextFreeIn,
+        find_next_available,
+        "Looking for the next free time…",
+    ),
+    Tool(
         "my_bookings",
         "The customer's own bookings (upcoming by default), with whether each can still be cancelled or moved. Pass "
         "on_date, around_time and query to find the one they mean.",
@@ -1059,27 +1136,34 @@ def definitions() -> list[dict[str, Any]]:
     return [t.definition() for t in TOOLS]
 
 
+After = Callable[[Session, User, dict[str, Any]], dict[str, Any]]
+
+
+def execute(tool: Any, raw_input: Any, ctx: ToolContext, after: After | None = None) -> dict[str, Any]:
+    """Check the input against the tool's model and run it as the customer, in a session of its
+    own. `after` reshapes the result in the same session. Every failure is a small error result."""
+    try:
+        args = tool.model.model_validate(raw_input if isinstance(raw_input, dict) else {})
+    except ValidationError as exc:
+        problems = "; ".join(f"{'.'.join(map(str, e['loc'])) or 'input'}: {e['msg']}" for e in exc.errors()[:5])
+        return _error("INVALID_INPUT", problems)
+    with SessionLocal() as db:
+        user = db.get(User, ctx.user_id)
+        try:
+            result = tool.handler(db, user, ctx, args)
+            return after(db, user, result) if after else result
+        except AppError as exc:
+            db.rollback()
+            result = _error(exc.code, exc.message)
+            return after(db, user, result) if after else result
+        except Exception:
+            db.rollback()
+            log.exception("Tool %s failed", tool.name)
+            return _error("INTERNAL", "Something went wrong; try again or suggest the booking page.")
+
+
 def run(name: str, raw_input: Any, ctx: ToolContext) -> tuple[str, bool]:
     """Run one tool call. Returns the JSON result for the model and whether it is an error."""
     tool = TOOLS_BY_NAME.get(name)
-    if tool is None:
-        result = _error("UNKNOWN_TOOL", f"There is no tool called {name}")
-    else:
-        try:
-            args = tool.model.model_validate(raw_input if isinstance(raw_input, dict) else {})
-        except ValidationError as exc:
-            problems = "; ".join(f"{'.'.join(map(str, e['loc'])) or 'input'}: {e['msg']}" for e in exc.errors()[:5])
-            result = _error("INVALID_INPUT", problems)
-        else:
-            with SessionLocal() as db:
-                user = db.get(User, ctx.user_id)
-                try:
-                    result = tool.handler(db, user, ctx, args)
-                except AppError as exc:
-                    db.rollback()
-                    result = _error(exc.code, exc.message)
-                except Exception:
-                    db.rollback()
-                    log.exception("Tool %s failed", name)
-                    result = _error("INTERNAL", "Something went wrong; try again or suggest the booking page.")
+    result = _error("UNKNOWN_TOOL", f"There is no tool called {name}") if tool is None else execute(tool, raw_input, ctx)
     return json.dumps(result, separators=(",", ":"), default=str), "error" in result

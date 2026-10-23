@@ -323,7 +323,7 @@ export function BookingDetailPage() {
   if (booking.isLoading) return <Loading />;
   if (booking.error) return <Alert>{errorMessage(booking.error)}</Alert>;
   const b = booking.data!;
-  const state = location.state as { created?: boolean; rescheduled?: boolean } | null;
+  const state = location.state as { created?: boolean; rescheduled?: boolean; paid?: boolean } | null;
   const windowNote = (minutes: number, verb: string) =>
     minutes > 0 ? `You can ${verb} online until ${formatDuration(minutes)} before the start.` : null;
   const notes = [windowNote(config.data?.cancellation_window ?? 0, "cancel"), windowNote(config.data?.rescheduling_window ?? 0, "reschedule")].filter(Boolean);
@@ -339,6 +339,18 @@ export function BookingDetailPage() {
           <Alert tone="info">You're #{b.waitlist_position} on the waitlist. We'll confirm you automatically if a place opens.</Alert>
         )}
         {state?.rescheduled && <Alert tone="success">Your booking has been moved.</Alert>}
+        {state?.paid && b.status === "CONFIRMED" && <Alert tone="success">Paid. You're booked! A confirmation has been sent.</Alert>}
+        {state?.paid && b.status === "PENDING" && <Alert tone="info">Paid. The business will confirm it shortly.</Alert>}
+        {b.awaiting_payment && b.payment && (
+          <Alert tone="warning">
+            This time is held for you until you pay.{" "}
+            <Link to={`/pay/${b.payment.id}`} className="font-medium underline">
+              Pay {formatMoney(b.payment.amount)} {b.payment.currency} now
+            </Link>
+            ; if you don't, it is released.
+          </Alert>
+        )}
+        {b.payment?.status === "REFUND_DUE" && <Alert tone="info">Your payment of {formatMoney(b.payment.amount)} {b.payment.currency} will be refunded by the business.</Alert>}
         {b.held_in_chat && (
           <Alert tone="info">
             The booking assistant is holding this time for you. Confirm or delete it in the{" "}
@@ -381,6 +393,12 @@ export function BookingDetailPage() {
             <DetailRow label="Price">
               <span className="tabular">{formatMoney(b.price)}</span>
             </DetailRow>
+            {b.payment && (
+              <DetailRow label="Payment">
+                {{ PENDING: "Waiting for payment", PAID: "Paid online", EXPIRED: "Not paid in time", CANCELLED: "Not paid", REFUND_DUE: "Refund due", REFUNDED: "Refunded" }[b.payment.status]}
+                {b.payment.paid_at && ` · ${formatDateTime(b.payment.paid_at, b.timezone)}`}
+              </DetailRow>
+            )}
             {b.quantity > 1 && <DetailRow label="Places">{b.quantity}</DetailRow>}
             <DetailRow label="Booked">{formatDateTime(b.created_at, b.timezone)}</DetailRow>
             <DetailRow label="Timezone">{b.timezone}</DetailRow>
@@ -411,7 +429,7 @@ export function BookingDetailPage() {
               Reschedule
             </Button>
             <Button variant="danger" disabled={!b.can_cancel} onClick={() => setModal("cancel")}>
-              {b.status === "WAITLISTED" ? "Leave waitlist" : b.held_in_chat ? "Delete" : "Cancel booking"}
+              {b.status === "WAITLISTED" ? "Leave waitlist" : b.held_in_chat || b.awaiting_payment ? "Delete" : "Cancel booking"}
             </Button>
           </div>
           {notes.length > 0 && (

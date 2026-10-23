@@ -250,6 +250,82 @@ export interface Booking {
   awaiting_customer: boolean;
   /** Held by the booking assistant until the customer confirms or deletes it in the chat. */
   held_in_chat: boolean;
+  /** Held until the customer pays for it online. */
+  awaiting_payment: boolean;
+  payment: PaymentRef | null;
+}
+
+export type PaymentStatus = "PENDING" | "PAID" | "EXPIRED" | "CANCELLED" | "REFUND_DUE" | "REFUNDED";
+
+export interface PaymentRef {
+  id: string;
+  status: PaymentStatus;
+  amount: string;
+  currency: string;
+  expires_at: string;
+  paid_at: string | null;
+}
+
+/** A payment as its checkout page shows it. */
+export interface Payment {
+  id: string;
+  status: PaymentStatus;
+  amount: string;
+  currency: string;
+  provider: string;
+  /** The demo gateway: nothing is charged. */
+  demo: boolean;
+  expires_at: string;
+  paid_at: string | null;
+  checkout_url: string | null;
+  booking_id: string | null;
+  booking: { service: string; resource: string; when: ChatWhen; place: string | null; status: BookingStatus } | null;
+}
+
+export interface AdminPayment extends Payment {
+  customer: { id: string; name: string; email: string } | null;
+  refund_due_at: string | null;
+  refunded_at: string | null;
+  refund_note: string | null;
+}
+
+/** A customer's AI assistant: an app they approved, or a personal access token. */
+export interface AgentConnection {
+  id: string;
+  kind: "OAUTH" | "TOKEN";
+  name: string;
+  return_host: string | null;
+  scopes: string[];
+  allow_changes: boolean;
+  weekly_spend_limit: string | null;
+  spent_this_week: string;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  activity: { text: string; at: string }[];
+}
+
+export interface AgentConnections {
+  mcp_url: string;
+  currency: string;
+  spend_limits: (string | null)[];
+  token_days: number[];
+  connections: AgentConnection[];
+  disconnected: AgentConnection[];
+}
+
+/** What the consent page shows about an app asking for access. */
+export interface OAuthRequestInfo {
+  app: string;
+  return_host: string;
+  business: string;
+  currency: string;
+  scopes: { scope: string; description: string }[];
+  asks_for_changes: boolean;
+  spend_limits: (string | null)[];
+  default_spend_limit: string;
+  signed_in_recently: boolean;
 }
 
 export interface Occurrence {
@@ -455,6 +531,8 @@ export interface ChatCard {
   map_url?: string | null;
   price?: string | null;
   booking_status?: BookingStatus;
+  /** HOLD, when the business takes payment online: pay with checkout_url to book it. */
+  payment?: { id: string; status: PaymentStatus; amount: string; currency: string; expires_at: string; checkout_url: string | null };
   /** HANDOFF: the problem in the customer's words, and the reply time promised. */
   summary?: string;
   response_hours?: number;

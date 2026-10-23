@@ -10,6 +10,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": { target: process.env.VITE_API_PROXY ?? "http://localhost:8000", changeOrigin: false },
+      // Where connected AI assistants discover the OAuth server (see the README).
+      "/.well-known/oauth-": { target: process.env.VITE_API_PROXY ?? "http://localhost:8000", changeOrigin: false },
     },
   },
 });

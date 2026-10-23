@@ -45,11 +45,12 @@ from app.models.enums import (
     ChatProposalKind,
     ChatProposalStatus,
     InvitationStatus,
+    PaymentStatus,
     RecordStatus,
     RecurrenceFrequency,
     UserStatus,
 )
-from app.services import audit, events, settings_service
+from app.services import audit, events, payments, settings_service
 from app.services.availability import (
     AVAILABLE,
     FULL,
@@ -109,6 +110,9 @@ class BookingRequest:
     # Made by the booking assistant: held the same way, without telling anyone yet,
     # until the customer confirms or deletes it in the chat (or the hold expires).
     chat_hold: "ChatHold | None" = None
+    # The customer pays for it online (when it has a price): held the same way until
+    # they pay, or released when the payment window passes.
+    pay_online: bool = False
 
 
 @dataclass(frozen=True)
@@ -470,7 +474,8 @@ class BookingEngine:
         self._lock_resources([offering.resource.id, *(e.id for e in extras)])
         waitlist = self._evaluate(offering, extras, start, **check_kwargs)
 
-        held = req.awaiting_customer or req.chat_hold is not None
+        paying = req.pay_online and not waitlist and bool(offering.total_price(req.quantity))
+        held = req.awaiting_customer or req.chat_hold is not None or paying
         status = S.WAITLISTED if waitlist else (S.PENDING if held else self._initial_status())
         booking = self._insert(
             user_id=user.id,
@@ -496,6 +501,8 @@ class BookingEngine:
                     expires_at=req.chat_hold.expires_at,
                 )
             )
+        if paying:
+            payments.start(self.db, booking, self.now)
         audit.record(
             self.db,
             actor_id=self.actor.id,
@@ -513,8 +520,9 @@ class BookingEngine:
                 entity_id=booking.id,
                 new={"override": "booking rules", "start": start},
             )
-        # A chat hold tells nobody yet: the confirmation goes out when the customer confirms.
-        events.publish(self.db, "booking.created", booking=booking, silent=req.chat_hold is not None)
+        # A chat hold tells nobody yet: the confirmation goes out when the customer confirms
+        # (or, for one paid online, when they have paid).
+        events.publish(self.db, "booking.created", booking=booking, silent=req.chat_hold is not None or paying)
         self._commit()
         return booking
 
@@ -546,17 +554,20 @@ class BookingEngine:
         booking, hold = self._open_hold_locked(booking_id)
         if hold.expires_at <= self.now:
             raise BookingRejected("HOLD_EXPIRED", "This hold has expired, so the time was released", status_code=409)
-        if self.rules.require_admin_confirmation:
-            # It still needs an administrator: from now on it is an ordinary pending booking.
-            for allocation in booking.allocations:
-                allocation.active = self._consumes(S.PENDING)
-            event = "booking.created"
-        else:
-            transition(booking, S.CONFIRMED)
-            booking.confirmed_at = self.now
-            event = "booking.confirmed"
         hold.status = ChatProposalStatus.CONFIRMED
         hold.result_booking_id = booking.id
+        if self.rules.online_payments and booking.price:
+            # Paid online: it keeps its time while the customer pays, and is confirmed once they have.
+            payments.start(self.db, booking, self.now)
+            hold.result_message = "Waiting for payment"
+            self._flush()
+            audit.record(
+                self.db, actor_id=self.actor.id, action="CHAT_HOLD_CONFIRMED", entity_type="booking", entity_id=booking.id,
+                old={"status": S.PENDING}, new={"status": booking.status, "awaiting_payment": True},
+            )  # fmt: skip
+            self._commit()
+            return booking
+        event = self._confirm_held(booking)
         self._flush()
         audit.record(
             self.db,
@@ -571,6 +582,28 @@ class BookingEngine:
         self._commit()
         return booking
 
+    def _confirm_held(self, booking: Booking) -> str:
+        """A held booking is now wanted for real: confirmed, or an ordinary pending booking
+        when an administrator still approves each one. Returns the event to publish."""
+        if self.rules.require_admin_confirmation:
+            for allocation in booking.allocations:
+                allocation.active = self._consumes(S.PENDING)
+            return "booking.created"
+        transition(booking, S.CONFIRMED)
+        booking.confirmed_at = self.now
+        return "booking.confirmed"
+
+    def _release_held(self, booking: Booking, reason: str) -> bool:
+        """Take a held booking off the calendar. Returns whether it held any time."""
+        transition(booking, S.CANCELLED)
+        booking.cancelled_at = self.now
+        booking.cancelled_by = self.actor.id
+        booking.cancellation_reason = reason
+        released = any(a.active for a in booking.allocations)
+        for allocation in booking.allocations:
+            allocation.active = False
+        return released
+
     def release_chat_hold(
         self,
         booking_id: uuid.UUID,
@@ -584,13 +617,7 @@ class BookingEngine:
         apply and nobody is notified.
         """
         booking, hold = self._open_hold_locked(booking_id)
-        transition(booking, S.CANCELLED)
-        booking.cancelled_at = self.now
-        booking.cancelled_by = self.actor.id
-        booking.cancellation_reason = reason
-        released = any(a.active for a in booking.allocations)
-        for allocation in booking.allocations:
-            allocation.active = False
+        released = self._release_held(booking, reason)
         hold.status = outcome
         hold.result_message = reason
         self._flush()
@@ -610,6 +637,64 @@ class BookingEngine:
         return booking
 
     # ------------------------------------------------------------------
+    # Bookings waiting for their online payment
+    # ------------------------------------------------------------------
+
+    def confirm_paid(self, booking_id: uuid.UUID) -> Booking:
+        """The customer paid for a booking held for its payment (the caller has marked the payment paid)."""
+        booking = self._locked(self._get_modifiable(booking_id))
+        if booking.status != S.PENDING or booking.payment_id is None:
+            raise BookingRejected("PAYMENT_CLOSED", "This booking is no longer waiting for payment", status_code=409)
+        event = self._confirm_held(booking)
+        self._flush()
+        audit.record(
+            self.db,
+            actor_id=self.actor.id,
+            action="BOOKING_PAID",
+            entity_type="booking",
+            entity_id=booking.id,
+            old={"status": S.PENDING},
+            new={"status": booking.status, "payment_id": booking.payment_id},
+        )
+        events.publish(self.db, event, booking=booking)
+        self._commit()
+        return booking
+
+    def release_unpaid(
+        self,
+        booking_id: uuid.UUID,
+        *,
+        outcome: PaymentStatus = PaymentStatus.CANCELLED,
+        reason: str = "Payment cancelled",
+    ) -> Booking:
+        """Take a booking nobody paid for off the calendar: the customer gave up, or the
+        payment window passed. It was never confirmed, so no window applies and nobody is told."""
+        booking = self._locked(self._get_modifiable(booking_id))
+        payment = payments.pending_for(self.db, booking.id, lock=True)
+        if payment is None:
+            raise BookingRejected("PAYMENT_CLOSED", "This booking is no longer waiting for payment", status_code=409)
+        released = self._release_held(booking, reason)
+        payment.status = outcome
+        self._flush()
+        audit.record(
+            self.db,
+            actor_id=self.actor.id,
+            action="UNPAID_BOOKING_RELEASED",
+            entity_type="booking",
+            entity_id=booking.id,
+            old={"status": S.PENDING},
+            new={"status": booking.status, "reason": reason},
+        )
+        events.publish(self.db, "booking.cancelled", booking=booking, actor_id=self.actor.id, silent=True)
+        if released and booking.service.booking_type == BookingType.CAPACITY:
+            self._promote_waitlist(booking.primary_resource, booking.service, booking.start_datetime)
+        self._commit()
+        return booking
+
+    def _awaiting_payment(self, booking_id: uuid.UUID) -> bool:
+        return payments.pending_for(self.db, booking_id) is not None
+
+    # ------------------------------------------------------------------
     # Cancel & waitlist
     # ------------------------------------------------------------------
 
@@ -619,6 +704,9 @@ class BookingEngine:
         if self.open_chat_hold(booking_id) is not None:
             # Never confirmed: cancelling it anywhere is the same as deleting it in the chat.
             return self.release_chat_hold(booking_id, reason=reason or "Cancelled")
+        if self._awaiting_payment(booking_id):
+            # Never paid for, so never confirmed: it is simply released.
+            return self.release_unpaid(booking_id, reason=reason or "Cancelled")
         booking = self._get_modifiable(booking_id)
         booking = self._locked(booking)
 
@@ -750,6 +838,10 @@ class BookingEngine:
                 "This booking is waiting for the customer to confirm or delete it in the booking assistant",
                 status_code=409,
             )
+        if self._awaiting_payment(booking.id):
+            raise BookingRejected(
+                "AWAITING_PAYMENT", "This booking is waiting for its payment: pay for it or cancel it first", status_code=409
+            )
 
         target = self._resource(new_resource_id or booking.primary_resource_id)
         service = self.db.get(Service, booking.service_id)
@@ -764,6 +856,14 @@ class BookingEngine:
         )
         if start == booking.start_datetime and target.id == booking.primary_resource_id:
             raise BookingRejected("NO_CHANGE", "Choose a different time or resource", status_code=422)
+        paid = booking.payment_id is not None
+        if paid and not self.can_manage and offering.total_price(booking.quantity) != booking.price:
+            raise BookingRejected(
+                "PRICE_CHANGES",
+                f"This booking is paid, so it can only move to a time or person with the same price ({booking.price:.2f}). "
+                "Cancel it and book again instead.",
+                status_code=422,
+            )
 
         policy_overridden = False
         deadline = booking.start_datetime - timedelta(minutes=self.rules.rescheduling_window)
@@ -814,6 +914,9 @@ class BookingEngine:
             series_id=booking.recurring_series_id,
             hold=released,  # what held its time before still does, e.g. a booking waiting for its customer
         )
+        if paid:
+            # The payment follows the booking, at the price that was paid.
+            replacement.payment_id, replacement.price = booking.payment_id, booking.price
         self._flush()
 
         audit.record(
@@ -885,6 +988,8 @@ class BookingEngine:
                 "This booking is waiting for the customer to confirm or delete it in the booking assistant",
                 status_code=409,
             )
+        if self._awaiting_payment(booking_id):
+            raise BookingRejected("AWAITING_PAYMENT", "The customer is paying for this booking online", status_code=409)
         booking = self._locked(self.get_visible_booking(booking_id))
         old = booking.status
         if booking.status == S.WAITLISTED:

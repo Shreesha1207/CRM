@@ -195,6 +195,7 @@ export function Layout() {
           { to: "/book", label: "Book" },
           { to: "/bookings", label: "My bookings" },
           { to: "/chat", label: "Assistant" },
+          { to: "/connections", label: "AI apps" },
         ]
       : []),
   ];

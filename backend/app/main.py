@@ -17,13 +17,20 @@ from app.api.routes import (
     bookings,
     catalog,
     chat,
+    connections,
     invitations,
+    mcp,
     notifications,
+    oauth,
+)
+from app.api.routes import (
+    payments as payment_routes,
 )
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.jobs import runner
 from app.services import invitations as invitation_service
+from app.services import payments
 from app.services.notifications import register_handlers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -33,6 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     register_handlers()
     invitation_service.register_handlers()
+    payments.register_handlers()
     task = asyncio.create_task(runner.run_forever()) if get_settings().run_background_jobs else None
     yield
     if task:
@@ -45,6 +53,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     register_handlers()
     invitation_service.register_handlers()
+    payments.register_handlers()
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",
@@ -88,8 +97,9 @@ def create_app() -> FastAPI:
     def health() -> dict:
         return {"status": "ok"}
 
-    for module in (auth, catalog, bookings, invitations, notifications, chat, admin_catalog, admin_schedules, admin_bookings, admin_system, admin_help):
+    for module in (auth, catalog, bookings, invitations, notifications, chat, admin_catalog, admin_schedules, admin_bookings, admin_system, admin_help, payment_routes, oauth, connections, mcp):
         app.include_router(module.router)
+    app.include_router(payment_routes.admin_router)
     return app
 
 

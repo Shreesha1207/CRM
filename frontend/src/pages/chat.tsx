@@ -24,6 +24,7 @@ const FEATURES = [
   ["See what's free", "Free times across the week, for any service or person."],
   ["Move or cancel", "Change a booking by asking; nothing changes until you confirm."],
   ["Answers about us", "Opening hours, prices and policies, any time."],
+  ["From your own AI", "Connect Claude, ChatGPT, Gemini or a Siri Shortcut to book the same way. They ask before every change."],
 ] as const;
 
 export function ChatUpgradePage() {
@@ -116,6 +117,7 @@ function outcome(card: ChatCard): string {
   if (card.status === "FAILED") return card.result_message ?? "That didn't work, so nothing changed.";
   if (card.status === "EXPIRED") return card.kind === "HOLD" ? "Not confirmed in time, so the time was released." : "This offer expired; nothing changed.";
   if (card.status === "DECLINED") return card.kind === "HOLD" ? "Deleted. The time is free again." : "Kept as it was.";
+  if (card.kind === "HOLD" && card.payment?.status === "PENDING") return card.payment.checkout_url ? "Confirmed. Pay to book it; the time is held until then." : "Not paid in time, so the time was released.";
   if (card.kind === "HOLD") return card.booking_status === "PENDING" ? "Booked. The business will confirm it shortly." : "Booked. A confirmation is on its way to your inbox.";
   return card.kind === "RESCHEDULE" ? "Moved. You'll get an e-mail with the new time." : "Cancelled.";
 }
@@ -232,10 +234,18 @@ export function BookingCard({ card, onAnswered }: { card: ChatCard; onAnswered: 
       ) : (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm">
           <span className={status === "FAILED" ? "text-danger-text" : "text-muted"}>{outcome({ ...card, status })}</span>
-          {status === "CONFIRMED" && card.kind !== "CANCEL" && card.booking_id && (
-            <Link to={`/bookings/${card.booking_id}`} className={linkClass}>
-              View booking
+          {status === "CONFIRMED" && card.payment?.checkout_url ? (
+            <Link to={`/pay/${card.payment.id}`} className={buttonClass("primary", "sm")}>
+              Pay {card.payment.amount} {card.payment.currency} now
             </Link>
+          ) : (
+            status === "CONFIRMED" &&
+            card.kind !== "CANCEL" &&
+            card.booking_id && (
+              <Link to={`/bookings/${card.booking_id}`} className={linkClass}>
+                View booking
+              </Link>
+            )
           )}
         </div>
       )}

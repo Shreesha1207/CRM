@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 from app.api.deps import DB, CurrentUser
 from app.api.serializers import booking_out, bookings_out
 from app.core.errors import BookingRejected, NotFound
+from app.core.permissions import is_staff
 from app.core.timeutils import utcnow
 from app.jobs.runner import dispatch_notifications
 from app.models import Booking, Resource
@@ -93,7 +94,8 @@ def scope_filter(stmt, scope: Scope, now):
 @router.post("", response_model=BookingOut, status_code=status.HTTP_201_CREATED)
 def create_booking(body: BookingCreateIn, user: CurrentUser, db: DB, background: BackgroundTasks) -> BookingOut:
     engine = BookingEngine(db, user)
-    booking = create_with_auto_assign(engine, body, user_id=user.id)
+    # Customers pay online for their own bookings when the business takes payment that way.
+    booking = create_with_auto_assign(engine, body, user_id=user.id, pay_online=engine.rules.online_payments and not is_staff(user.role))
     background.add_task(dispatch_notifications)
     return booking_out(db, booking, user, engine.rules, engine.now)
 

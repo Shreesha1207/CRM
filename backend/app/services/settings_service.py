@@ -4,6 +4,7 @@ Keeping these out of code is what lets one engine serve a clinic, a gym and a
 meeting-room system with no code changes.
 """
 
+import re
 import uuid
 from dataclasses import dataclass, fields
 from typing import Any
@@ -42,6 +43,12 @@ SETTING_DEFINITIONS: dict[str, tuple[Any, str]] = {
         "Admins may delete a customer account once it has been Inactive this many days. "
         "0 = only super admins delete accounts.",
     ),
+    "online_payments": (
+        False,
+        "Customers pay online when they book for themselves (website, assistant and connected AI apps). "
+        "The gateway is a demo until a real one is connected: nothing is charged.",
+    ),
+    "currency": ("USD", "Currency of prices and online payments, as a 3-letter code (USD, EUR, INR...)."),
     "assistant_knowledge": (
         "",
         "Facts and policies the booking assistant may use to answer customers' questions "
@@ -71,6 +78,8 @@ class BookingRules:
     pending_consumes_capacity: bool
     enforce_operating_hours: bool
     reminder_offsets: list[int]
+    online_payments: bool
+    currency: str
 
 
 class SettingsValidationError(ValueError):
@@ -111,6 +120,10 @@ def _coerce(key: str, value: Any) -> Any:
         raise SettingsValidationError(f"{key} must be a non-empty string")
     if key == "default_timezone" and not is_valid_timezone(value):
         raise SettingsValidationError(f"Unknown timezone: {value}")
+    if key == "currency":
+        if not re.fullmatch(r"[A-Za-z]{3}", value.strip()):
+            raise SettingsValidationError("currency must be a 3-letter code such as USD, EUR or INR")
+        return value.strip().upper()
     return value.strip()
 
 

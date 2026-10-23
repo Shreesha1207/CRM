@@ -33,6 +33,7 @@ from app.schemas import (
     TokenOut,
 )
 from app.services import accounts, audit
+from app.services.agents import oauth
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 log = logging.getLogger("auth")
@@ -52,6 +53,8 @@ def _start_session(db: DB, user: User, request: Request, response: Response) -> 
     expires_at = utcnow() + timedelta(minutes=settings.access_token_ttl_minutes)
     session = AuthSession(
         user_id=user.id,
+        # On the application clock: connecting an AI assistant needs a recent sign-in.
+        created_at=utcnow(),
         expires_at=expires_at,
         user_agent=(request.headers.get("user-agent") or "")[:500],
         ip_address=request.client.host if request.client else None,
@@ -228,6 +231,8 @@ def reset_password(body: ResetPasswordIn, db: DB, background: BackgroundTasks) -
     )
     audit.record(db, actor_id=user.id, action="ACCOUNT_SET_UP" if setting_up else "PASSWORD_RESET", entity_type="user", entity_id=user.id)
     db.commit()
+    # Whoever had the account may have connected AI assistants to it: they stop too.
+    oauth.revoke_all(db, user.id, reason="password reset")
     if setting_up:
         background.add_task(accounts.send_welcome, user.id)
         return {"message": "Your account is ready. Please sign in."}

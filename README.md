@@ -134,7 +134,7 @@ GROQ_API_KEY=gsk_...
 - *Every message* passes rule checks (length, anything shaped like code) and Prompt Guard. Anything they stop never reaches the main model. Then comes the policy guard, a model that reads a written policy ("only this business's bookings") and must answer exactly `ALLOW` or `BLOCK`. To save time it runs while the main model reads the message, but nothing the model answers is stored, shown or acted on until the guard allows the message. A blocked message gets a fixed reply.
 - *Every reply* (and every button label) passes the rule checks and the policy guard before it is shown. A blocked reply is never shown: the whole turn is thrown away, anything it held is released, and the customer gets the fixed reply. Replies are therefore shown once checked (progress steps stream while it works), not word by word.
 - A guard that errors, times out or answers anything else counts as a block. Three blocked messages in 10 minutes pause the assistant for that customer for an hour and flag the conversation.
-- The model never sees SQL, tables or other customers: its only access is six fixed tools that take names and times, return small JSON and run as the signed-in customer. The browser sends only the new message; the server keeps and replays the history, so nobody can plant fake turns.
+- The model never sees SQL, tables or other customers: its only access is eight fixed tools that take names and times, return small JSON and run as the signed-in customer. The browser sends only the new message; the server keeps and replays the history, so nobody can plant fake turns.
 - Per-customer limits: `CHAT_MESSAGES_PER_MINUTE` (10), `CHAT_DAILY_MESSAGE_LIMIT` (60), `CHAT_DAILY_TOKEN_LIMIT` (500k), 40 messages per conversation, 8 tool rounds per message, one reply at a time per conversation.
 
 **Contacting the admin.** When a customer has a real problem the assistant can't solve (a double charge, a complaint, something that went wrong), they can pass it to the admin. Only the customer can start it, and only for a real problem:
@@ -163,10 +163,57 @@ docker run -d --name booking-eval-db -e POSTGRES_USER=booking -e POSTGRES_PASSWO
 cd backend && python -m app.chat_eval
 ```
 
+### Connect your own AI assistant (Claude, ChatGPT, Gemini, Siri, Meta Muse)
+
+Customers can also book from **their own** AI assistant, the way Claude's connectors work. The site is a standard remote **MCP server** at `https://<your site>/api/mcp`; every assistant that speaks MCP connects the same way. Customers manage them under **AI apps** (`/connections`): what each one did, its spending limit, Disconnect, and personal access tokens.
+
+**The assistant never touches the database.** Its only access is 20 fixed tools, run as that one customer through the same catalogue queries and booking engine as the website, so every booking rule applies and it can't see other customers, change the account or override anything:
+
+| Group | Tools |
+| --- | --- |
+| The business | `get_business_info` (today's date, time zone, policies, FAQ; called first), `list_services`, `get_service`, `list_resources`, `get_resource`, `list_locations` |
+| Free times | `check_availability`, `find_next_available`, `suggest_alternatives` |
+| The customer's own | `get_my_profile`, `list_my_bookings`, `get_booking`, `list_pending_actions`, `list_notifications` |
+| Changes | `hold_booking`, `propose_reschedule`, `propose_cancellation`, `confirm_action`, `discard_action`, `contact_admin` |
+
+**Changes take two steps.** `hold_booking`, `propose_reschedule`, `propose_cancellation` and `contact_admin` only prepare an action (a held time keeps its slot for `CHAT_HOLD_MINUTES`). The assistant reads it back (what, when with the time zone, where, the price) and calls `confirm_action` only after the customer says yes. Write tools are marked as such (MCP annotations), so Claude and ChatGPT also ask before running them.
+
+**How it is kept safe.**
+- *Sign-in.* Apps use OAuth 2.1: the app registers itself (dynamic client registration; https or loopback redirects only), sends the customer to this site's own consent page (`/oauth/authorize`), and swaps a one-time code for tokens with PKCE (S256). The app never sees the password. The consent page shows the app's name **and the host it returns to**, and needs a sign-in from the last 10 minutes. Every new connection or token is e-mailed to the customer ("Not you? Disconnect it").
+- *Tokens.* Random, stored only as SHA-256 hashes; access tokens last `AGENT_ACCESS_TOKEN_MINUTES` (60), refresh tokens `AGENT_REFRESH_TOKEN_DAYS` (30) and rotate; a code or refresh token used twice revokes the whole connection. Disconnecting, a password reset, deactivating the account or making it staff stops them at once.
+- *Scopes.* `catalog:read` and `bookings:read` always; `bookings:write` (changes) only if the customer allows it on the consent page. Personal tokens are read-only unless the customer ticks "allow changes", and last 30 or 90 days.
+- *Money.* `confirm_action` needs `expected_price`, the price the customer was told; any other amount is refused (`PRICE_MISMATCH`). Each connection has a **weekly spending limit** (50, 100 by default, 250, 500 or none, chosen on the consent page); a booking over it is refused and can be made on the website. With online payment on (below), confirming returns a link to this site's payment page: assistants never handle card details.
+- *Limits.* `AGENT_CALLS_PER_MINUTE` (30) and `AGENT_CHANGES_PER_HOUR` (20) per connection, the 2-hold limit shared with the chat, and the assistant subscription (the same demo paywall as the chat).
+- *Problems go to the admin exactly as from the chat:* `contact_admin` then `confirm_action` opens the same help request (one open, 3 a week, the 6-hour promise), and the admin sees the assistant's activity log as the transcript.
+- *Protocol.* Stateless Streamable HTTP with JSON responses (spec 2026-07-28, and `initialize` for 2025-03-26 … 2025-11-25 clients); `Mcp-Method`/`Mcp-Name` must match the body; an `Origin` header must be the site's own (DNS-rebinding protection); a missing token gets `401` with `WWW-Authenticate: Bearer resource_metadata=…`, which is how clients discover `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`.
+
+**Connecting each assistant** (as of October 2026; check each product's current settings):
+
+| Assistant | How |
+| --- | --- |
+| Claude (claude.ai, desktop) | Settings → Connectors → Add custom connector → `https://<your site>/api/mcp`. Claude's OAuth callback is `https://claude.ai/api/mcp/auth_callback` (registered automatically). |
+| ChatGPT | Settings → Apps & Connectors → add a custom MCP connector (developer mode) with OAuth. |
+| Gemini | Custom MCP servers work in Gemini Enterprise (added by an admin) and the Gemini CLI; consumer Gemini app support varies. Google Assistant's own Conversational Actions were shut down in 2023, so use Gemini. |
+| Siri | No connector support yet: create an access token, then an Apple Shortcut with **Get contents of URL** (POST to the MCP URL, header `Authorization: Bearer <token>`, body `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_my_bookings","arguments":{}}}`). Keep "Run when locked" off. |
+| Meta Muse | Add a custom connector for the MCP URL with an access token in Muse's credential store. |
+
+Claude and ChatGPT reach your server from the internet, so it must be public over HTTPS (`PUBLIC_URL`); for local testing use a tunnel (e.g. `cloudflared tunnel --url http://localhost:8080`) and set `PUBLIC_URL` to it. `npx @modelcontextprotocol/inspector` works against `http://localhost:5173/api/mcp` for development.
+
+### Online payment (demo gateway)
+
+Off by default: bookings are paid at the venue, as before. With **Admin → Settings → `online_payments`** on (and `currency` set), a customer's own booking (website, chat or connected assistant) is held as *pending* while they pay on `/pay/<id>`, and confirmed once paid; unpaid bookings are released after `PAYMENT_WINDOW_MINUTES` (15) without any e-mail. A paid booking that is cancelled becomes **Refund due**: the customer is told, admins see it at the top of Admin → Bookings and refund it with the provider, then press **Mark refunded** (audited; the customer is told). A paid booking can be moved only to a time or person with the same price. Bookings an admin makes for a customer, invitations, recurring series and waitlist places stay pay-at-venue.
+
+The only gateway so far is **demo**: its Pay button charges nothing. Its callback, `POST /api/payments/webhook/demo`, is signed like a real gateway's (HMAC-SHA256 of the body in `X-Demo-Signature`, with `PAYMENT_WEBHOOK_SECRET`), and both go through the same `payments.mark_paid`. **To connect a real gateway** (Razorpay, Stripe…), add a class to `backend/app/services/payments.py` with the two methods of `PaymentProvider`:
+
+1. `checkout_url(payment)`: create the provider's hosted checkout for `payment.amount` / `payment.currency` (reference `payment.id`) and return its URL;
+2. `parse_webhook(body, headers)`: verify the provider's signature and return the payment id, the provider's reference and whether it was paid;
+
+then register it in `PROVIDERS`, set `PAYMENT_PROVIDER=<name>` and `PAYMENT_WEBHOOK_SECRET`, and point the provider's webhook at `/api/payments/webhook/<name>`. The demo Pay button disappears by itself.
+
 ### Tests
 
 ```bash
-cd backend && pytest            # 242 tests, against a real PostgreSQL database
+cd backend && pytest            # 359 tests, against a real PostgreSQL database
 cd frontend && npm test         # unit tests for prices, booking lengths and the chat's event stream
 cd frontend && npm run build    # type-check + production build
 ```
@@ -218,7 +265,9 @@ backend/app/
     settings_service.py  runtime-configurable booking rules
     reports.py, audit.py, events.py
     chat/                the booking assistant: guards, model, tools, held bookings, one turn
-  api/routes/  auth, catalog (public), bookings, notifications, chat, admin_*
+    agents/              customers' own AI assistants: OAuth and tokens, the 20 MCP tools, JSON-RPC
+    payments.py          online payment behind a provider seam (demo gateway), refunds due
+  api/routes/  auth, catalog (public), bookings, notifications, chat, oauth, connections, mcp, payments, admin_*
   jobs/        background loop (single-runner via PostgreSQL advisory lock)
   seed.py      demo data
 ```
@@ -230,7 +279,8 @@ frontend/src/
   api/          fetch client (CSRF header, typed errors) + TypeScript API types
   auth/         session context and route guards
   components/   UI kit, layout, slot picker, booking widgets
-  pages/        public, account (dashboard, bookings, profile), book (wizard), chat (assistant + demo paywall)
+  pages/        public, account (dashboard, bookings, profile), book (wizard), chat (assistant + demo paywall),
+                connect (AI apps: consent page, connections, tokens), pay (checkout)
   pages/admin/  overview, calendar (day/week/month), bookings, conflicts,
                 resources, services, schedules, locations, users, settings, audit
 ```
@@ -339,7 +389,7 @@ The booking engine publishes domain events (`booking.created`, `.cancelled`, `.r
 
 ## Configuration
 
-**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`, and for the booking assistant `GROQ_API_KEY`, `CHAT_MODEL` and `GUARD_*`. `docker compose` takes `DATABASE_URL`, `JWT_SECRET`, `EMAIL_BACKEND`, the `SMTP_*` values and the assistant's settings (`GROQ_API_KEY`, `CHAT_MODEL`, `GUARD_*`) from `.env` in the repository root (see `.env.example`).
+**Process settings** are environment variables; see `backend/.env.example`. The main ones are `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECURE`, `CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_BACKEND` and `SMTP_*`, and for the booking assistant `GROQ_API_KEY`, `CHAT_MODEL` and `GUARD_*`, for connected assistants `PUBLIC_URL` and `AGENT_*`, and for payments `PAYMENT_*`. `docker compose` takes `DATABASE_URL`, `JWT_SECRET`, `EMAIL_BACKEND`, the `SMTP_*` values and the assistant's settings (`GROQ_API_KEY`, `CHAT_MODEL`, `GUARD_*`) from `.env` in the repository root (see `.env.example`).
 
 **Booking rules** live in the `settings` table. Admins edit them live under Admin → Settings:
 
@@ -355,6 +405,7 @@ The booking engine publishes domain events (`booking.created`, `.cancelled`, `.r
 | `pending_consumes_capacity` | true | Whether `PENDING` holds the slot |
 | `enforce_operating_hours` | true | Intersect with operating hours |
 | `reminder_offsets` | [1440, 60] | Reminder times (minutes before start) |
+| `online_payments`, `currency` | false, USD | Take payment online (demo gateway; see above) |
 | `default_timezone`, `business_name`, `max_recurring_occurrences` | | |
 
 ---
@@ -371,6 +422,8 @@ Interactive docs: `http://localhost:8000/api/docs` (development only).
 | Bookings | `POST/GET /api/bookings`, `GET /api/bookings/:id`, `POST /api/bookings/:id/cancel · reschedule`, `POST /api/bookings/recurring[/preview]` |
 | Notifications | `GET /api/notifications`, `GET /api/notifications/unread-count`, `POST /api/notifications/:id/read · read-all` |
 | Booking assistant | `GET/POST/DELETE /api/chat/subscription` (demo paywall), `GET/POST /api/chat/conversations`, `GET /api/chat/conversations/:id`, `POST /api/chat/conversations/:id/messages` (server-sent events: `status`, then the checked `reply`), `POST /api/chat/proposals/:id/confirm · decline`, `POST /api/chat/conversations/:id/help` (contact the admin), `POST /api/chat/messages/:id/feedback` |
+| Connected assistants | `POST /api/mcp` (MCP, bearer token), `GET /.well-known/oauth-protected-resource[/api/mcp]`, `GET /.well-known/oauth-authorization-server`, `POST /api/oauth/register · token · revoke`, `GET/POST /api/oauth/authorize[/info]` (the consent page), `GET /api/connections`, `PUT/DELETE /api/connections/:id`, `POST /api/connections/tokens` |
+| Payments | `GET /api/payments/:id`, `POST /api/payments/:id/demo/complete · cancel`, `POST /api/payments/webhook/:provider`, `GET /api/admin/payments?status=REFUND_DUE`, `POST /api/admin/payments/:id/refunded` |
 | Admin: help requests | `GET /api/admin/help-requests?status=open\|resolved`, `GET /api/admin/help-requests/count`, `GET /api/admin/help-requests/:id` (audited), `POST /api/admin/help-requests/:id/resolve` |
 | Booking invitations | `GET /api/invitations/:token`, `POST /api/invitations/:token/accept · decline` (public; the e-mailed token is the credential) |
 | Admin: bookings | `GET/POST /api/admin/bookings`, `POST /api/admin/bookings/invite` (book for an e-mail with no account: the booking goes on the calendar as pending and the person is e-mailed a link to create an account and confirm it; declining cancels it), `GET/PUT /api/admin/bookings/:id`, `POST …/:id/cancel · reschedule · reassign · confirm · complete · no-show`, `GET …/:id/history` |
@@ -389,6 +442,6 @@ Bookings, recurring bookings and alternatives take an optional `duration_minutes
 
 ## Scope
 
-**Implemented (MVP and most of Phase 2):** authentication; users and admin with RBAC; resources with JSON metadata; services; resource-service overrides; operating hours; weekly availability; exceptions and special hours; dynamic slots; individual and capacity bookings; buffers; notice and advance windows; clash prevention (application and database); rescheduling; cancellation policy; waitlists; recurring bookings with per-occurrence validation; multi-resource bookings (atomic); schedule-change previews and conflict resolution; alternative suggestions; a customers' booking assistant (chat that books from a sentence, with guards outside the model and a demo paywall); multiple locations and timezones, each location linking to Google Maps (its own link, or a search for its address) on bookings, resource pages and booking e-mails; in-app and e-mail notifications with reminders; admin dashboard with utilization; day/week/month calendar; audit log.
+**Implemented (MVP and most of Phase 2):** authentication; users and admin with RBAC; resources with JSON metadata; services; resource-service overrides; operating hours; weekly availability; exceptions and special hours; dynamic slots; individual and capacity bookings; buffers; notice and advance windows; clash prevention (application and database); rescheduling; cancellation policy; waitlists; recurring bookings with per-occurrence validation; multi-resource bookings (atomic); schedule-change previews and conflict resolution; alternative suggestions; a customers' booking assistant (chat that books from a sentence, with guards outside the model and a demo paywall); customers' own AI assistants connected over MCP (OAuth or access tokens, 20 tools, two-step changes, price lock and spending limits); online payment through a provider seam, with a demo gateway and manual refunds; multiple locations and timezones, each location linking to Google Maps (its own link, or a search for its address) on bookings, resource pages and booking e-mails; in-app and e-mail notifications with reminders; admin dashboard with utilization; day/week/month calendar; audit log.
 
-**Not implemented (Phase 2 remainder):** payments and refunds (the assistant's paywall is a demo), reviews, SMS/push delivery providers, advanced reporting beyond utilization, and scoping `RESOURCE_OWNER` to their own resources (the role and permission hooks exist).
+**Not implemented (Phase 2 remainder):** a real payment gateway and automatic refunds (the payment gateway and the assistant's paywall are demos), reviews, SMS/push delivery providers, advanced reporting beyond utilization, and scoping `RESOURCE_OWNER` to their own resources (the role and permission hooks exist).

@@ -14,6 +14,8 @@ import { AdminSchedulesPage } from "./pages/admin/schedules";
 import { AdminAuditPage, AdminSettingsPage, AdminUsersPage } from "./pages/admin/system";
 import { BookPage } from "./pages/book";
 import { ChatPage, ChatUpgradePage } from "./pages/chat";
+import { ConnectionsPage, OAuthAuthorizePage } from "./pages/connect";
+import { PayPage } from "./pages/pay";
 import {
   ForgotPasswordPage,
   HomePage,
@@ -84,6 +86,10 @@ export function App() {
         <Route path="profile" element={<RequireAuth customer><ProfilePage /></RequireAuth>} />
         <Route path="chat" element={<RequireAuth customer><ChatPage /></RequireAuth>} />
         <Route path="chat/upgrade" element={<RequireAuth customer><ChatUpgradePage /></RequireAuth>} />
+        <Route path="connections" element={<RequireAuth customer><ConnectionsPage /></RequireAuth>} />
+        {/* Where an AI app sends the customer to approve it (OAuth), and where bookings are paid. */}
+        <Route path="oauth/authorize" element={<RequireAuth customer><OAuthAuthorizePage /></RequireAuth>} />
+        <Route path="pay/:id" element={<RequireAuth customer><PayPage /></RequireAuth>} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

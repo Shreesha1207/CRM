@@ -106,6 +106,11 @@ class NotificationType(StrEnum):
     # To the customer: the request was received, and later resolved.
     CHAT_HELP_RECEIVED = "CHAT_HELP_RECEIVED"
     CHAT_HELP_RESOLVED = "CHAT_HELP_RESOLVED"
+    # Security notice: an AI assistant was connected to the account, or a token made for one.
+    AGENT_CONNECTED = "AGENT_CONNECTED"
+    # A paid booking was cancelled (to the customer and the admins), and the refund was made.
+    PAYMENT_REFUND_DUE = "PAYMENT_REFUND_DUE"
+    PAYMENT_REFUNDED = "PAYMENT_REFUNDED"
 
 
 class InvitationStatus(StrEnum):
@@ -162,3 +167,30 @@ class ChatProposalStatus(StrEnum):
     DECLINED = "DECLINED"
     EXPIRED = "EXPIRED"
     FAILED = "FAILED"
+
+
+class AgentConnectionKind(StrEnum):
+    # An AI app the customer approved on the consent page (OAuth).
+    OAUTH = "OAUTH"
+    # A personal access token the customer made, e.g. for a Siri Shortcut.
+    TOKEN = "TOKEN"
+
+
+class AgentTokenKind(StrEnum):
+    # A one-time authorization code, exchanged for the first tokens.
+    CODE = "CODE"
+    ACCESS = "ACCESS"
+    REFRESH = "REFRESH"
+
+
+class PaymentStatus(StrEnum):
+    # Waiting for the customer to pay; the booking holds its time until expires_at.
+    PENDING = "PENDING"
+    PAID = "PAID"
+    # Not paid in time: the booking was released.
+    EXPIRED = "EXPIRED"
+    # The customer gave up before paying.
+    CANCELLED = "CANCELLED"
+    # Paid, then the booking was cancelled: the business owes a refund.
+    REFUND_DUE = "REFUND_DUE"
+    REFUNDED = "REFUNDED"

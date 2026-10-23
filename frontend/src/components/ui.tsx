@@ -192,6 +192,7 @@ const STATUS_DOTS: Record<string, string> = {
   PENDING: "bg-amber-500",
   INVITED: "bg-amber-500",
   AWAITING_CUSTOMER: "bg-amber-500",
+  AWAITING_PAYMENT: "bg-amber-500",
   WAITLISTED: "bg-sky-500",
   CONFLICTED: "bg-red-500",
   SUSPENDED: "bg-red-500",

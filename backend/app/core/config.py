@@ -81,6 +81,27 @@ class Settings(BaseSettings):
     chat_help_response_hours: int = 6
     chat_help_requests_per_week: int = 3
 
+    # Connected AI assistants (MCP). The public address of the site, as the assistants
+    # reach it: it names the MCP endpoint and the OAuth issuer. Empty = FRONTEND_URL,
+    # since the SPA and the API share one origin behind nginx.
+    public_url: str | None = None
+    agent_access_token_minutes: int = 60
+    agent_refresh_token_days: int = 30
+    agent_calls_per_minute: int = 30
+    agent_changes_per_hour: int = 20
+
+    # Online payment for bookings (switched on by an admin in the settings).
+    # Only "demo" exists until a real gateway is connected: see the README.
+    payment_provider: str = "demo"
+    # How long an unpaid booking keeps its time.
+    payment_window_minutes: int = 15
+    # Signs the provider's callbacks to /api/payments/webhook/<provider>.
+    payment_webhook_secret: str | None = None
+
+    @property
+    def site_url(self) -> str:
+        return (self.public_url or self.frontend_url).rstrip("/")
+
     @property
     def chat_configured(self) -> bool:
         return bool(self.groq_api_key and self.chat_model and self.guard_topic_model)

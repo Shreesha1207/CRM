@@ -24,6 +24,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, Timestamps, UUIDPk
 from app.models.enums import (
+    AgentConnectionKind,
+    AgentTokenKind,
     BookingStatus,
     BookingType,
     ChatHelpStatus,
@@ -36,6 +38,7 @@ from app.models.enums import (
     NotificationChannel,
     NotificationStatus,
     NotificationType,
+    PaymentStatus,
     RecordStatus,
     RecurrenceFrequency,
     ResourceType,
@@ -283,6 +286,8 @@ class Booking(UUIDPk, Timestamps, Base):
     recurring_series_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("recurring_series.id", ondelete="SET NULL"), index=True
     )
+    # Paid online (or being paid). A reschedule copies it, so it follows the booking.
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("payments.id", ondelete="SET NULL"), index=True)
 
     user: Mapped[User] = relationship(foreign_keys=[user_id], lazy="joined")
     service: Mapped[Service] = relationship(lazy="joined")
@@ -432,6 +437,11 @@ class ChatConversation(UUIDPk, Timestamps, Base):
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     flagged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The hidden conversation of a connected AI assistant: its holds, offered changes
+    # and help requests live here, and its rows are that assistant's activity log.
+    agent_connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agent_connections.id", ondelete="CASCADE"), unique=True
+    )
 
 
 class ChatMessage(UUIDPk, Base):
@@ -525,4 +535,109 @@ class ChatProposal(UUIDPk, Timestamps, Base):
             unique=True,
             postgresql_where=text("kind = 'HOLD' AND status = 'PENDING'"),
         ),
+    )
+
+
+class AgentClient(UUIDPk, Base):
+    """An AI app that registered itself to ask customers for access (OAuth dynamic
+    client registration). Its id is the OAuth client_id.
+
+    The name is whatever the app said about itself, so the consent page also
+    shows the host it sends the customer back to.
+    """
+
+    __tablename__ = "agent_clients"
+
+    client_name: Mapped[str] = mapped_column(String(100))
+    redirect_uris: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    # "none" for public clients (PKCE only), or client_secret_post / client_secret_basic.
+    token_endpoint_auth_method: Mapped[str] = mapped_column(String(32), default="none")
+    client_secret_hash: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentConnection(UUIDPk, Base):
+    """A customer's AI assistant: an app they approved, or a personal access token.
+
+    It only ever acts as that customer, within `scopes`, and stops working the
+    moment it is revoked.
+    """
+
+    __tablename__ = "agent_connections"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    client_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("agent_clients.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[AgentConnectionKind] = mapped_column(_enum(AgentConnectionKind))
+    name: Mapped[str] = mapped_column(String(100))
+    scopes: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    # The most it may book for in 7 days; None = no limit.
+    weekly_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    client: Mapped[AgentClient | None] = relationship(lazy="joined")
+
+    __table_args__ = (
+        # Approving the same app again reuses its connection.
+        Index(
+            "uq_agent_connections_client",
+            "user_id",
+            "client_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL AND client_id IS NOT NULL"),
+        ),
+    )
+
+
+class AgentToken(UUIDPk, Base):
+    """A credential of a connection. Only its SHA-256 hash is stored.
+
+    CODE: the one-time authorization code (`payload` keeps the redirect URI,
+    the PKCE challenge and the scopes). ACCESS / REFRESH: what the app sends.
+    A personal token is an ACCESS token with a long expiry.
+    """
+
+    __tablename__ = "agent_tokens"
+
+    connection_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agent_connections.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[AgentTokenKind] = mapped_column(_enum(AgentTokenKind))
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True)
+    # The MCP endpoint it was issued for (RFC 8707), when the app said.
+    resource: Mapped[str | None] = mapped_column(String(500))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Payment(UUIDPk, Base):
+    """Money a customer pays online for a booking, through the payment provider.
+
+    PENDING holds the booking's time until `expires_at`; PAID confirms it. A paid
+    booking that is cancelled becomes REFUND_DUE until an admin marks it REFUNDED.
+    The row outlives the account (user_id is set to NULL), as financial records must.
+    """
+
+    __tablename__ = "payments"
+
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(3))
+    status: Mapped[PaymentStatus] = mapped_column(_enum(PaymentStatus), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    # The provider's own id for the payment, once it has one.
+    provider_ref: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refund_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refunded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    refund_note: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        Index("uq_payments_provider_ref", "provider", "provider_ref", unique=True, postgresql_where=text("provider_ref IS NOT NULL")),
+        CheckConstraint("amount > 0", name="amount_positive"),
     )

@@ -171,6 +171,12 @@ def _add_notice(db: Session, conversation: ChatConversation, text: str, request:
     )
 
 
+def _customer_link(conversation: ChatConversation) -> str:
+    """Where the customer follows their request: the chat, or, for one a connected
+    assistant sent, that assistant's activity under Connected apps."""
+    return "/connections" if conversation.agent_connection_id else f"/chat?c={conversation.id}"
+
+
 def request_help(db: Session, user: User, conversation: ChatConversation, summary: str) -> ChatHelpRequest:
     """Send the customer's problem and the whole chat to the admin, and tell the customer when to expect them."""
     summary = check_description(summary)
@@ -202,7 +208,7 @@ def request_help(db: Session, user: User, conversation: ChatConversation, summar
         title="Your request was passed to the admin",
         body=f"{text}\nYou wrote: {summary}",
         channels=IN_APP,
-        link=f"/chat?c={conversation.id}",
+        link=_customer_link(conversation),
         dedupe_key=f"chat-help-received:{request.id}",
     )
     contact = " · ".join(part for part in (user.email, user.phone) if part)
@@ -270,7 +276,8 @@ def resolve(db: Session, request: ChatHelpRequest, admin: User, note: str | None
     request.resolution_note = (note or "").strip() or None
     text = resolution_text(request)
     # The customer sees it in the chat they asked from, on the card they sent, and by e-mail.
-    _add_notice(db, db.get(ChatConversation, request.conversation_id), text, request)
+    conversation = db.get(ChatConversation, request.conversation_id)
+    _add_notice(db, conversation, text, request)
     card = db.scalar(
         select(ChatProposal).where(ChatProposal.kind == ChatProposalKind.HANDOFF, ChatProposal.payload["request_id"].astext == str(request.id))
     )
@@ -283,7 +290,7 @@ def resolve(db: Session, request: ChatHelpRequest, admin: User, note: str | None
         title="Your request to the admin was resolved",
         body=f"{text}\nYou wrote: {request.summary}",
         channels=BOTH,
-        link=f"/chat?c={request.conversation_id}",
+        link=_customer_link(conversation),
         dedupe_key=f"chat-help-resolved:{request.id}",
     )
     db.commit()

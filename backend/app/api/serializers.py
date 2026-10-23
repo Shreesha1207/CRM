@@ -9,19 +9,20 @@ from sqlalchemy.orm import Session
 
 from app.core.maps import google_maps_url
 from app.core.permissions import Permission, has_permission
-from app.models import Booking, Location, Resource, ResourceService, User
+from app.models import Booking, Location, Payment, Resource, ResourceService, User
 from app.models.enums import BookingStatus, BookingType
 from app.schemas import (
     BookingOut,
     LocationOut,
     LocationRef,
     OfferingOut,
+    PaymentRef,
     ResourceOut,
     ResourceRef,
     ServiceRef,
     UserRef,
 )
-from app.services import invitations
+from app.services import invitations, payments
 from app.services.availability import resource_timezone
 from app.services.booking_engine import OPEN_STATUSES
 from app.services.chat import holds
@@ -142,13 +143,19 @@ def bookings_out(
 
     waiting = invitations.awaiting_customer(db, ids)
     held = holds.held_in_chat(db, ids)
+    unpaid = payments.awaiting(db, ids)
+    payment_ids = {b.payment_id for b in bookings if b.payment_id}
+    paid: dict[uuid.UUID, Payment] = (
+        {p.id: p for p in db.scalars(select(Payment).where(Payment.id.in_(payment_ids)))} if payment_ids else {}
+    )
     out = []
     for b in bookings:
         resource = b.primary_resource
         can_cancel, can_reschedule = booking_permissions(b, actor, rules, now)
-        if b.id in held and b.status == BookingStatus.PENDING:
-            # Never confirmed: it can be deleted at any time, and only confirmed or deleted, not moved.
+        if (b.id in held or b.id in unpaid) and b.status == BookingStatus.PENDING:
+            # Never confirmed: it can be deleted at any time, and only confirmed (or paid for) or deleted, not moved.
             can_cancel, can_reschedule = (b.user_id == actor.id or has_permission(actor.role, Permission.BOOKINGS_MANAGE)), False
+        payment = paid.get(b.payment_id) if b.payment_id else None
         seen: set[uuid.UUID] = set()
         additional = []
         for a in b.allocations:
@@ -191,6 +198,8 @@ def bookings_out(
                 can_reschedule=can_reschedule,
                 awaiting_customer=b.id in waiting and b.status == BookingStatus.PENDING,
                 held_in_chat=b.id in held and b.status == BookingStatus.PENDING,
+                awaiting_payment=b.id in unpaid,
+                payment=PaymentRef.model_validate(payment, from_attributes=True) if payment is not None else None,
             )
         )
     return out
