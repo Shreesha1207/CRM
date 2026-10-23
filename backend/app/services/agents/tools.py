@@ -64,6 +64,11 @@ You are connected to the booking system of {business}, acting for one signed-in 
 - Call get_business_info first: it gives today's date, the time zone and the policies.
 - Pass names (services, people) as the customer said them: the tools match them, typos
   included, and return options when a name is unclear. Ask the customer; never guess.
+- Several people ("for 3 people", "me and two friends") is ONE booking at ONE time with
+  quantity set to the number of people, never several bookings, days or times. Group
+  sessions show places_left for each time. If a time shows your_booking, the customer is
+  already in that session: change that booking's places with propose_reschedule (places
+  = the new total) instead of booking again; ask whether they mean in total or more.
 - Changes take two steps. hold_booking, propose_reschedule, propose_cancellation and
   contact_admin only prepare an action. Read it back to the customer: what, when (with
   the time zone), where and the price. Only when they clearly say yes, call
@@ -226,20 +231,25 @@ def _price(db: Session, proposal: ChatProposal, card: dict[str, Any]) -> str | N
         return card.get("price")
     if proposal.kind == K.RESCHEDULE:
         return _money(_reschedule_price(db, proposal))
+    if proposal.kind == K.PLACES:
+        return card.get("price")
     return None
 
 
 def _action(db: Session, user: User, proposal: ChatProposal, now: datetime | None = None) -> dict[str, Any]:
     card = proposals.card(db, proposal, user, now)
-    kind = {K.HOLD: "new_booking", K.RESCHEDULE: "move", K.CANCEL: "cancellation", K.HANDOFF: "message_to_admin"}[proposal.kind]
+    kind = {K.HOLD: "new_booking", K.RESCHEDULE: "move", K.PLACES: "change_places", K.CANCEL: "cancellation",
+            K.HANDOFF: "message_to_admin"}[proposal.kind]  # fmt: skip
     out: dict[str, Any] = {"action_id": str(proposal.id), "kind": kind, "status": card["status"].lower(), "expires_at": card["expires_at"]}
     if proposal.kind == K.HANDOFF:
         out["summary"] = card.get("summary")
         return out
     if "when" in card:
-        out.update(service=card["service"], person=card["resource"], when=card["when"], place=card.get("place"))
+        out.update(service=card["service"], person=card["resource"], when=card["when"], place=card.get("place"), places=card.get("quantity"))
         if card.get("was"):
             out["was"] = card["was"]
+        if proposal.kind == K.PLACES:
+            out["places_was"] = card.get("places_was")
     price = _price(db, proposal, card)
     if price is not None:
         out.update(price=price, currency=settings_service.get_rules(db).currency)
@@ -307,12 +317,16 @@ def confirm_action(db: Session, user: User, ctx: ToolContext, args: ConfirmIn) -
                 "agree, call confirm_action again with it as expected_price. Nothing was changed.",
             )
     connection = db.get(AgentConnection, ctx.connection_id)
-    if proposal.kind == K.HOLD and price is not None and connection.weekly_spend_limit is not None:
+    adds = Decimal(price) if proposal.kind == K.HOLD and price is not None else Decimal(0)
+    if proposal.kind == K.PLACES and price is not None:
+        booking = db.get(Booking, proposal.booking_id)
+        adds = max(Decimal(price) - (booking.price or Decimal(0)), Decimal(0))
+    if adds and connection.weekly_spend_limit is not None:
         spent = spent_this_week(db, connection, now)
-        if spent + Decimal(price) > connection.weekly_spend_limit:
+        if spent + adds > connection.weekly_spend_limit:
             return _error(
                 "SPENDING_LIMIT",
-                f"This would take bookings made through {connection.name} this week to {spent + Decimal(price):.2f}, over the "
+                f"This would take bookings made through {connection.name} this week to {spent + adds:.2f}, over the "
                 f"customer's limit of {connection.weekly_spend_limit:.2f}. They can book it on the website, or raise the limit "
                 "under Connected apps. The time stays held until the hold expires.",
             )
@@ -338,7 +352,8 @@ def confirm_action(db: Session, user: User, ctx: ToolContext, args: ConfirmIn) -
         }  # fmt: skip
     if done.kind == K.HOLD and after.get("booking_status") == BookingStatus.PENDING.value:
         return {**result, "status": "waiting_for_business_approval", "booking": _summary(after)}
-    return {**result, "status": {K.HOLD: "booked", K.RESCHEDULE: "moved", K.CANCEL: "cancelled"}[done.kind], "booking": _summary(after)}
+    status = {K.HOLD: "booked", K.RESCHEDULE: "moved", K.PLACES: "changed", K.CANCEL: "cancelled"}[done.kind]
+    return {**result, "status": status, "booking": _summary(after)}
 
 
 def discard_action(db: Session, user: User, ctx: ToolContext, args: ActionIn) -> dict[str, Any]:
@@ -350,7 +365,7 @@ def discard_action(db: Session, user: User, ctx: ToolContext, args: ActionIn) ->
 
 
 def _summary(card: dict[str, Any]) -> dict[str, Any]:
-    return {k: card.get(k) for k in ("service", "resource", "when", "place", "price")} if "when" in card else {}
+    return {k: card.get(k) for k in ("service", "resource", "when", "place", "price", "quantity")} if "when" in card else {}
 
 
 # ---------------------------------------------------------------- results in an assistant's words
@@ -386,9 +401,18 @@ def _view(db: Session, user: User, ctx: ToolContext, result: dict[str, Any]) -> 
         out["next_step"] = "Several bookings match: ask the customer which one, then call the same tool again with its booking_id."
     elif out.get("found") is False:
         out["next_step"] = "Say you could not find that booking, and offer their upcoming bookings."
+    elif out.get("error") == "ALREADY_BOOKED" and out.get("your_booking"):
+        out["next_step"] = (
+            "Ask whether they mean that many people in total or that many more, then call propose_reschedule with this "
+            "booking_id and places set to the new total. Never book other days or times for the extra people."
+        )
     elif out.get("nearest_free"):
         out["next_step"] = "That time can't be booked. Offer the customer these nearest free times, then call the same tool again with the one they pick."
     return out
+
+
+def _places(action: dict[str, Any]) -> str:
+    return f", {action['places']} places" if (action.get("places") or 1) > 1 else ""
 
 
 def _log(db: Session, ctx: ToolContext, text: str, proposal_ids: list[uuid.UUID]) -> None:
@@ -414,7 +438,7 @@ def _activity(db: Session, user: User, ctx: ToolContext, name: str, tool: str, r
         what = proposals.summary(proposals.card(db, proposal, user)) if proposal is not None else "an action"
         if proposal is not None and proposal.kind == K.HANDOFF:
             what = "the message to the admin"
-        verb = {"booked": "booked", "moved": "moved", "cancelled": "cancelled", "sent": "sent", "discarded": "discarded",
+        verb = {"booked": "booked", "moved": "moved", "changed": "changed", "cancelled": "cancelled", "sent": "sent", "discarded": "discarded",
                 "awaiting_payment": "confirmed (waiting for payment)", "waiting_for_business_approval": "confirmed (waiting for approval)"}  # fmt: skip
         return f"{name} {verb.get(result.get('status'), 'could not confirm')} {what}."
     if result.get("error"):
@@ -425,7 +449,9 @@ def _activity(db: Session, user: User, ctx: ToolContext, name: str, tool: str, r
         at = f" on {when['date']}, {when['time']} ({when['zone']})" if when else ""
         price = f", {action['price']} {action['currency']}" if action.get("price") else ""
         lines.append({
-            "new_booking": f"{name} held {action.get('service')} with {action.get('person')}{at}{price}.",
+            "new_booking": f"{name} held {action.get('service')} with {action.get('person')}{at}{_places(action)}{price}.",
+            "change_places": f"{name} offered to change {action.get('service')}{at} from {action.get('places_was')} to "
+            f"{action.get('places')} places{price}.",
             "move": f"{name} offered to move {action.get('service')} to{at}{price}.",
             "cancellation": f"{name} offered to cancel {action.get('service')}{at}.",
             "message_to_admin": f"{name} wrote down a problem for the admin: {action.get('summary')}",
@@ -472,7 +498,7 @@ _DATE = {"type": "string", "description": "YYYY-MM-DD (get_business_info lists t
 _TIME = {"type": "string", "description": "HH:MM, 24-hour, local to the place of the booking"}
 _NAME = {"type": "string", "maxLength": 100, "description": "As the customer said it, or as listed; typos are fine"}
 _LENGTH = {"type": "integer", "minimum": 1, "description": "Only when the customer asked for a length: 'two hours' = 120"}
-_QTY = {"type": "integer", "minimum": 1, "description": "Places, for group sessions"}
+_QTY = {"type": "integer", "minimum": 1, "description": "How many people this ONE booking is for: 'for 3 people' = 3"}
 _WHICH = {
     "booking_id": {**_UUID, "description": "From list_my_bookings; or describe the booking instead"},
     "on_date": {**_DATE, "description": "The booking's date, if the customer said it"},
@@ -508,7 +534,8 @@ TOOLS = [
     AgentTool("find_next_available", "Find the next free time", "The earliest free times of a service (and optionally a person), "
               "looking up to 30 days ahead from from_date (default today).",
               {"properties": {"service": _NAME, "person": _NAME, "from_date": _DATE, "duration_minutes": _LENGTH, "quantity": _QTY,
-                              "count": {"type": "integer", "minimum": 1, "maximum": 10}}, "required": ["service"]},
+                              "count": {"type": "integer", "minimum": 1, "maximum": 10, "description": "How many free times to list (not people)"}},
+               "required": ["service"]},
               chat.NextFreeIn, chat.find_next_available, C, from_chat=True),
     AgentTool("suggest_alternatives", "Suggest alternatives", "Free times and people close to a time that is taken.",
               {"properties": {"service_id": _UUID, "resource_id": _UUID, "start": {"type": "string", "description": "YYYY-MM-DDTHH:MM, local"},
@@ -531,14 +558,17 @@ TOOLS = [
               NotificationsIn, list_notifications, R),
     # Changes: prepared here, carried out by confirm_action
     AgentTool("hold_booking", "Hold a booking", "Hold a new appointment for the customer for a few minutes; nothing is booked "
-              "until confirm_action. Pass the service and person as said; leave the person out for anyone free. When the time "
-              "is not free it returns the nearest free times; when a name is unclear, options.",
+              "until confirm_action. Pass the service and person as said; leave the person out for anyone free. For several "
+              "people it is ONE booking with quantity (\"yoga for 3\" = quantity 3). When the time is not free it returns the "
+              "nearest free times; when a name is unclear, options.",
               {"properties": {"service": _NAME, "date": _DATE, "time": _TIME, "person": _NAME, "duration_minutes": _LENGTH, "quantity": _QTY},
                "required": ["service", "date", "time"]},
               chat.BookIn, chat.book, W, read_only=False, from_chat=True),
-    AgentTool("propose_reschedule", "Offer to move a booking", "Prepare a change to one of the customer's bookings: its day, "
-              "time, person or length. Say which booking and only what changes. Nothing changes until confirm_action.",
-              {"properties": {**_WHICH, "new_date": _DATE, "new_time": _TIME, "person": _NAME, "duration_minutes": _LENGTH}},
+    AgentTool("propose_reschedule", "Change a booking", "Prepare a change to one of the customer's bookings: its day, time, "
+              "person, length, or how many people it is for (places = the new total, e.g. to add two friends to their yoga "
+              "class). Say which booking and only what changes. Nothing changes until confirm_action.",
+              {"properties": {**_WHICH, "new_date": _DATE, "new_time": _TIME, "person": _NAME, "duration_minutes": _LENGTH,
+                              "places": {"type": "integer", "minimum": 1, "description": "The new total number of people"}}},
               chat.MoveIn, chat.move, W, read_only=False, from_chat=True),
     AgentTool("propose_cancellation", "Offer to cancel a booking", "Prepare cancelling one of the customer's bookings. Nothing "
               "changes until confirm_action.", {"properties": _WHICH}, chat.WhichBookingIn, chat.cancel, W, read_only=False, from_chat=True),

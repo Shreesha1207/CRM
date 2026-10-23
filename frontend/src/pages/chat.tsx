@@ -106,7 +106,7 @@ function countdown(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-const KIND_LABEL = { HOLD: "Held for you", RESCHEDULE: "Move booking", CANCEL: "Cancel booking", HANDOFF: "Contact admin" } as const;
+const KIND_LABEL = { HOLD: "Held for you", RESCHEDULE: "Move booking", PLACES: "Change places", CANCEL: "Cancel booking", HANDOFF: "Contact admin" } as const;
 
 function outcome(card: ChatCard): string {
   if (card.kind === "HANDOFF") {
@@ -119,6 +119,7 @@ function outcome(card: ChatCard): string {
   if (card.status === "DECLINED") return card.kind === "HOLD" ? "Deleted. The time is free again." : "Kept as it was.";
   if (card.kind === "HOLD" && card.payment?.status === "PENDING") return card.payment.checkout_url ? "Confirmed. Pay to book it; the time is held until then." : "Not paid in time, so the time was released.";
   if (card.kind === "HOLD") return card.booking_status === "PENDING" ? "Booked. The business will confirm it shortly." : "Booked. A confirmation is on its way to your inbox.";
+  if (card.kind === "PLACES") return `Changed to ${card.quantity ?? ""} ${card.quantity === 1 ? "place" : "places"}. You'll get an e-mail with the details.`;
   return card.kind === "RESCHEDULE" ? "Moved. You'll get an e-mail with the new time." : "Cancelled.";
 }
 
@@ -171,6 +172,11 @@ export function BookingCard({ card, onAnswered }: { card: ChatCard; onAnswered: 
             {(card.quantity ?? 1) > 1 && <span className="font-normal text-muted"> ({card.quantity} places)</span>}
           </p>
           <p className="text-sm text-muted">with {card.resource}</p>
+          {card.kind === "PLACES" && card.places_was != null && (
+            <p className="mt-0.5 text-xs text-muted">
+              Was <span className="line-through">{card.places_was} {card.places_was === 1 ? "place" : "places"}</span>
+            </p>
+          )}
           {card.place && (
             <div className="mt-3">
               <p className="text-xs text-muted">Where</p>

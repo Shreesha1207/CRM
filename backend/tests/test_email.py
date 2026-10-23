@@ -36,7 +36,8 @@ class FakeSMTP:
         FakeSMTP.log.append(("login", username, password))
 
     def send_message(self, message):
-        FakeSMTP.log.append(("send", message["From"], message["To"], message["Subject"], message.get_content().strip()))
+        # Every e-mail is styled: the plain-text part is its fallback.
+        FakeSMTP.log.append(("send", message["From"], message["To"], message["Subject"], message.get_body(("plain",)).get_content().strip()))
 
 
 class FakeSMTPSSL(FakeSMTP):

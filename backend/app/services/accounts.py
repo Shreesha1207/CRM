@@ -52,27 +52,33 @@ def send_setup_link(db: Session, user: User, inviter: User) -> None:
     days = get_settings().invitation_ttl_days
     link = issue_password_link(db, user, ttl=timedelta(days=days), setup=True)
     business = settings_service.get_rules(db).business_name
-    send_email(
-        user.email,
-        f"Set up your {business} account",
-        f"Hi {user.name},\n\n{inviter.name} created a {business} account for you ({user.email}).\n\n"
-        f"Choose your password here to start using it (the link works for {days} days):\n{link}\n\n"
-        "If you were not expecting this, you can ignore this e-mail.",
-        from_name=business,
+    mail = booking_mail.notice_mail(
+        business=business,
+        subject=f"Set up your {business} account",
+        heading=f"Set up your {business} account",
+        intro=f"Hi {user.name}, {inviter.name} created an account for you ({user.email}).",
+        body=f"Choose your password to start using it. The link works for {days} days.",
+        button=(link, "Choose your password"),
+        footer="If you were not expecting this, you can ignore this e-mail.",
     )
+    send_email(user.email, mail.subject, mail.text, html=mail.html, from_name=business)
 
 
 def send_reset_link(db: Session, user: User) -> None:
     """E-mail a link to choose a new password (valid PASSWORD_RESET_TTL_MINUTES)."""
     minutes = get_settings().password_reset_ttl_minutes
     link = issue_password_link(db, user, ttl=timedelta(minutes=minutes))
-    send_email(
-        user.email,
-        "Reset your password",
-        f"Hi {user.name},\n\nUse this link to choose a new password "
-        f"(valid for {minutes} minutes):\n{link}\n\n"
-        "If you did not ask for this, ignore this e-mail.",
+    business = settings_service.get_rules(db).business_name
+    mail = booking_mail.notice_mail(
+        business=business,
+        subject="Reset your password",
+        heading="Reset your password",
+        intro=f"Hi {user.name},",
+        body=f"Use the button to choose a new password. The link works for {minutes} minutes.",
+        button=(link, "Choose a new password"),
+        footer="If you did not ask for this, ignore this e-mail: your password stays as it is.",
     )
+    send_email(user.email, mail.subject, mail.text, html=mail.html, from_name=business)
 
 
 def set_status(user: User, status: UserStatus) -> None:
@@ -140,13 +146,16 @@ def close_own_account(db: Session, user: User) -> None:
     erase(db, user, actor_id=None, action="ACCOUNT_DELETED_BY_OWNER")
     db.commit()
     try:
-        send_email(
-            email,
-            f"Your {business} account has been deleted",
-            f"Hi {name},\n\nAs you asked, your {business} account ({email}) and its booking history have been deleted, "
-            "and any upcoming bookings were cancelled.\n\nIf you did not do this, reply to this e-mail.",
-            from_name=business,
+        mail = booking_mail.notice_mail(
+            business=business,
+            subject=f"Your {business} account has been deleted",
+            heading="Your account has been deleted",
+            intro=f"Hi {name},",
+            body=f"As you asked, your {business} account ({email}) and its booking history have been deleted, "
+            "and any upcoming bookings were cancelled.",
+            footer="If you did not do this, reply to this e-mail.",
         )
+        send_email(email, mail.subject, mail.text, html=mail.html, from_name=business)
     except Exception:
         log.exception("Could not send the account deletion e-mail")
 

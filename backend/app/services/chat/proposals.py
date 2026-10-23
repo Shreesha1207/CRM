@@ -1,7 +1,7 @@
 """The cards the assistant shows, and what the customer's Confirm / Delete / Decline does.
 
 A HOLD card is a booking the assistant already made and holds for the customer.
-RESCHEDULE and CANCEL cards change an existing booking only when confirmed.
+RESCHEDULE, PLACES and CANCEL cards change an existing booking only when confirmed.
 Every change runs through the booking engine as the customer.
 """
 
@@ -18,7 +18,7 @@ from app.core.timeutils import utcnow
 from app.models import Booking, ChatConversation, ChatProposal, Payment, Resource, User
 from app.models.enums import BookingStatus, ChatProposalKind, ChatProposalStatus, PaymentStatus
 from app.services import booking_mail, payments, settings_service
-from app.services.availability import resource_timezone
+from app.services.availability import resolve_offering, resource_timezone
 from app.services.booking_engine import BookingEngine
 from app.services.notifications import _clock
 
@@ -40,6 +40,18 @@ def _when(start: datetime, end: datetime, zone) -> dict[str, str]:
 
 def _facts_when(facts: booking_mail.Facts) -> dict[str, str]:
     return {"date": facts.when.date, "time": facts.when.time, "zone": facts.when.zone}
+
+
+def places_price(db: Session, booking: Booking, quantity: int):
+    """What a booking costs for this many places (a group session charges per place).
+    A paid booking keeps the price that was paid."""
+    if booking.payment_id is not None:
+        return booking.price
+    try:
+        offering = resolve_offering(db, booking.service, booking.primary_resource, settings_service.get_rules(db))
+    except AppError:
+        return booking.price
+    return offering.for_existing(booking.end_datetime - booking.start_datetime).total_price(quantity)
 
 
 def status_of(proposal: ChatProposal, now: datetime) -> ChatProposalStatus:
@@ -98,6 +110,12 @@ def card(db: Session, proposal: ChatProposal, user: User, now: datetime | None =
             "expires_at": payment.expires_at.isoformat(),
             "checkout_url": payments.checkout_url(payment) if unpaid else None,
         }
+    if proposal.kind == K.PLACES:
+        # The booking as it will be (or, once confirmed, is), and how many places it had.
+        out["places_was"] = proposal.payload.get("from")
+        if status == P.PENDING:
+            out["quantity"] = proposal.payload["quantity"]
+            out["price"] = _money(places_price(db, booking, proposal.payload["quantity"]))
     if proposal.kind == K.RESCHEDULE and result is None:
         # Not moved yet: show the new time, and the current one as "was".
         target = db.get(Resource, uuid.UUID(proposal.payload["resource_id"])) or booking.primary_resource
@@ -169,6 +187,9 @@ def confirm(db: Session, proposal_id: uuid.UUID, user: User, summary: str | None
             )
             proposal = db.get(ChatProposal, pid)
             proposal.result_booking_id = moved.id
+        elif proposal.kind == K.PLACES:
+            engine.change_places(proposal.booking_id, int(proposal.payload["quantity"]))
+            proposal = db.get(ChatProposal, pid)
         else:
             engine.cancel(proposal.booking_id, reason="Cancelled with the booking assistant")
             proposal = db.get(ChatProposal, pid)
@@ -265,6 +286,14 @@ def report(db: Session, conversation_id: uuid.UUID, user: User, now: datetime) -
                     )
                 else:
                     text = f"The customer confirmed {what}. It now waits for the business to approve it."
+        elif proposal.kind == K.PLACES:
+            places = f"{proposal.payload.get('from')} to {proposal.payload['quantity']} places"
+            text = {
+                P.CONFIRMED: f"The customer confirmed changing {what} from {places}. Done.",
+                P.DECLINED: f"The customer declined changing {what} from {places}. Nothing changed.",
+                P.EXPIRED: f"The offer of changing {what} from {places} expired. Nothing changed.",
+                P.FAILED: f"Changing {what} from {places} failed{message}. Nothing changed.",
+            }[status]
         else:
             verb = "moving" if proposal.kind == K.RESCHEDULE else "cancelling"
             text = {

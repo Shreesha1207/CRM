@@ -950,6 +950,56 @@ class BookingEngine:
         self._commit()
         return replacement
 
+    def change_places(self, booking_id: uuid.UUID, quantity: int) -> Booking:
+        """Change how many places (people) a booking is for, at the same time. A group session
+        charges per place; a paid booking keeps what was paid, so only staff may change its price."""
+        booking = self._get_modifiable(booking_id)
+        if quantity < 1:
+            raise BookingRejected("INVALID_QUANTITY", "Quantity must be at least 1", status_code=422)
+        if booking.status not in (S.PENDING, S.CONFIRMED):
+            raise BookingRejected("INVALID_STATUS_TRANSITION", f"A {booking.status.value.lower()} booking cannot be changed")
+        if self.open_chat_hold(booking.id) is not None or self._awaiting_payment(booking.id):
+            raise BookingRejected("AWAITING_CUSTOMER", "This booking is not confirmed yet: confirm or delete it first", status_code=409)
+        if quantity == booking.quantity:
+            raise BookingRejected("NO_CHANGE", "The booking is already for that many places", status_code=422)
+        deadline = booking.start_datetime - timedelta(minutes=self.rules.rescheduling_window)
+        if self.now >= booking.start_datetime or (self.now > deadline and not self.can_manage):
+            raise BookingRejected("RESCHEDULING_WINDOW_PASSED", "This booking can no longer be changed online")
+        offering = resolve_offering(self.db, booking.service, booking.primary_resource, self.rules).for_existing(
+            booking.end_datetime - booking.start_datetime
+        )
+        price = offering.total_price(quantity)
+        paid = booking.payment_id is not None
+        if paid and price != booking.price and not self.can_manage:
+            raise BookingRejected(
+                "PRICE_CHANGES", "This booking is paid, so its number of places can't change online. Cancel it and book again instead.",
+                status_code=422,
+            )  # fmt: skip
+        booking = self._locked(booking)
+        if quantity > booking.quantity:
+            # The extra places must fit, next to everyone else's.
+            result = self._check(
+                offering, booking.start_datetime, quantity=quantity, override_rules=False, exclude=[booking.id], ignore_notice=True, require_grid=False
+            )
+            if not result.available:
+                room = f" It has room for {result.remaining} in all." if result.remaining is not None else ""
+                raise BookingRejected(result.code, f"That session doesn't have room for {quantity} people.{room}", details={"remaining": result.remaining})
+        old = {"quantity": booking.quantity, "price": booking.price}
+        freed = quantity < booking.quantity
+        booking.quantity = quantity
+        if not paid:
+            booking.price = price
+        self._flush()
+        audit.record(
+            self.db, actor_id=self.actor.id, action="BOOKING_PLACES_CHANGED", entity_type="booking", entity_id=booking.id,
+            old=old, new={"quantity": quantity, "price": booking.price},
+        )  # fmt: skip
+        events.publish(self.db, "booking.places_changed", booking=booking, previous_places=old["quantity"])
+        if freed and booking.service.booking_type == BookingType.CAPACITY:
+            self._promote_waitlist(booking.primary_resource, booking.service, booking.start_datetime)
+        self._commit()
+        return booking
+
     def reassign(self, booking_id: uuid.UUID, resource_id: uuid.UUID, *, override_rules: bool = False, reason: str | None = None) -> Booking:
         if not self.can_manage:
             raise Forbidden()

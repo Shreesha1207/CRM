@@ -88,6 +88,8 @@ When an admin books for a customer:
 
 Booking e-mails (confirmed, moved, cancelled, reminders, and the invitation to a new customer) are HTML with a plain-text version. They say what was booked, when (with the time zone) and where, with an **Open in Google Maps** button, who booked it, and a **View booking** button. Each one is a separate conversation in Gmail (its own `Message-ID` and `X-Entity-Ref-ID`, and its own subject), so Gmail does not fold one into another as quoted text.
 
+Every other e-mail (password and account set-up links, help requests and their answers, refunds, "an app was connected" security notices, answers to invitations, a change to a booking's number of places, the test e-mail) uses the same page, card and buttons, without a calendar entry. Nothing is sent as plain text only: `send_email` lays out any text-only message in the same style, and the plain-text part is just the fallback for mail apps that can't show HTML.
+
 Confirmed and moved bookings are also a calendar invitation (a `text/calendar` part plus `invite.ics`), shaped like the ones Google Calendar sends, so Gmail, Outlook and Apple Mail show them with Yes / No / Maybe:
 
 - the customer answers **Yes** and the booking is in their calendar. Google Calendar adds invitations by itself only from senders the customer knows (its default since December 2025, under *Settings → Event settings → Add invitations to my calendar*); otherwise it shows them in Gmail to answer;
@@ -107,6 +109,7 @@ Customers get an **Assistant** link: a chat that books from a sentence, behind a
 3. It **books it straight away as a hold**: a `PENDING` booking that keeps the slot, so nobody else can take it, and sends no e-mail yet. All the usual rules are checked, through the same booking engine as the website, as that customer.
 4. The chat shows a card with the same details as the booking e-mails (date and time with the time zone, the service and who with, where with an **Open in Google Maps** button, the price, a countdown) and **Confirm** / **Delete**. Confirm sends the normal confirmation e-mail and calendar invitation; Delete frees the time without any e-mail. A hold nobody answers is released after `CHAT_HOLD_MINUTES` (default 10), and a customer can hold at most `CHAT_MAX_OPEN_HOLDS` (default 2) at once.
 5. Moving or cancelling an existing booking is only *offered* (a card with Confirm / Decline); nothing changes until the customer confirms. "Change that to Priya" right after a hold swaps the hold. Moving a 1-hour booking "for 2 hours" holds a new 2-hour session and offers to cancel the old one, because a move keeps a booking's length.
+6. Several people are **one booking with several places**: "yoga for 3" holds one booking for 3 places (a group session charges per place), never three bookings. Free times of group sessions show the places left, and a session the customer is already in is marked as theirs: "make it 3 of us" then offers to change that booking's places (a *Change places* card), since each customer has one booking per session. The change is checked against the places left, and the customer gets an e-mail with the new number.
 
 It also answers questions about the business from text an admin writes under **Admin → Settings → Booking assistant FAQ**.
 
@@ -174,7 +177,7 @@ Customers can also book from **their own** AI assistant, the way Claude's connec
 | The business | `get_business_info` (today's date, time zone, policies, FAQ; called first), `list_services`, `get_service`, `list_resources`, `get_resource`, `list_locations` |
 | Free times | `check_availability`, `find_next_available`, `suggest_alternatives` |
 | The customer's own | `get_my_profile`, `list_my_bookings`, `get_booking`, `list_pending_actions`, `list_notifications` |
-| Changes | `hold_booking`, `propose_reschedule`, `propose_cancellation`, `confirm_action`, `discard_action`, `contact_admin` |
+| Changes | `hold_booking` (several people = one booking with `quantity`), `propose_reschedule` (day, time, person, length, or `places`), `propose_cancellation`, `confirm_action`, `discard_action`, `contact_admin` |
 
 **Changes take two steps.** `hold_booking`, `propose_reschedule`, `propose_cancellation` and `contact_admin` only prepare an action (a held time keeps its slot for `CHAT_HOLD_MINUTES`). The assistant reads it back (what, when with the time zone, where, the price) and calls `confirm_action` only after the customer says yes. Write tools are marked as such (MCP annotations), so Claude and ChatGPT also ask before running them.
 
@@ -224,7 +227,7 @@ then register it in `PROVIDERS`, set `PAYMENT_PROVIDER=<name>` and `PAYMENT_WEBH
 ### Tests
 
 ```bash
-cd backend && pytest            # 359 tests, against a real PostgreSQL database
+cd backend && pytest            # 374 tests, against a real PostgreSQL database
 cd frontend && npm test         # unit tests for prices, booking lengths and the chat's event stream
 cd frontend && npm run build    # type-check + production build
 ```

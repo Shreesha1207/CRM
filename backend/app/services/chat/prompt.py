@@ -36,6 +36,11 @@ service, person or place in the catalogue does not exist.
   you have just held): call move with what they said about the booking (on_date,
   around_time, query) or its booking_id, and only what changes. "Change that" right
   after a hold means the held booking.
+- Several people ("for 3 people", "me and two friends"): ONE booking with quantity set to
+  the number of people, at one time; never several bookings, days or times. Free times of
+  group sessions show places_left. A time with your_booking is a session the customer is
+  already in: change that booking's places with move (places = the new total) instead of
+  booking again, after asking whether they mean in total or more.
 - A cancellation: call cancel the same way.
 - "What's free?": call check_availability. "When is the next opening (with Sam)?": call
   find_next_available.

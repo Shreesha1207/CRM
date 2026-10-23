@@ -516,7 +516,7 @@ export type ChatCardStatus = "PENDING" | "CONFIRMED" | "DECLINED" | "EXPIRED" | 
  * problem to the admin (HANDOFF). */
 export interface ChatCard {
   id: string;
-  kind: "HOLD" | "RESCHEDULE" | "CANCEL" | "HANDOFF";
+  kind: "HOLD" | "RESCHEDULE" | "PLACES" | "CANCEL" | "HANDOFF";
   status: ChatCardStatus;
   expires_at: string;
   result_message: string | null;
@@ -531,6 +531,8 @@ export interface ChatCard {
   map_url?: string | null;
   price?: string | null;
   booking_status?: BookingStatus;
+  /** PLACES: how many places the booking had before the change. */
+  places_was?: number | null;
   /** HOLD, when the business takes payment online: pay with checkout_url to book it. */
   payment?: { id: string; status: PaymentStatus; amount: string; currency: string; expires_at: string; checkout_url: string | null };
   /** HANDOFF: the problem in the customer's words, and the reply time promised. */

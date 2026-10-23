@@ -92,17 +92,18 @@ def send_invitation(db: Session, invitation: BookingInvitation, inviter: User, t
         return
     # An invitation from before bookings were held: nothing is booked until they accept.
     details = describe(db, invitation)
-    lines = [
-        f"Hi,\n\n{inviter.name} asked to book the following for you:\n",
-        f"  Service: {details['service_name']}",
-        f"  With: {details['resource_name'] or 'the first available'}",
-        f"  When: {details['when']}",
-        "\nYou don't have an account yet. Create one to confirm the booking, or decline it, here "
-        f"(valid until {invitation.expires_at:%a %d %b %Y}):",
-        link(token),
-        "\nIf this is not for you, please decline it or ignore this e-mail.",
-    ]
-    send_email(invitation.email, f"{inviter.name} would like to book {details['service_name']} for you", "\n".join(lines))
+    business = settings_service.get_rules(db).business_name
+    mail = booking_mail.notice_mail(
+        business=business,
+        subject=f"{inviter.name} would like to book {details['service_name']} for you",
+        heading=f"{inviter.name} would like to book {details['service_name']} for you",
+        body=f"{details['service_name']} with {details['resource_name'] or 'the first available'}\n{details['when']}\n\n"
+        "You don't have an account yet. Create one to confirm the booking, or decline it "
+        f"(the link works until {invitation.expires_at:%a %d %b %Y}).",
+        button=(link(token), "Confirm or decline"),
+        footer="If this is not for you, please decline it or ignore this e-mail.",
+    )
+    send_email(invitation.email, mail.subject, mail.text, html=mail.html, from_name=business)
 
 
 def withdraw(db: Session, invitation: BookingInvitation, actor: User, reason: str) -> None:

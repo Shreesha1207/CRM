@@ -1,11 +1,16 @@
-"""The e-mails customers get about a booking, written to be useful on their own:
-what was booked, when, where (with a map button), a link to the booking, and a
-calendar invitation that puts the booking in their calendar, moves it when the
-booking moves and takes it out when the booking is cancelled.
+"""The e-mails the platform sends, all in one style.
+
+Booking e-mails are written to be useful on their own: what was booked, when,
+where (with a map button), a link to the booking, and a calendar invitation that
+puts the booking in their calendar, moves it when the booking moves and takes it
+out when the booking is cancelled. Every other e-mail (password links, help
+requests, refunds, security notices...) uses the same page, without a calendar
+entry. Nothing is ever sent as plain text only: the text part is the fallback.
 
 Rendered when the e-mail is sent, from the booking as it is then.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
@@ -15,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.maps import google_maps_url
+from app.core.permissions import is_staff
 from app.core.timeutils import utcnow
 from app.models import Booking, BookingInvitation, Notification, User
 from app.models.enums import BookingStatus, NotificationType
@@ -33,6 +39,7 @@ KINDS = {
     NotificationType.BOOKING_CANCELLED: "cancelled",
     NotificationType.BOOKING_REMINDER: "reminder",
     NotificationType.BOOKING_CREATED: "received",
+    NotificationType.BOOKING_UPDATED: "updated",
 }
 
 # What the customer is told about the calendar invitation the e-mail carries.
@@ -226,6 +233,7 @@ def render(db: Session, notification: Notification) -> BookingMail | None:
         "promoted": ("A place opened up: you're booked", f"You're booked: {service}, {short}"),
         "moved": ("Your booking has moved", f"Booking moved: {service}, now {short}"),
         "cancelled": ("Your booking was cancelled", f"Booking cancelled: {service}, {short}"),
+        "updated": ("Your booking has changed", f"Booking updated: {service}, {short}"),
         "reminder": (
             f"Your booking starts in {soon}" if soon else notification.title,
             f"Reminder: {service}, {short}" + (f" (in {soon})" if soon else ""),
@@ -246,6 +254,8 @@ def render(db: Session, notification: Notification) -> BookingMail | None:
         intro = "We will book you in and e-mail you if a place opens up."
     elif kind == "moved" and confirmed:
         intro = "The new time replaces the old one in your calendar."
+    elif kind == "updated":
+        intro = f"It is now for {booking.quantity} {'place' if booking.quantity == 1 else 'places'}. The time stays the same."
     elif kind == "cancelled":
         intro = "It comes off your calendar too." if booking.confirmed_at else ""
         if booking.cancellation_reason:
@@ -371,3 +381,97 @@ def welcome_mail(db: Session, user: User) -> BookingMail:
         ]
     )
     return BookingMail(subject=f"Welcome to {business}", text=text, html=html)
+
+
+# ---------------------------------------------------------------- every other e-mail
+
+
+_URL = re.compile(r"https?://[^\s<>\"]+")
+
+
+def _paragraphs(body: str) -> str:
+    """Plain text as HTML: paragraphs, line breaks kept, and links that can be clicked."""
+
+    def lines(text: str) -> str:
+        return "<br>".join(_URL.sub(lambda m: f'<a href="{m.group(0)}" style="color:{ACCENT}">{m.group(0)}</a>', escape(line)) for line in text.split("\n"))
+
+    blocks = [b.strip("\n") for b in re.split(r"\n\s*\n", body.strip()) if b.strip()]
+    return "".join(f'<p style="margin:{"12px" if i else "0"} 0 0;font-size:15px;line-height:1.5">{lines(b)}</p>' for i, b in enumerate(blocks))
+
+
+def notice_mail(
+    *,
+    business: str,
+    subject: str,
+    heading: str,
+    body: str,
+    footer: str,
+    intro: str = "",
+    button: tuple[str, str] | None = None,
+    secondary: tuple[str, str] | None = None,
+    card: str | None = None,
+) -> BookingMail:
+    """An e-mail that isn't about one booking's time, in the booking e-mails' style: the text
+    in a card (or `card`, trusted HTML), and a button. No calendar entry. `button` is (link, label)."""
+    content = f'<div style="background:#ffffff;border:1px solid #e4e1d9;border-radius:12px;padding:20px">{_paragraphs(body)}</div>' if body.strip() else ""
+    buttons = [_button(*button)] if button else []
+    if secondary:
+        buttons.append(_button(*secondary, primary=False))
+    html = _page(
+        business=business,
+        heading=heading,
+        intro=intro,
+        card=content + (f'<div style="margin-top:12px">{card}</div>' if card else ""),
+        buttons=buttons,
+        notes=[],
+        footer=footer,
+    )
+    text = [heading, "", *([intro, ""] if intro else []), body.strip()]
+    text += ["", *(f"{label}: {link}" for link, label in filter(None, (button, secondary)))] if button or secondary else []
+    return BookingMail(subject=subject, text="\n".join(text), html=html)
+
+
+# The button of each kind of notice: where its link (Notification.link) leads.
+BUTTONS = {
+    NotificationType.CHAT_HELP_REQUESTED: "Open the request",
+    NotificationType.CHAT_HELP_OVERDUE: "Open the request",
+    NotificationType.CHAT_HELP_RECEIVED: "Open",
+    NotificationType.CHAT_HELP_RESOLVED: "Open",
+    NotificationType.AGENT_CONNECTED: "Review connected apps",
+    NotificationType.PAYMENT_REFUND_DUE: "My bookings",
+    NotificationType.PAYMENT_REFUNDED: "My bookings",
+}
+
+
+def notification_mail(db: Session, notification: Notification, user: User) -> BookingMail:
+    """Any notification without an e-mail of its own (help requests, refunds, security
+    notices, answers to invitations...), in the same style. The booking it is about, if any,
+    is shown as the booking e-mails show it."""
+    business = settings_service.get_rules(db).business_name
+    base = get_settings().frontend_url.rstrip("/")
+    staff = is_staff(user.role)
+    button = None
+    if notification.link:
+        link = notification.link if notification.link.startswith("http") else f"{base}{notification.link}"
+        button = (link, BUTTONS.get(notification.type, "Open"))
+    booking = db.get(Booking, notification.booking_id) if notification.booking_id else None
+    card = None
+    if booking is not None:
+        card = _card(_facts(db, booking, booking.user_id))
+        if button is None:
+            button = (f"{base}/admin/bookings?open={booking.id}" if staff else booking_url(booking.id), "View booking")
+    footer = (
+        f"You are receiving this as a member of staff at {business}."
+        if staff
+        else f"You are receiving this because you have an account at {business} ({user.email})."
+    )
+    return notice_mail(
+        business=business, subject=notification.title, heading=notification.title, body=notification.body,
+        footer=footer, button=button, card=card,
+    )  # fmt: skip
+
+
+def styled(subject: str, body: str, business: str | None = None) -> str:
+    """The HTML of an e-mail a caller wrote as text only: never send plain text alone."""
+    name = business or get_settings().app_name
+    return notice_mail(business=name, subject=subject, heading=subject, body=body, footer=f"Sent by {name}.").html

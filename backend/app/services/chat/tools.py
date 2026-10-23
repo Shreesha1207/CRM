@@ -12,7 +12,7 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -27,10 +27,10 @@ from app.core.errors import AppError
 from app.core.timeutils import ensure_aware, get_zone, utcnow
 from app.db.session import SessionLocal
 from app.models import Booking, ChatProposal, Resource, Service, User
-from app.models.enums import BookingType, ChatProposalKind, ChatProposalStatus, RecordStatus
+from app.models.enums import BookingStatus, BookingType, ChatProposalKind, ChatProposalStatus, RecordStatus
 from app.schemas import BookingCreateIn
 from app.services import booking_mail, settings_service
-from app.services.availability import resource_timezone
+from app.services.availability import REASON_MESSAGES, resource_timezone
 from app.services.booking_engine import BookingEngine, ChatHold
 from app.services.chat import proposals
 from app.services.notifications import _clock
@@ -116,6 +116,7 @@ def catalogue(db: Session) -> dict[str, Any] | None:
                 "max_length_minutes": s.max_duration_minutes if s.booking_type == BookingType.INDIVIDUAL else None,
                 "rate_per_hour": _money(s.price),
                 "group_session": s.booking_type == BookingType.CAPACITY,
+                **({"places_per_session": s.capacity} if s.booking_type == BookingType.CAPACITY and s.capacity else {}),
                 "provided_by": [l.resource.name for l in _active_links(s)],
             }
             for s in services
@@ -154,6 +155,7 @@ def list_services(db: Session, user: User, ctx: ToolContext, args: ListServicesI
             "max_length_minutes": s.max_duration_minutes if flexible else None,
             "rate_per_hour": _money(s.price),
             "group_session": s.booking_type == BookingType.CAPACITY,
+            **({"places_per_session": s.capacity} if s.booking_type == BookingType.CAPACITY and s.capacity else {}),
             "resources": [{"id": str(l.resource.id), "name": l.resource.name} for l in _active_links(s)][:10],
         }
         if args.on_date is not None:
@@ -239,9 +241,28 @@ class FindSlotsIn(_In):
     rescheduling_booking_id: uuid.UUID | None = None
 
 
+def _own_sessions(db: Session, user: User, service_id: uuid.UUID, first: date, days: int) -> dict[datetime, Booking]:
+    """The customer's open bookings of a service around these days, by start: in a group
+    session they already have, they change their places rather than book again."""
+    since = datetime.combine(first - timedelta(days=1), time(), tzinfo=UTC)
+    until = datetime.combine(first + timedelta(days=days + 1), time(), tzinfo=UTC)
+    rows = db.scalars(
+        select(Booking).where(
+            Booking.user_id == user.id,
+            Booking.service_id == service_id,
+            Booking.status.in_([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.CONFLICTED, BookingStatus.WAITLISTED]),
+            Booking.start_datetime >= since,
+            Booking.start_datetime < until,
+        )
+    ).unique()
+    return {b.start_datetime: b for b in rows}
+
+
 def find_available_slots(db: Session, user: User, ctx: ToolContext, args: FindSlotsIn) -> dict[str, Any]:
     moving = BookingEngine(db, user).get_visible_booking(args.rescheduling_booking_id) if args.rescheduling_booking_id else None
     days, timezone, length, rate = [], None, None, None
+    group, capacity = False, None
+    mine = _own_sessions(db, user, args.service_id, args.date, args.days)
     for offset in range(args.days):
         day = args.date + timedelta(days=offset)
         result = catalog.availability(
@@ -259,15 +280,25 @@ def find_available_slots(db: Session, user: User, ctx: ToolContext, args: FindSl
             timezone = timezone or result.resources[0].timezone
             length = length or result.resources[0].duration_minutes
             rate = rate or _money(result.resources[0].price)
-        times = [
-            {
+        # Group sessions: how many places each one still has, after the customer's own.
+        left = {(r.resource_id, s.start): s.remaining for r in result.resources if r.booking_type == BookingType.CAPACITY for s in r.slots}
+        group = group or bool(left)
+        capacity = capacity or next((s.capacity for r in result.resources for s in r.slots if s.capacity), None)
+        times = []
+        for slot in result.slots:
+            if not slot.available:
+                continue
+            entry: dict[str, Any] = {
                 "start": slot.start.strftime("%Y-%m-%dT%H:%M"),
                 "label": _clock(slot.start),
                 "resources": [{"id": str(rid), "name": names.get(rid)} for rid in slot.resource_ids][:3],
             }
-            for slot in result.slots
-            if slot.available
-        ]
+            places = [left[(rid, slot.start)] for rid in slot.resource_ids if left.get((rid, slot.start)) is not None]
+            if places:
+                entry["places_left"] = max(places)
+            if (own := mine.get(slot.start)) is not None and own.id != (moving.id if moving else None):
+                entry["your_booking"] = {"booking_id": str(own.id), "places": own.quantity}
+            times.append(entry)
         days.append(
             {
                 "date": day.isoformat(),
@@ -276,7 +307,11 @@ def find_available_slots(db: Session, user: User, ctx: ToolContext, args: FindSl
                 "more_times": max(0, len(times) - MAX_TIMES_PER_DAY),
             }
         )
-    return {"timezone": timezone, "length_minutes": length, "rate_per_hour": rate, "days": days}
+    out: dict[str, Any] = {"timezone": timezone, "length_minutes": length, "rate_per_hour": rate, "days": days}
+    if group:
+        # One booking takes several places ("for 3 people" = quantity 3), each charged at the rate.
+        out.update(group_session=True, places_per_session=capacity)
+    return out
 
 
 class AlternativesIn(_In):
@@ -324,6 +359,7 @@ def _booking_json(db: Session, booking: Booking, user: User, flags) -> dict[str,
         "timezone": facts.when.zone,
         "place": facts.place,
         "places": booking.quantity,
+        "group_session": booking.service.booking_type == BookingType.CAPACITY,
         "status": booking.status.value.lower(),
         "price": _money(booking.price),
         "can_cancel": flags.can_cancel,
@@ -614,7 +650,37 @@ def offer_choices(db: Session, user: User, ctx: ToolContext, args: ChoicesIn) ->
 # Errors after which other times would not help.
 _NO_OTHER_TIMES = {"HOLD_LIMIT", "NOT_A_HOLD", "INVALID_DURATION", "INVALID_QUANTITY", "NOT_FOUND", "INVALID_INPUT",
                    "SERVICE_INACTIVE", "RESOURCE_INACTIVE", "USER_INACTIVE", "ALREADY_BOOKED", "HELD_IN_CHAT",
-                   "CANNOT_RESCHEDULE"}  # fmt: skip
+                   "CANNOT_RESCHEDULE", "QUANTITY_TOO_LARGE", "ONE_CHANGE_AT_A_TIME", "PRICE_CHANGES"}  # fmt: skip
+
+
+def _refusal(exc: AppError) -> tuple[str, str]:
+    """Why a booking was refused. "No resource is available" hides the reason when every
+    resource gave the same one (the customer is already in that session, it is full...)."""
+    reasons = set((exc.details or {}).get("reasons") or []) if isinstance(exc.details, dict) else set()
+    if exc.code == "NO_RESOURCE_AVAILABLE" and len(reasons) == 1:
+        code = reasons.pop()
+        return code, "You already have a booking for this session" if code == "ALREADY_BOOKED" else REASON_MESSAGES.get(code, exc.message)
+    return exc.code, exc.message
+
+
+def _already_in(db: Session, user: User, args: HoldBookingIn, result: dict[str, Any]) -> dict[str, Any]:
+    """The customer asked for a session they already have places in."""
+    found = _own_sessions(db, user, args.service_id, args.start.date(), 1)
+    rules = settings_service.get_rules(db)
+    own = next(
+        (b for start, b in found.items() if start.astimezone(resource_timezone(b.primary_resource, rules)).replace(tzinfo=None) == args.start),
+        None,
+    )
+    if own is None:
+        return result
+    return {
+        **result,
+        "message": f"The customer already has a booking for this session, for {own.quantity} place(s). Each customer has one "
+        "booking per session, so it can't be booked again: change that booking's places instead.",
+        "your_booking": {"booking_id": str(own.id), "places": own.quantity},
+        "next_step": f"Ask whether they mean {args.quantity} people in total or {args.quantity} more, then call move with this "
+        "booking_id and places set to the new total. Never book other days or times for the extra people.",
+    }
 
 
 def _pick(query: str, items: list[Any], names: Callable[[Any], list[str]]) -> tuple[list[Any], bool]:
@@ -693,7 +759,11 @@ def _nearest_free(
     times.sort(key=lambda dt: abs(datetime.fromisoformat(dt[1]["start"]) - start.replace(tzinfo=None)))
     nearest = sorted(times[:6], key=lambda dt: dt[1]["start"])
     ctx.choices = [f"{day['label']}, {t['label']}" for day, t in nearest]
-    return [{"start": t["start"], "label": f"{day['label']}, {t['label']}", "with": [r["name"] for r in t["resources"]]} for day, t in nearest]
+    return [
+        {"start": t["start"], "label": f"{day['label']}, {t['label']}", "with": [r["name"] for r in t["resources"]],
+         **({"places_left": t["places_left"]} if "places_left" in t else {})}
+        for day, t in nearest
+    ]  # fmt: skip
 
 
 def _hold(
@@ -704,7 +774,9 @@ def _hold(
         result = hold_booking(db, user, ctx, args)
     except AppError as exc:
         db.rollback()
-        result = _error(exc.code, exc.message)
+        result = _error(*_refusal(exc))
+    if result.get("error") == "ALREADY_BOOKED":
+        result = _already_in(db, user, args, result)
     if result.get("error") and result["error"] not in _NO_OTHER_TIMES:
         result["nearest_free"] = _nearest_free(db, user, ctx, service, resource, args.start, args.duration_minutes, args.quantity, moving)
         result["next_step"] = (
@@ -778,14 +850,56 @@ class MoveIn(WhichBookingIn):
     new_time: time | None = None
     person: str | None = Field(default=None, max_length=100)
     duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
+    # How many people the booking is for, in total.
+    places: int | None = Field(default=None, ge=1, le=100)
+
+
+def propose_places(db: Session, user: User, ctx: ToolContext, booking: Booking, places: int) -> dict[str, Any]:
+    """Offer to change how many people a booking is for; nothing changes until confirmed."""
+    rules = settings_service.get_rules(db)
+    flags = bookings_out(db, [booking], user, rules, utcnow())[0]
+    if not flags.can_reschedule:
+        return _error("CANNOT_RESCHEDULE", "This booking can no longer be changed online. Suggest contacting the business.")
+    price = proposals.places_price(db, booking, places)
+    if booking.payment_id is not None and price != booking.price:
+        return _error("PRICE_CHANGES", "This booking is paid, so its number of places can't change online. Suggest cancelling it and booking again.")
+    if places > booking.quantity:
+        free = catalog.availability(
+            db, service_id=booking.service_id, date=booking.start_datetime.astimezone(resource_timezone(booking.primary_resource, rules)).date(),
+            moving=booking, resource_id=booking.primary_resource_id, location_id=None, quantity=places, duration_minutes=None,
+        )  # fmt: skip
+        slot = next((s for r in free.resources for s in r.slots if s.start == booking.start_datetime), None)
+        if slot is None or not slot.available:
+            room = f" It has room for {slot.remaining + booking.quantity} in all." if slot is not None and slot.remaining is not None else ""
+            return _error("FULL", f"That session doesn't have room for {places} people.{room}")
+    proposal = _new_card(db, user, ctx, ChatProposalKind.PLACES, booking, {"quantity": places, "from": booking.quantity})
+    card = proposals.card(db, proposal, user)
+    return {
+        "proposed": True,
+        "change": {"service": card["service"], "when": card["when"], "places_from": booking.quantity, "places_to": places, "price": card["price"]},
+        "next_step": f"Say it changes the booking from {booking.quantity} to {places} places (price {card['price']}). "
+        "Tell the customer to press Confirm on the card to change it, or Decline to keep it as it is.",
+    }
 
 
 def move(db: Session, user: User, ctx: ToolContext, args: MoveIn) -> dict[str, Any]:
     booking, answer = _which(db, user, ctx, args)
     if answer:
         return answer
+    if args.places is not None and args.places != booking.quantity:
+        if any(v is not None for v in (args.new_date, args.new_time, args.person, args.duration_minutes)):
+            return _error("ONE_CHANGE_AT_A_TIME", "Change the number of places first, on its own; then the day, time or person.")
+        if bookings_out(db, [booking], user, settings_service.get_rules(db), utcnow())[0].held_in_chat:
+            # Not confirmed yet: hold it again for the new number of people.
+            local = booking.start_datetime.astimezone(resource_timezone(booking.primary_resource, settings_service.get_rules(db)))
+            again = HoldBookingIn(
+                service_id=booking.service_id, start=local.replace(tzinfo=None), resource_id=booking.primary_resource_id,
+                duration_minutes=_minutes(booking), quantity=args.places, replaces_booking_id=booking.id,
+            )  # fmt: skip
+            return _hold(db, user, ctx, again, booking.service, booking.primary_resource, moving=booking)
+        return propose_places(db, user, ctx, booking, args.places)
     if args.new_date is None and args.new_time is None and args.person is None and args.duration_minutes is None:
-        return _error("NOTHING_TO_CHANGE", "Ask what to change: the day, the time, the person or the length.")
+        return _error("NOTHING_TO_CHANGE", "Ask what to change: the day, the time, the person, the length or the number of places.")
     rules = settings_service.get_rules(db)
     local = booking.start_datetime.astimezone(resource_timezone(booking.primary_resource, rules))
     start = datetime.combine(args.new_date or local.date(), args.new_time or local.time().replace(tzinfo=None))
@@ -997,13 +1111,15 @@ _WHICH = {
     "query": {"type": "string", "description": "The booking's service or person, if the customer said it"},
 }
 _LENGTH = {"type": "integer", "minimum": 1, "description": "Only when the customer asked for a length: 'two hours' = 120"}
+_PEOPLE = {"type": "integer", "minimum": 1, "description": "How many people this one booking is for: 'for 3 people' = 3"}
 
 TOOLS = [
     Tool(
         "book",
         "Book a new appointment and hold it for the customer, who sees a card with Confirm / Delete. Pass the service "
-        "and person as said; leave the person out to take any free one. It resolves the names, and when the time is not "
-        "free it returns the nearest free times (shown as buttons). When it returns needs, ask that question.",
+        "and person as said; leave the person out to take any free one. For several people it is ONE booking with "
+        "quantity (\"yoga for 3\" = quantity 3). It resolves the names, and when the time is not free it returns the "
+        "nearest free times (shown as buttons). When it returns needs, ask that question.",
         {
             "properties": {
                 "service": _NAME,
@@ -1011,7 +1127,7 @@ TOOLS = [
                 "time": _TIME,
                 "person": _NAME,
                 "duration_minutes": _LENGTH,
-                "quantity": {"type": "integer", "minimum": 1, "description": "Places, for group sessions"},
+                "quantity": _PEOPLE,
             },
             "required": ["service", "date", "time"],
         },
@@ -1021,9 +1137,10 @@ TOOLS = [
     ),
     Tool(
         "move",
-        "Change one of the customer's bookings: its day, time, person or length. Say which booking (booking_id, or what "
-        "the customer said about it) and only what changes. It handles bookings still waiting for Confirm and length "
-        "changes; nothing changes until the customer presses Confirm on the card.",
+        "Change one of the customer's bookings: its day, time, person, length, or how many people it is for (places, "
+        "the new total). Say which booking (booking_id, or what the customer said about it) and only what changes. It "
+        "handles bookings still waiting for Confirm and length changes; nothing changes until the customer presses "
+        "Confirm on the card.",
         {
             "properties": {
                 **_WHICH,
@@ -1031,6 +1148,7 @@ TOOLS = [
                 "new_time": _TIME,
                 "person": _NAME,
                 "duration_minutes": _LENGTH,
+                "places": {"type": "integer", "minimum": 1, "description": "The new total number of people, e.g. 3"},
             }
         },
         MoveIn,
@@ -1057,7 +1175,7 @@ TOOLS = [
                 "service": _NAME,
                 "person": _NAME,
                 "duration_minutes": _LENGTH,
-                "quantity": {"type": "integer", "minimum": 1},
+                "quantity": _PEOPLE,
             },
             "required": ["date"],
         },
@@ -1075,8 +1193,8 @@ TOOLS = [
                 "person": _NAME,
                 "from_date": _DATE,
                 "duration_minutes": _LENGTH,
-                "quantity": {"type": "integer", "minimum": 1},
-                "count": {"type": "integer", "minimum": 1, "maximum": 10},
+                "quantity": _PEOPLE,
+                "count": {"type": "integer", "minimum": 1, "maximum": 10, "description": "How many free times to list (not people)"},
             },
             "required": ["service"],
         },

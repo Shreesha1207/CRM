@@ -106,6 +106,8 @@ class NotificationType(StrEnum):
     # To the customer: the request was received, and later resolved.
     CHAT_HELP_RECEIVED = "CHAT_HELP_RECEIVED"
     CHAT_HELP_RESOLVED = "CHAT_HELP_RESOLVED"
+    # The number of places (people) of a booking changed.
+    BOOKING_UPDATED = "BOOKING_UPDATED"
     # Security notice: an AI assistant was connected to the account, or a token made for one.
     AGENT_CONNECTED = "AGENT_CONNECTED"
     # A paid booking was cancelled (to the customer and the admins), and the refund was made.
@@ -152,6 +154,8 @@ class ChatProposalKind(StrEnum):
     # Changes to an existing booking, made only when the customer confirms.
     RESCHEDULE = "RESCHEDULE"
     CANCEL = "CANCEL"
+    # How many people an existing booking is for (payload: quantity, from).
+    PLACES = "PLACES"
     # Send the customer's problem to the admin, only when the customer confirms.
     HANDOFF = "HANDOFF"
 

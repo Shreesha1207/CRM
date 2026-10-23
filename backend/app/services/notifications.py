@@ -170,6 +170,19 @@ def _on_rescheduled(db: Session, event: DomainEvent) -> None:
     )
 
 
+def _on_places_changed(db: Session, event: DomainEvent) -> None:
+    booking: Booking = event.payload["booking"]
+    was = event.payload.get("previous_places")
+    notify(
+        db,
+        user_id=booking.user_id,
+        booking_id=booking.id,
+        type=NotificationType.BOOKING_UPDATED,
+        title="Booking updated",
+        **_with_place(booking, f"{_booking_line(db, booking)}\nNow for {booking.quantity} {'place' if booking.quantity == 1 else 'places'} (was {was})."),
+    )
+
+
 def _on_promoted(db: Session, event: DomainEvent) -> None:
     booking: Booking = event.payload["booking"]
     notify(
@@ -200,6 +213,7 @@ def register_handlers() -> None:
     events.subscribe("booking.confirmed", _on_confirmed)
     events.subscribe("booking.cancelled", _on_cancelled)
     events.subscribe("booking.rescheduled", _on_rescheduled)
+    events.subscribe("booking.places_changed", _on_places_changed)
     events.subscribe("booking.waitlist_promoted", _on_promoted)
     events.subscribe("booking.conflicted", _on_conflicted)
 
@@ -219,8 +233,13 @@ def send_email(
     from_name: str | None = None,
 ) -> None:
     """Send an e-mail. `html` is the styled version; `calendar` is (an iCalendar entry, its METHOD),
-    attached the way calendar programs expect so that it can be added, updated or removed."""
+    attached the way calendar programs expect so that it can be added, updated or removed.
+    Every e-mail is sent styled: without `html`, the text is laid out in the same page."""
     settings = get_settings()
+    if html is None:
+        from app.services import booking_mail  # imported late: it uses this module's helpers
+
+        html = booking_mail.styled(subject, body, from_name)
     if settings.email_backend == "smtp":
         message = EmailMessage()
         message["From"] = formataddr((from_name, settings.smtp_from)) if from_name else settings.smtp_from
@@ -278,12 +297,10 @@ def dispatch_pending(db: Session, limit: int = 100) -> int:
         user = db.get(User, notification.user_id)
         try:
             if notification.channel == NotificationChannel.EMAIL and user is not None:
-                rich = booking_mail.render(db, notification)
-                if rich is not None:
-                    business = settings_service.get_rules(db).business_name
-                    send_email(user.email, rich.subject, rich.text, html=rich.html, calendar=rich.calendar, from_name=business)
-                else:
-                    send_email(user.email, notification.title, notification.body)
+                # A booking's own e-mail, or the same style for every other notice.
+                mail = booking_mail.render(db, notification) or booking_mail.notification_mail(db, notification, user)
+                business = settings_service.get_rules(db).business_name
+                send_email(user.email, mail.subject, mail.text, html=mail.html, calendar=mail.calendar, from_name=business)
                 notification.status = NotificationStatus.SENT
                 notification.sent_at = utcnow()
             else:
